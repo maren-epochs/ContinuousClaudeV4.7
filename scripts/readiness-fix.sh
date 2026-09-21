@@ -424,15 +424,18 @@ HOOK
         fi
         ;;
       python)
+        # Hook revs go stale silently: a project scaffolded today would lint under
+        # ruff 0.8.0 (Nov 2024) while its developers run a current ruff, and the two
+        # disagree. Run `pre-commit autoupdate` after generating to track upstream.
         write_file ".pre-commit-config.yaml" 'repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.0
+    rev: v0.16.8
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
+    rev: v2.3.1
     hooks:
       - id: mypy' "pre-commit config with ruff + mypy"
         ;;
