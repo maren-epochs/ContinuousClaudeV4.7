@@ -40,6 +40,15 @@ fi
 
 FAIL_COUNT=$(echo "$FAILURES" | wc -l | tr -d ' ')
 echo -e "${BOLD}Found $FAIL_COUNT failing criteria. Fixing what's automatable...${NC}"
+
+# Every language-gated fixer skips when detect_lang() returns "unknown", which it
+# does for any directory without a manifest file. Say so once, up front, instead of
+# emitting a wall of per-criterion SKIPs that read like missing features.
+if [[ "$LANG_DETECTED" == "unknown" ]]; then
+  echo -e "  ${YELLOW}NOTE${NC} No language detected: readiness.sh keys off a manifest file"
+  echo -e "       (pyproject.toml, package.json, Cargo.toml, go.mod, ...). Without one,"
+  echo -e "       every language-specific fixer below will skip. Seed one first."
+fi
 echo ""
 
 # ── Helpers ───────────────────────────────────────────────────

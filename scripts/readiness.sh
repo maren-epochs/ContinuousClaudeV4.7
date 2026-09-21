@@ -151,8 +151,11 @@ fi
 # ════════════════════════════════════════════════════════════════
 CAT="Build System"
 
+# poetry.lock was the only Python entry, so pip- and uv-managed projects could
+# never pass this - including the uv-based projects readiness-fix.sh scaffolds.
 if has_any "package-lock.json" "yarn.lock" "pnpm-lock.yaml" "bun.lockb" "poetry.lock" "Cargo.lock" "go.sum" \
-          "composer.lock" "Gemfile.lock" "mix.lock" "gradle.lockfile" "packages.lock.json"; then
+          "composer.lock" "Gemfile.lock" "mix.lock" "gradle.lockfile" "packages.lock.json" \
+          "uv.lock" "pdm.lock" "requirements.txt" "requirements.lock"; then
   record "deps_pinned" "pass" "Lockfile committed" "$CAT"
 else
   record "deps_pinned" "fail" "No lockfile found" "$CAT"
