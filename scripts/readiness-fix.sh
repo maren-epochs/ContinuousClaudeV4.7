@@ -21,7 +21,8 @@ FIXED=0; SKIPPED=0
 # ── Run readiness check first ─────────────────────────────────
 echo -e "${BOLD}Running readiness check...${NC}"
 REPORT_JSON=$("$SCRIPT_DIR/readiness.sh" "$TARGET" 2>/dev/null)
-LANG_DETECTED=$(echo "$REPORT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['language'])")
+# tr -d: native Windows python writes CRLF, and a trailing \r breaks every `case` match below
+LANG_DETECTED=$(echo "$REPORT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['language'])" | tr -d '\r')
 
 # Extract failing criteria
 FAILURES=$(echo "$REPORT_JSON" | python3 -c "
@@ -30,7 +31,7 @@ d=json.load(sys.stdin)
 for k,v in d['report'].items():
     if v['numerator'] == 0:
         print(k)
-")
+" | tr -d '\r')
 
 if [[ -z "$FAILURES" ]]; then
   echo -e "${GREEN}All criteria passing — nothing to fix.${NC}"
