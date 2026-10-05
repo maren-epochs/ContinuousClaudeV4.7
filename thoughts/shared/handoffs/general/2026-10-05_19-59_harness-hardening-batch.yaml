@@ -1,0 +1,161 @@
+---
+session: general
+date: 2026-10-05
+status: complete
+outcome: PARTIAL_PLUS
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: Hardened harness - sandbox, guards, validator, bloks fork, handoff root; E2E /autonomous passed
+now: Push 2 local commits (GitHub 500s), user removes .claude/settings.json (fastedit denies all Edits)
+test: for t in .claude/hooks/test_*.sh; do bash $t | tail -1; done; py -3.13 tools/test_ouros_policy.py; py -3.13 tools/test_validate_report.py; py -3.13 install/test_sync_global.py; py -3.13 tools/test_ouros_harness_ds.py
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  Fork maren-epochs/ContinuousClaudeV4.7 is source of truth; ~/.claude is built by
+  install/sync_global.py (--apply, backups in ~/.claude/.ccv47-backup/). Sync copies the
+  WORKING TREE, so uncommitted/in-progress files get installed too - commit before --apply.
+  Installer rewrites only .md files: ouros_harness/validate_report/hook paths -> absolute.
+  Hook registration: ~/.claude/settings.json (user, hand-maintained; now has per-extension
+  `if` filters, absolute node paths, env TLDR_READ_SHIM_AUTOSTART=1). The template moved to
+  install/settings.template.json. Repo .claude/settings.json still holds ONLY fastedit-hook,
+  which DENIES every Edit ("use fast_edit MCP") and no fast_edit MCP is configured anywhere -
+  in a session LAUNCHED in this repo, Edit is unusable until that file is removed.
+  Project settings load from the launch dir, not later cwd changes.
+  Context meter: statusline used_percentage / total_input_tokens already include system
+  prompt+tools (docs: code.claude.com/docs/en/statusline); old +45K double-counted. Stop guard
+  reads the status pct file, else transcript_path last main-thread usage (200K window, 1M
+  once >200K, CLAUDE_CONTEXT_WINDOW overrides).
+  Handoff root rule (pre-compact, status, create/resume-handoff): project
+  thoughts/shared/handoffs if it exists, else ~/.claude/handoffs/<basename>/.
+  bloks is now the fork maren-epochs/bloks (~\Documents\bloks), installed
+  at ~/.cargo/bin/bloks.exe (upstream backup bloks.exe.0.1.0-upstream.bak). Score in [-1,1];
+  bloks context sorts rules/tastes/project cards by score and hides < -0.5; one nack hides.
+  Worker agent: frontmatter Stop hook (-> SubagentStop) worker-report-check.mjs validates its
+  report via tools/validate_report.py, blocks <=2x; VALIDATE also gates on the validator.
+  ouros run_command: tokenized, shell=False, metachar reject, argv-prefix allowlist; secrets
+  denylist for read_file/glob_files; agent_call --max-turns 25 default.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: all (status 35, stop-guard 31, pre-compact 22, tldr-read 21, worker-check 10, post-edit 8, ouros policy 20 [1 skip: rg absent], validator 15, installer 6, DS 10, bloks cargo 5)
+  test_command: see statusline `test:`
+  pre_existing_failures: []
+  uncommitted_changes: true
+  branch: main (ahead of origin by 2 - push rejected by GitHub HTTP 500 twice at 23:58Z)
+  dirty_files: [this handoff file]
+  warnings: "LF->CRLF git warnings benign; sync dry run clean"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: Verified harness after restart; backported windowsHide patch found only in ~/.claude
+    files: [.claude/hooks/{post-edit-diagnostics,status,tldr-read,tldr-shim}.mjs]
+  - task: /analyze-data smoke test on project-A research data (user - test only, models irrelevant); fixed 3 skill-doc defects
+    files: [harness/skills/analyze-data/SKILL.md, continuum/research/project-A-topic/findings.md]
+  - task: post-edit timing test median-of-5; shim excluded from registration warn; shim autostart on; continuum/research tracked; .tldrignore ignored
+    files: [.claude/hooks/test_post_edit_diagnostics.sh, install/sync_global.py, .gitignore, .claude/hooks/test_tldr_read.sh, ~/.claude/settings.json]
+  - task: bloks fork - fixed ack/nack (nack never counted, NULL-library feedback excluded, rules unscored); hide < -0.5; docs point at fork
+    files: [Documents/bloks src/db.rs, src/main.rs, CLAUDE.md, README.md, harness/skills/autonomous/phases/evolve.md]
+  - task: Analyst review -> continuum/research/harness-review-2026-10-05/findings.md (12 ranked items)
+    files: [continuum/research/harness-review-2026-10-05/findings.md]
+  - task: Fixes - ruff severity + dynamic ruff path; context meter; readiness fabricated pass; report validator + VALIDATE gate; sandbox hardening; analyze-data path; worker Stop hook + limits; centralized handoffs; hook if-filters + double-fire; stop-guard transcript fallback
+    files: [.claude/hooks/*.mjs, scripts/readiness.sh, tools/validate_report.py, tools/ouros_harness.py, tools/test_ouros_policy.py, harness/agents/worker.md, harness/skills/{create,resume}-handoff/SKILL.md, install/settings.template.json]
+  - task: E2E /autonomous run status-tests (patch) - test_status.sh 35 checks; found+fixed 3 crash bugs + NaN pct write in status.mjs; readiness backtick bug
+    files: [.claude/hooks/test_status.sh, .claude/hooks/status.mjs, scripts/readiness.sh, continuum/autonomous/status-tests/]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: handoffs_centralized
+    chose: ~/.claude/handoffs/<project>/ unless project already has thoughts/shared/handoffs
+    over: [thoughts/ in every repo + gitignore]
+    because: user choice; keeps user repos (ripplemark etc.) clean while continuity works everywhere
+  - name: bloks_hide_threshold
+    chose: hide rules/tastes/project cards with score < -0.5
+    over: [demote only, hide on any net nack]
+    because: user choice; one nack hides a stale rule, 1 ack + 1 nack (0) stays
+  - name: sandbox_dot_root
+    chose: "." still = cwd, but a read root resolving to home or a drive root grants nothing
+    over: [". = repo root"]
+    because: installed harness must work in other projects; home-as-cwd was the .env leak
+  - name: pyright_not_restored
+    chose: ruff-only Python diagnostics
+    over: [ruff + pyright]
+    because: +1-2s per edit; revisit if type bugs slip through
+  - name: fastedit_removal_pending
+    chose: leave .claude/settings.json for user to delete
+    over: [deleting it]
+    because: auto-mode classifier denied (self-modification); user must run it
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - Repo .claude/settings.json (fastedit-hook only) denies every Edit in sessions launched in this repo; fix = `git rm .claude/settings.json` (user action; classifier blocks the agent).
+    - 2 commits unpushed (c6f5ac8, bf75976) - GitHub 500 on push. Retry `git push origin main`.
+    - sync --apply installs the working tree including uncommitted files from parallel agents - commit first.
+    - Scripted find/replace on Windows - check EOL with `file`; CRLF files silently fail LF matches; heredoc python strings mangle \\n and regex backslashes (bit 4x this session) - prefer the Edit tool.
+  useful:
+    - readiness.sh intermittently hangs >200s with no child processes when its output is PIPED (| grep / | tail); redirected to a file it runs in 4s. Cause unverified. Run it with output to a file.
+    - validate_report.py rejects patch-class contracts with milestone null (patch class has no milestones) - workaround single "patch" milestone; fix the validator.
+    - status.mjs with non-numeric context_window_size still renders "NaN%" in statusline text (write is skipped).
+    - Remaining analyst items deferred: SessionStart bloks + post-compact re-inject, bloks view logging + CI, context:fork + per-skill effort, tldr-read blanket permissionDecision allow review, py -3 in readiness, oracle web fallback.
+  fyi:
+    - total_input_tokens = current context (docs), not session total.
+    - rg not installed; run_command("rg") now reports not found.
+    - Backups - ~/.claude/settings.json.bak-20261005-hookfilters, bloks.exe.0.1.0-upstream.bak.
+
+# ── APPROACHES ───────────────────────────────────────────────────
+worked:
+  - Background forks on disjoint files, orchestrator commits after verifying (no index races)
+  - Independent analyst + parent verification of top claims before acting
+  - Mutation testing of test suites (STATUS_HOOK=<mutant>) proves checks can fail
+  - Docs-first for Claude Code payload semantics (statusline, hooks, sub-agents)
+
+failed:
+  - attempted: python heredoc patch scripts with escapes / LF literals
+    root_cause: shell+python double escaping; CRLF files
+    avoid: multi-layer escaped patch scripts
+    use_instead: Edit tool, or python with newline='' and EOL detection
+  - attempted: deleting .claude/settings.json via git rm
+    root_cause: auto-mode classifier treats it as self-modification
+    avoid: retrying via other tools
+    use_instead: ask user to run it
+
+# ── TRAJECTORY ───────────────────────────────────────────────────
+trajectory:
+  started_as: resume harness-roadmap handoff, verify, /analyze-data first use
+  evolved_to: bloks fork, analyst review, two hardening batches, E2E autonomous run
+  scoped_to: all user-selected items shipped; deferred list in findings.useful
+  user_approved_scope: true
+
+user_intent: |
+  User wants a world-class, reliable local Claude Code platform. Prefers concrete
+  recommendations with verdicts ("give me recommendations") over open option lists, then
+  says "go". Data runs (project-A) are harness tests, not investment work. Delegates broadly.
+
+blockers: []
+questions:
+  - Approve fixing validate_report.py for patch-class (milestone null)?
+  - Investigate readiness pipe hang, or accept file-redirect usage?
+
+next:
+  - git push origin main (2 commits ahead)
+  - User - git rm .claude/settings.json && commit (fastedit denies all Edits)
+  - Fix validate_report.py to accept milestone null when complexity == patch (tools/validate_report.py validate_contract) + test
+  - Investigate readiness.sh pipe hang (bash -x with output piped, capture last line)
+  - Deferred analyst items per continuum/research/harness-review-2026-10-05/findings.md
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-05_19-59_harness-hardening-batch.yaml
+  in ~\Documents\ccv47-readme-fix.
+  First: `git status -sb` - if still ahead of origin, `git push origin main` (GitHub 500'd).
+  Confirm .claude/settings.json was removed (it held only fastedit-hook, which denies Edit).
+  Run the statusline `test:` command - all suites should pass.
+  Then fix tools/validate_report.py so a patch-class contract (complexity "patch") may have
+  milestone null, with a test, and run sync_global.py --apply after committing.
+  Then look at the readiness.sh hang that occurs only when output is piped.
+  Give recommendations with verdicts, not open option lists.
+
+files:
+  created: [.claude/hooks/test_status.sh, .claude/hooks/worker-report-check.mjs, .claude/hooks/test_worker_report_check.sh, tools/validate_report.py, tools/test_validate_report.py, tools/test_ouros_policy.py, install/settings.template.json, continuum/research/*, continuum/autonomous/status-tests/*]
+  modified: [.claude/hooks/*.mjs, scripts/readiness.sh, tools/ouros_harness.py, install/sync_global.py, harness/agents/worker.md, harness/skills/*, CLAUDE.md, README.md, .gitignore, .claude/settings.json, ~/.claude/settings.json]
