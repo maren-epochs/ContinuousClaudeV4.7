@@ -5,9 +5,10 @@ Autonomous software development pipeline for Claude Code. Skills orchestrate; wo
 ## What's in here
 
 ```
-.claude/
+harness/
   skills/          9 workflow skills
   agents/          worker + oracle
+.claude/
   hooks/           5 hooks (.mjs — cross-platform)
   settings.json    hook wiring + env config
 scripts/
@@ -128,17 +129,16 @@ This exposes 10 tools in Claude Code automatically: `fast_edit`, `fast_batch_edi
 
 ### Option A: Add to an existing project
 
-Copy `.claude/`, `scripts/`, and `tools/` into your project root. The skills, hooks, and agents will be available immediately.
+Copy `harness/skills/` to `.claude/skills/` and `harness/agents/` to `.claude/agents/` in your project root, plus this repo's `.claude/` (hooks + settings), `scripts/`, and `tools/`. Skills, hooks, and agents are then available immediately. (Skills and agents live under `harness/` in this repo so a checkout doesn't double-register them alongside a global install.)
 
-### Option B: Try it standalone
+### Option B: Global install
 
 ```bash
-git clone https://github.com/parcadei/ContinuousClaudeV4.7.git
-cd your-project
-CLAUDE_CONFIG_DIR=/path/to/ContinuousClaudeV4.7 claude
+py -3.13 install/sync_global.py --diff     # dry run: what would change
+py -3.13 install/sync_global.py --apply    # write into ~/.claude
 ```
 
-This tells Claude Code to use CCv4's `.claude/` directory (skills, hooks, agents, settings) while working in your project.
+This syncs skills, agents, hooks, scripts, and tools into `~/.claude` with repo-relative paths rewritten to absolute ones. See `install/README.md`.
 
 ### Then
 

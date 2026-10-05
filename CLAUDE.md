@@ -53,6 +53,36 @@ Autonomous SDLC pipeline for Claude Code. 9 skills, 2 agents, 5 hooks.
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
 
+## Ouros Sandbox
+
+Sandboxed Python REPL for research, codebase exploration, and multi-step data processing.
+
+```bash
+tools/ouros_harness.py --file /tmp/script.py            # from file (preferred — no quoting issues)
+tools/ouros_harness.py --file /tmp/script.py --session my-task --storage thoughts/shared/dives
+tools/ouros_harness.py --file /tmp/script.py --session my-task --load   # resume a session
+tools/ouros_harness.py --session my-task --list-vars    # inspect session state
+tools/ouros_harness.py --session my-task --get-var results
+```
+
+### Available functions
+
+Call `nia_help()` inside the sandbox for full details. Summary:
+
+| Function | What it does |
+|----------|-------------|
+| `research_package(pkg, version, registry)` | All-in-one: nia + exa, filters noise, compact structured data |
+| `nia_search(query)` / `nia_universal(query)` / `nia_web(query)` | Indexed docs/repos, 10k+ public sources, web search |
+| `nia_package(pkg, query, registry)` / `nia_package_grep(pkg, pattern, registry)` | Semantic / regex search within a package's source |
+| `exa_search(query, num_results=5)` | Semantic web search via Exa AI |
+| `read_file` / `write_file` / `glob_files` / `run_command` | Host filesystem + allowed shell commands |
+
+Registries: `npm`, `py_pi`, `crates_io`, `go_modules`.
+
+**Token efficiency:** the sandbox processes data internally — only `print()` output enters the agent's context. Always filter, truncate, and structure results inside the script.
+
+**Security:** deny-by-default — `read_file` only reads project + `/tmp/ouros`, `write_file` only writes to `/tmp/ouros-sandbox-output`, `run_command` allows only safe commands (`tldr`, `grep`, `rg`, `git log/diff/show/blame`, `wc`, `echo`).
+
 ## Architecture
 
 Skills orchestrate — they never implement directly. Workers build. Bloks cards carry knowledge between sessions. Handoffs carry session state.
@@ -60,3 +90,13 @@ Skills orchestrate — they never implement directly. Workers build. Bloks cards
 **Enforcement hierarchy:** lint rule > type system > formatter > pre-commit hook > CI check > CLAUDE.md (last resort). Deterministic enforcement always preferred over probabilistic instructions.
 
 **Knowledge flow:** PREPARE consumes bloks cards → workers execute → EVOLVE produces new cards via `bloks new rule`. Cards score through ack/nack.
+
+## Project structure (created at runtime)
+
+```
+continuum/
+  autonomous/{task-id}/   contract.json, plan.md, reports/, validation/
+  research/{topic}/       findings.md (telegraphic artifact)
+thoughts/
+  shared/handoffs/        session handoffs (manual + auto-generated)
+```

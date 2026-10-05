@@ -28,9 +28,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 # repo subtree -> destination subtree under ~/.claude
 MAPPINGS = [
-    (".claude/agents", "agents"),
+    ("harness/agents", "agents"),
     (".claude/hooks", "hooks"),
-    (".claude/skills", "skills"),
+    ("harness/skills", "skills"),
     ("scripts", "scripts"),
     ("tools", "tools"),
 ]
