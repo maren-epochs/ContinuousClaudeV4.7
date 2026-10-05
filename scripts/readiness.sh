@@ -585,7 +585,7 @@ report = {
         'skipped': $SKIP,
         'deterministicConstraints': '$CONSTRAINTS/$MAX_CONSTRAINTS'
     },
-    # json.loads, not a Python literal: SKIP criteria emit `null`, which Python can't parse
+    # json.loads, not a Python literal: SKIP criteria emit JSON null, which Python can't parse
     'report': json.loads('''{$REPORT_ITEMS}''')
 }
 print(json.dumps(report, indent=2))
