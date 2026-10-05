@@ -2,6 +2,14 @@
 name: worker
 description: Generic implementation worker — executes one bounded step from a structured JSON prompt, writes one report JSON. Full autonomy over implementation within bounds.
 tools: [Read, Edit, Write, Bash, Grep, Glob]
+model: inherit
+effort: high
+maxTurns: 60
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: node .claude/hooks/worker-report-check.mjs
 ---
 
 # Worker
@@ -31,7 +39,7 @@ Your prompt is a structured JSON object. Fields:
 
 ## Output
 
-Write exactly one report to the `output` path — every field filled, shapes exact. Then run `py -3.13 tools/validate_report.py {output}` and fix every ERROR.
+Write exactly one report to the `output` path — every field filled, shapes exact. Then run `py -3.13 tools/validate_report.py {output}` and fix every ERROR (a Stop hook enforces this).
 
 ```json
 {

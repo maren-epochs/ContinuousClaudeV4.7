@@ -39,8 +39,9 @@ MAPPINGS = [
     ("tools", "tools"),
 ]
 INCLUDE_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".py", ".txt"}
-# installed .mjs that are NOT event hooks (spawned by other hooks): skip registration check
-NOT_EVENT_HOOKS = {"tldr-shim.mjs"}
+# installed .mjs not registered in settings.json: skip registration check
+# (tldr-shim is spawned by tldr-read; worker-report-check is a worker.md frontmatter hook)
+NOT_EVENT_HOOKS = {"tldr-shim.mjs", "worker-report-check.mjs"}
 
 
 def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
@@ -51,6 +52,7 @@ def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
         (re.compile(r"`tools/ouros_harness\.py`"), f"`{harness}`"),
         (re.compile(r"\b(?:py -3\.13|python3?) tools/(validate_report\.py)"), rf"{python} {dest}/tools/\1"),
         (re.compile(r"\bbash scripts/(readiness(?:-fix)?\.sh)"), rf"bash {dest}/scripts/\1"),
+        (re.compile(r"\bnode \.claude/hooks/([\w-]+\.mjs)"), rf'node "{dest}/hooks/\1"'),
         (re.compile(r"/tmp/ouros/\.venv/bin/pip install"), f"{python} -m pip install"),
     ]
 
