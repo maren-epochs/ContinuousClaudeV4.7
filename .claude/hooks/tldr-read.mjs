@@ -145,8 +145,11 @@ function main() {
 
   const output = buildOutput(filePath, fileSize);
 
-  // Write-through cache; temp+rename for atomicity; failures never block the hook
+  // Write-through cache; temp+rename for atomicity; failures never block the hook.
+  // '{}' can mean a transient failure (tldr timeout/spawn error), and caching it
+  // keyed on mtime+size would suppress nav maps for this file version forever.
   try {
+    if (output === '{}') throw new Error('skip-cache');
     mkdirSync(CACHE_DIR, { recursive: true });
     const tmpFile = cacheFile + '.' + process.pid + '.tmp';
     writeFileSync(tmpFile, JSON.stringify({ mtimeMs: stat.mtimeMs, size: fileSize, stdout: output }));
