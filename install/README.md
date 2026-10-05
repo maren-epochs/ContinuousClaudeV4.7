@@ -17,6 +17,10 @@ rewrites the skills' repo-relative paths (`python tools/ouros_harness.py`,
 backed up to `~/.claude/.ccv47-backup/<timestamp>/`. The installed commit is recorded in
 `~/.claude/.ccv47-installed`.
 
+Exit codes: a dry run exits `1` when the target is out of sync and `0` when in sync,
+so the script is usable as a check in scripts/CI; `--apply` exits `0` on success.
+Tested by `py -3.13 install/test_sync_global.py` (uses a temp `--target`, never `~/.claude`).
+
 It never touches `settings.json`, `CLAUDE.md`, `.env`, or `*.orig` backups. The hooks are
 registered in `settings.json` once, by hand, using absolute `node "<home>/.claude/hooks/<hook>.mjs"`
 commands. The FastEdit PreToolUse hook is left out because FastEdit targets Apple-Silicon MLX.

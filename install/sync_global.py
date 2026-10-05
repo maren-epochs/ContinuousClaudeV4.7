@@ -96,8 +96,8 @@ def main() -> int:
 
     if not args.apply:
         if plan:
-            print("\ndry run - pass --apply to write")
-        return 0
+            print("\ndry run - pass --apply to write (exit 1: out of sync)")
+        return 1 if plan else 0
 
     if plan:
         backup = target / ".ccv47-backup" / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
