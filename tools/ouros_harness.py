@@ -12,8 +12,12 @@ Usage:
     # With session persistence
     python ouros_harness.py --file code.py --session dive-auth --storage thoughts/shared/dives
 
-    # Load a previous session and continue
-    python ouros_harness.py --file code.py --session dive-auth --load
+    # Continue a session (an existing saved session loads by default;
+    # --load is accepted but no longer required)
+    python ouros_harness.py --file code.py --session dive-auth
+
+    # Discard saved state and start the session fresh
+    python ouros_harness.py --file code.py --session dive-auth --reset
 
     # List variables in a session
     python ouros_harness.py --session dive-auth --list-vars
@@ -30,6 +34,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 # Sandbox output is arbitrary text - search results routinely contain emoji. A
@@ -305,8 +310,8 @@ def _call_nia_help():
             "args": {"path": "File path (required)"},
         },
         "write_file": {
-            "description": "Write content to a file (subject to security policy).",
-            "args": {"path": "File path (required)", "content": "Content to write (required)"},
+            "description": "Write content to a file (subject to security policy). Binary-safe: content may be str (UTF-8) or bytes.",
+            "args": {"path": "File path (required)", "content": "str or bytes content (required)"},
         },
         "glob_files": {
             "description": "Find files matching a glob pattern.",
@@ -315,6 +320,14 @@ def _call_nia_help():
         "run_command": {
             "description": "Run a shell command (subject to security policy allowlist).",
             "args": {"cmd": "Command to run (required)", "timeout": "Timeout in seconds (default 30)"},
+        },
+        "run_python": {
+            "description": "Execute Python on the HOST CPython (py -3.13, full DS stack: pandas, numpy, matplotlib, polars, duckdb, sklearn...). Use for numerics the sandbox cannot do (import pandas is impossible in-sandbox). cwd is the per-session work dir under the sandbox output root; relative savefig()/to_csv() outputs are surfaced as artifacts. print() inside the code to get data back.",
+            "args": {
+                "code": "Python source to execute on the host (required)",
+                "timeout": "Seconds before the process tree is killed (default 60, max 600)",
+            },
+            "returns": "str — combined stdout+stderr, last ~8KB, '[truncated]' marker when capped, '[exit code: N]' on failure",
         },
         "nia_help": {
             "description": "Show this help text.",
@@ -473,7 +486,51 @@ SECURITY_POLICY = {
         "| sh", "| bash", "| zsh",
         "eval ", "exec ",
     ],
+    # run_python — the DS bridge. The ouros sandbox is a reimplemented Rust
+    # interpreter (sys.version "3.14.0 (Ouros)", empty sys.path): importing
+    # pandas/numpy in-sandbox is architecturally impossible. run_python
+    # executes the given code on the HOST CPython (py -3.13) by design, so it
+    # is NOT governed by the read/write/command allowlists above. This is not
+    # an escalation beyond existing agent powers — the agent driving this
+    # harness already has unrestricted Bash — but treat sandbox code that
+    # calls run_python with the same trust as a shell command. Enforced
+    # constraints: cwd pinned to the per-session work dir under the sandbox
+    # output root (so relative savefig/to_csv land somewhere surfaced as
+    # artifacts), at most one concurrent run, and timeout kills the whole
+    # process tree (taskkill /T /F on Windows).
+    "run_python": {
+        "host_interpreter": "py -3.13 (fallback: the harness's own interpreter)",
+        "max_concurrent": 1,
+        "default_timeout_s": 60,
+        "max_timeout_s": 600,
+        "output_cap_bytes": 8192,
+    },
 }
+
+# Root for sandbox writes and run_python work dirs. NOTE: "/tmp/..." is
+# drive-relative on Windows — it resolves against the current drive, so with
+# the harness running from C: this is C:\tmp\ouros-sandbox-output.
+SANDBOX_OUTPUT_ROOT = Path("/tmp/ouros-sandbox-output").resolve()
+
+
+def _apply_data_roots():
+    """Extend read_allow with OUROS_DATA_ROOTS (env var or ~/.claude/.env).
+
+    Value: os.pathsep-separated absolute directories. They are appended to
+    read_allow only — read-only, never writable — and deny-by-default is
+    preserved for every path not under an allowed root.
+    """
+    raw = os.environ.get("OUROS_DATA_ROOTS", "")
+    for root in raw.split(os.pathsep):
+        root = root.strip()
+        if not root:
+            continue
+        if not os.path.isabs(root):
+            print(f"Warning: OUROS_DATA_ROOTS entry ignored (not absolute): {root}",
+                  file=sys.stderr)
+            continue
+        if root not in SECURITY_POLICY["read_allow"]:
+            SECURITY_POLICY["read_allow"].append(root)
 
 
 def _check_path_allowed(path, allowlist):
@@ -511,14 +568,24 @@ def _call_read_file(path):
 
 
 def _call_write_file(path, content):
-    """Write content to a file on the host filesystem."""
+    """Write content to a file on the host filesystem.
+
+    Binary-safe: accepts str (written as UTF-8) or bytes. The ouros bridge
+    marshals sandbox bytes as {"$bytes": [ints]} — decoded back here so binary
+    payloads (PNG, parquet, ...) round-trip intact.
+    """
     if not _check_path_allowed(path, SECURITY_POLICY["write_allow"]):
         return {"error": f"write_file denied: '{path}' is outside allowed directories"}
     try:
+        if isinstance(content, dict) and set(content.keys()) == {"$bytes"}:
+            content = bytes(content["$bytes"])
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        return {"ok": True, "path": str(p)}
+        if isinstance(content, (bytes, bytearray)):
+            p.write_bytes(bytes(content))
+        else:
+            p.write_text(str(content), encoding="utf-8")
+        return {"ok": True, "path": str(p), "bytes": p.stat().st_size}
     except Exception as e:
         return {"error": f"write_file failed: {e}"}
 
@@ -547,6 +614,117 @@ def _call_run_command(cmd, timeout=30):
         return {"error": f"Command timed out after {timeout}s"}
     except Exception as e:
         return {"error": f"run_command failed: {e}"}
+
+# --- run_python: host-CPython DS bridge -----------------------------------
+
+_RUN_PYTHON_LOCK = threading.Lock()
+# Per-session work dir for run_python, set by execute_in_sandbox each run.
+_SESSION_WORK_DIR = None
+
+
+def _host_python_cmd():
+    """Interpreter for run_python: the Windows launcher pin 'py -3.13' when
+    available (full DS stack), else the interpreter running this harness."""
+    import shutil
+    if shutil.which("py"):
+        return ["py", "-3.13"]
+    return [sys.executable]
+
+
+def _kill_process_tree(proc):
+    """Kill a subprocess and all its children."""
+    import subprocess
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       capture_output=True, check=False)
+    else:
+        proc.kill()
+
+
+def _call_run_python(code, timeout=60):
+    """Execute Python on the HOST CPython and return combined output tail.
+
+    The sandbox cannot import pandas/numpy (reimplemented interpreter, empty
+    sys.path); run_python bridges to the real interpreter. See
+    SECURITY_POLICY["run_python"] for the policy. cwd is the per-session work
+    dir under SANDBOX_OUTPUT_ROOT so relative savefig()/to_csv() outputs are
+    surfaced as artifacts. Output: stdout+stderr combined, last ~8KB with a
+    '[truncated]' marker, exit code appended when nonzero.
+    """
+    import subprocess
+    if not isinstance(code, str) or not code.strip():
+        return {"error": "run_python requires a non-empty code string"}
+    try:
+        timeout = min(float(timeout), SECURITY_POLICY["run_python"]["max_timeout_s"])
+    except (TypeError, ValueError):
+        timeout = SECURITY_POLICY["run_python"]["default_timeout_s"]
+
+    if not _RUN_PYTHON_LOCK.acquire(blocking=False):
+        return {"error": "run_python denied: another run_python call is in "
+                         "progress (max_concurrent: 1)"}
+    try:
+        work_dir = _SESSION_WORK_DIR or (SANDBOX_OUTPUT_ROOT / "default")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        proc = subprocess.Popen(
+            _host_python_cmd() + ["-c", code],
+            cwd=str(work_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        timed_out = False
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_process_tree(proc)
+            try:
+                out, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                out = ""
+        out = out or ""
+        cap = SECURITY_POLICY["run_python"]["output_cap_bytes"]
+        if len(out) > cap:
+            out = "[truncated]\n" + out[-cap:]
+        if timed_out:
+            out += f"\n[run_python timed out after {timeout:g}s — process tree killed]"
+        elif proc.returncode:
+            out += f"\n[exit code: {proc.returncode}]"
+        return out
+    except Exception as e:
+        return {"error": f"run_python failed: {e}"}
+    finally:
+        _RUN_PYTHON_LOCK.release()
+
+
+def _snapshot_output_dir():
+    """Snapshot (path -> (mtime_ns, size)) of files under SANDBOX_OUTPUT_ROOT."""
+    snap = {}
+    if not SANDBOX_OUTPUT_ROOT.exists():
+        return snap
+    try:
+        for i, p in enumerate(SANDBOX_OUTPUT_ROOT.rglob("*")):
+            if i >= 5000:
+                break
+            if p.is_file():
+                st = p.stat()
+                snap[str(p)] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass
+    return snap
+
+
+def _diff_output_dir(before):
+    """Absolute host paths of files new or changed since `before` snapshot."""
+    after = _snapshot_output_dir()
+    return sorted(path for path, sig in after.items() if before.get(path) != sig)
+
 
 def _call_llm(prompt, model="claude-haiku-4-5-20251001", max_tokens=1000,
               system=None, temperature=0.0, backend="anthropic"):
@@ -762,6 +940,7 @@ EXTERNAL_FUNCTIONS = {
     "write_file": _call_write_file,
     "glob_files": _call_glob_files,
     "run_command": _call_run_command,
+    "run_python": _call_run_python,
     "llm_call": _call_llm,
     "agent_call": _call_agent,
 }
@@ -782,21 +961,37 @@ def _create_manager(storage_dir=None):
     return sm
 
 
-def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=False):
+def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=False,
+                       reset_session=False):
     """Execute Python code in an ouros session with external function bridge.
 
     Uses Session API for state persistence. External function calls pause
     execution; the harness calls the real API and resumes. Variables persist
     across executions and can be saved/loaded from disk.
+
+    Session semantics: a saved session with this name LOADS by default (as if
+    --load); reset_session=True discards saved state and starts fresh (the old
+    default). load_session=True still forces a load attempt.
     """
     import ouros
 
+    global _SESSION_WORK_DIR
     sm = _create_manager(storage_dir)
     ext_funcs = list(EXTERNAL_FUNCTIONS.keys())
     sid = session_id or "default"
 
-    # Load saved session or create fresh one
-    if load_session and session_id:
+    # Per-session work dir for run_python cwd and artifact surfacing
+    _SESSION_WORK_DIR = SANDBOX_OUTPUT_ROOT / sid
+    output_snapshot = _snapshot_output_dir()
+
+    # Saved sessions live at {storage_dir}/{name}.bin
+    has_saved = bool(
+        session_id and storage_dir
+        and (Path(storage_dir) / f"{session_id}.bin").exists()
+    )
+
+    # Load saved session (default when one exists), reset, or create fresh
+    if session_id and not reset_session and (load_session or has_saved):
         try:
             sm.load_session(name=session_id, session_id=sid)
             sm.register_external_functions(ext_funcs, session_id=sid)
@@ -861,6 +1056,8 @@ def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=Fal
 
     result = dict(result)
     result["stdout"] = "".join(chunks)
+    # New/changed files under the sandbox output root — absolute host paths
+    result["artifacts"] = _diff_output_dir(output_snapshot)
     return result
 
 
@@ -916,7 +1113,12 @@ def parse_args():
     p.add_argument("--file", "-f", help="Python file to execute")
     p.add_argument("--session", "-s", help="Session ID for persistence")
     p.add_argument("--storage", default=None, help="Storage directory (default: thoughts/shared/dives)")
-    p.add_argument("--load", action="store_true", help="Load a saved session before executing")
+    p.add_argument("--load", action="store_true",
+                   help="Load a saved session before executing (now the default "
+                        "when a saved session exists; kept for compatibility)")
+    p.add_argument("--reset", action="store_true",
+                   help="Discard saved session state and start fresh (the old "
+                        "default for an existing --session without --load)")
     p.add_argument("--list-vars", action="store_true", help="List variables in a session")
     p.add_argument("--get-var", help="Get a variable as JSON")
     p.add_argument("--fork", help="Fork session into a new ID")
@@ -925,8 +1127,13 @@ def parse_args():
 
 def main():
     _load_env()
+    _apply_data_roots()
     args = parse_args()
     storage = args.storage or "thoughts/shared/dives"
+
+    if args.reset and args.load:
+        print("Error: --reset and --load are mutually exclusive", file=sys.stderr)
+        sys.exit(1)
 
     if args.list_vars:
         if not args.session:
@@ -967,10 +1174,20 @@ def main():
         session_id=args.session,
         storage_dir=storage,
         load_session=args.load,
+        reset_session=args.reset,
     )
 
     if result.get("stdout"):
         print(result["stdout"], end="")
+
+    # Surface new/changed files in the sandbox output dir (absolute host paths)
+    artifacts = result.get("artifacts") or []
+    if artifacts:
+        print("artifacts:")
+        for a in artifacts[:10]:
+            print(f"  {a}")
+        if len(artifacts) > 10:
+            print(f"  ... and {len(artifacts) - 10} more")
 
 
 if __name__ == "__main__":

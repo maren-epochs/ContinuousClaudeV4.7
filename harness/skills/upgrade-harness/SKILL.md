@@ -2,6 +2,7 @@
 name: upgrade-harness
 description: Extend the ouros sandbox with new external functions (bridge functions, security policy, tests)
 user-invocable: true
+disable-model-invocation: true
 allowed-tools: [Read, Edit, Write, Bash, Grep, Glob, AskUserQuestion]
 ---
 

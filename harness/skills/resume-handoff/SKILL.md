@@ -1,5 +1,6 @@
 ---
 description: Resume work from handoff document with context analysis and validation
+disable-model-invocation: true
 ---
 
 Resume work from handoff through interactive analysis. Handoffs contain critical context, learnings, next steps from previous sessions requiring full understanding before continuation.

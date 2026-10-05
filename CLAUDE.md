@@ -60,7 +60,8 @@ Sandboxed Python REPL for research, codebase exploration, and multi-step data pr
 ```bash
 tools/ouros_harness.py --file /tmp/script.py            # from file (preferred — no quoting issues)
 tools/ouros_harness.py --file /tmp/script.py --session my-task --storage thoughts/shared/dives
-tools/ouros_harness.py --file /tmp/script.py --session my-task --load   # resume a session
+tools/ouros_harness.py --file /tmp/script.py --session my-task          # existing session loads by default
+tools/ouros_harness.py --file /tmp/script.py --session my-task --reset  # discard saved state, start fresh
 tools/ouros_harness.py --session my-task --list-vars    # inspect session state
 tools/ouros_harness.py --session my-task --get-var results
 ```
@@ -75,13 +76,14 @@ Call `nia_help()` inside the sandbox for full details. Summary:
 | `nia_search(query)` / `nia_universal(query)` / `nia_web(query)` | Indexed docs/repos, 10k+ public sources, web search |
 | `nia_package(pkg, query, registry)` / `nia_package_grep(pkg, pattern, registry)` | Semantic / regex search within a package's source |
 | `exa_search(query, num_results=5)` | Semantic web search via Exa AI |
-| `read_file` / `write_file` / `glob_files` / `run_command` | Host filesystem + allowed shell commands |
+| `read_file` / `write_file` / `glob_files` / `run_command` | Host filesystem + allowed shell commands (`write_file` is binary-safe: str or bytes) |
+| `run_python(code, timeout=60)` | DS bridge: runs code on HOST CPython (py -3.13 — pandas, numpy, matplotlib, polars, duckdb, sklearn). The sandbox itself cannot import these. Returns stdout+stderr tail (~8KB cap) |
 
 Registries: `npm`, `py_pi`, `crates_io`, `go_modules`.
 
 **Token efficiency:** the sandbox processes data internally — only `print()` output enters the agent's context. Always filter, truncate, and structure results inside the script.
 
-**Security:** deny-by-default — `read_file` only reads project + `/tmp/ouros`, `write_file` only writes to `/tmp/ouros-sandbox-output`, `run_command` allows only safe commands (`tldr`, `grep`, `rg`, `git log/diff/show/blame`, `wc`, `echo`).
+**Security:** deny-by-default — `read_file` only reads project + `/tmp/ouros` + any dirs in `OUROS_DATA_ROOTS` (os.pathsep-separated absolute paths, read-only), `write_file` only writes to `/tmp/ouros-sandbox-output` (drive-relative on Windows: `C:\tmp\ouros-sandbox-output`), `run_command` allows only safe commands (`tldr`, `grep`, `rg`, `git log/diff/show/blame`, `wc`, `echo`). Exception: `run_python` executes arbitrary code on host CPython by design (not an escalation — the agent already has Bash); cwd pinned to a per-session work dir, one concurrent run, timeout kills the process tree. New files under the output root are printed as `artifacts:` lines (absolute host paths) after each run.
 
 ## Architecture
 

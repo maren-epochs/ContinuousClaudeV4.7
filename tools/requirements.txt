@@ -3,3 +3,8 @@ aiohttp>=3.9
 
 # Optional: ouros REPL for /research and /autonomous-research
 # pip install ouros
+
+# Optional: DS stack for the run_python host bridge (py -3.13) — the ouros
+# sandbox cannot import these; run_python executes them on host CPython.
+# pip install pandas numpy matplotlib seaborn scipy pyarrow polars
+# pip install scikit-learn statsmodels duckdb openpyxl

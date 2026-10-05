@@ -182,8 +182,8 @@ async function main() {
   const normPath = filePath.replace(/\\/g, '/');
   const ext = extname(filePath);
 
-  // Pass through: non-code files
-  if (!CODE_EXTENSIONS.has(ext)) { console.log('{}'); return; }
+  // Pass through: non-code files (.ipynb is handled by a pure-JS path, no tldr)
+  if (ext !== '.ipynb' && !CODE_EXTENSIONS.has(ext)) { console.log('{}'); return; }
 
   // Pass through: bypassed patterns
   if (BYPASS_PATTERNS.some(p => p.test(normPath))) { console.log('{}'); return; }
@@ -223,8 +223,67 @@ async function main() {
   console.log(output);
 }
 
+// Notebook outputs embed base64 blobs (matplotlib PNGs etc.) that would dump
+// megabytes into context. Detect payload-carrying lines to place the read cutoff.
+const BASE64_RUN = /[A-Za-z0-9+/=]{100,}/;
+const NOTEBOOK_MAX_CELLS = 50;   // nav map cap
+const NOTEBOOK_MAX_LIMIT = 100;  // raw-read cap even when no base64 found early
+
+// Pure-JS .ipynb path: tldr cannot parse notebooks, so build the cell nav map
+// directly from the JSON. Any parse/shape failure falls through to '{}'.
+function buildNotebookOutput(filePath, fileSize) {
+  let text, nb;
+  try {
+    text = readFileSync(filePath, 'utf-8');
+    nb = JSON.parse(text.replace(/^﻿/, ''));
+  } catch { return '{}'; }
+  const cells = nb && Array.isArray(nb.cells) ? nb.cells : null;
+  if (!cells || cells.length === 0) return '{}';
+
+  const fileName = basename(filePath);
+  const parts = [`# ${fileName} — ${cells.length} cells`, '## Cells'];
+  for (const [i, cell] of cells.slice(0, NOTEBOOK_MAX_CELLS).entries()) {
+    const src = Array.isArray(cell.source) ? cell.source.join('') : (cell.source || '');
+    const firstLine = (src.split('\n').find(l => l.trim()) || '').trim().slice(0, 80);
+    let outKind = 'none';
+    if (Array.isArray(cell.outputs) && cell.outputs.length > 0) {
+      const hasImage = cell.outputs.some(o =>
+        o && o.data && Object.keys(o.data).some(k => k.startsWith('image/')));
+      outKind = hasImage ? 'image' : 'text';
+    }
+    parts.push(`  [${i}] ${cell.cell_type || '?'}: ${firstLine}  (output: ${outKind})`);
+  }
+  if (cells.length > NOTEBOOK_MAX_CELLS) {
+    parts.push(`  ... +${cells.length - NOTEBOOK_MAX_CELLS} more cells`);
+  }
+
+  // Cut the raw read just before the first base64-carrying line. indent>=1
+  // notebooks put each payload on its own line, so this strips all blobs;
+  // minified (single-line) notebooks degrade to limit=1 — acceptable, the
+  // nav map above carries the structure.
+  const lines = text.split('\n');
+  let truncateLimit = Math.min(lines.length, NOTEBOOK_MAX_LIMIT);
+  for (let i = 0; i < truncateLimit; i++) {
+    if (BASE64_RUN.test(lines[i])) { truncateLimit = Math.max(1, i); break; }
+  }
+
+  parts.push('', '---',
+    `Notebook truncated to ${truncateLimit} lines (base64 outputs stripped).`,
+    'Use NotebookEdit for cell edits; Read with offset/limit for raw JSON ranges.');
+
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      updatedInput: { file_path: filePath, limit: truncateLimit },
+      additionalContext: `[Notebook Map: ${fileName}]\n\n${parts.join('\n')}`,
+    },
+  });
+}
+
 // Returns the final hook output string ('{}' or hookSpecificOutput JSON)
 async function buildOutput(filePath, fileSize) {
+  if (extname(filePath) === '.ipynb') return buildNotebookOutput(filePath, fileSize);
   // Prefer the persistent shim (~50ms); fall back to spawnSync tldr (~2s).
   let raw = null;
   if (process.env.TLDR_READ_SHIM !== '0') {

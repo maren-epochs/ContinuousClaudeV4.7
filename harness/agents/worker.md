@@ -14,7 +14,7 @@ Your prompt is a structured JSON object. Fields:
 
 - `role` — your archetype: implement, research, review, or evolve
 - `assertion` — the single assertion ({id, text}) your work must satisfy
-- `context` — bloks_context, bloks_cards [{id, content}], conventions, structure, prior_report (null = no data)
+- `context` — file paths to captures under `continuum/autonomous/{task-id}/context/`: bloks_context, bloks_cards [{id, path}], conventions, structure, prior_report (path to a report JSON). Read the ones you need; null = no data
 - `bounds` — files (best guess, touch others if needed), test_command, tdd, commit_after
 - `output` — the ONE file you write your report to: `continuum/autonomous/{task-id}/reports/{worker-id}.json`
 

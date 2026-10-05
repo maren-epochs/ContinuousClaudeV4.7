@@ -122,6 +122,57 @@ end=$(date +%s%N); MS=$(( (end - start) / 1000000 ))
 check "VAL-201e TLDR_READ_SHIM=0 bypasses live shim (${MS}ms, want >1000ms)" $?
 node "$SHIM" stop > /dev/null 2>&1
 
+# --- VAL-404: .ipynb reads get a cell nav map; base64 outputs never injected ---
+# Fixture: real nbformat-4 JSON (indent=1, multi-line) with a ~100KB fake
+# base64 image/png in cell 0's output. Pure-JS path — no tldr involved.
+NB_FIXTURE="$TMPWIN/tldr_nb_probe_$$.ipynb"
+NB_SMALL="$TMPWIN/tldr_nb_small_$$.ipynb"
+node -e "
+const b64 = 'iVBORw0KGgo' + 'A'.repeat(100000) + '==';
+const nb = { cells: [
+  { cell_type:'code', execution_count:1, metadata:{},
+    source:['import matplotlib.pyplot as plt\n','plt.plot([1,2,3])\n'],
+    outputs:[{ output_type:'display_data', metadata:{}, data:{ 'image/png': b64 } }] },
+  { cell_type:'markdown', metadata:{}, source:['# Analysis\n','Notes here\n'] },
+  { cell_type:'code', execution_count:2, metadata:{},
+    source:['print(42)\n'], outputs:[{ output_type:'stream', name:'stdout', text:['42\n'] }] }
+], metadata:{ kernelspec:{ name:'python3', display_name:'Python 3' } }, nbformat:4, nbformat_minor:5 };
+require('fs').writeFileSync(process.argv[1], JSON.stringify(nb, null, 1));
+const small = { cells:[{ cell_type:'code', execution_count:null, metadata:{}, source:['print(1)\n'], outputs:[] }],
+  metadata:{}, nbformat:4, nbformat_minor:5 };
+require('fs').writeFileSync(process.argv[2], JSON.stringify(small, null, 1));
+" "$NB_FIXTURE" "$NB_SMALL"
+
+run_hook "$(payload "$NB_FIXTURE")"
+NB_OUT="$OUT"
+case "$NB_OUT" in *"Notebook Map"*) r=0;; *) r=1;; esac
+check "VAL-404a large .ipynb emits Notebook Map (got: ${NB_OUT:0:60})" $r
+case "$NB_OUT" in *"3 cells"*) r=0;; *) r=1;; esac
+check "VAL-404b map carries total cell count" $r
+case "$NB_OUT" in *"output: image"*) r=0;; *) r=1;; esac
+check "VAL-404c map marks image output kind" $r
+if printf '%s' "$NB_OUT" | grep -qE '[A-Za-z0-9+/=]{101}'; then r=1; else r=0; fi
+check "VAL-404d no base64 run >100 chars in hook output" $r
+
+# VAL-404e: updatedInput.limit truncates the raw read BEFORE the first
+# base64-carrying line — the injected read window stays base64-free.
+printf '%s' "$NB_OUT" | node -e "
+let buf=''; process.stdin.on('data', d => buf += d).on('end', () => {
+  let out; try { out = JSON.parse(buf); } catch { process.exit(1); }
+  const lim = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedInput
+    && out.hookSpecificOutput.updatedInput.limit;
+  if (!Number.isInteger(lim) || lim < 1) process.exit(1);
+  const lines = require('fs').readFileSync(process.argv[1], 'utf-8').split('\n').slice(0, lim);
+  process.exit(lines.some(l => /[A-Za-z0-9+\/=]{101}/.test(l)) ? 1 : 0);
+});" "$NB_FIXTURE"
+check "VAL-404e limit set; truncated read window contains no base64" $?
+
+# VAL-404f: small notebook below SIZE_THRESHOLD passes through untouched
+run_hook "$(payload "$NB_SMALL")"
+[ "$OUT" = "{}" ]; check "VAL-404f small .ipynb passes through as {}" $?
+
+rm -f "$NB_FIXTURE" "$NB_SMALL"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
