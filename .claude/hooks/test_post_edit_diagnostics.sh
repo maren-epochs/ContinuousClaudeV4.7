@@ -42,6 +42,20 @@ run_hook() { # $1=file_path -> sets OUT, ELAPSED_MS, RC
   ELAPSED_MS=$((t1 - t0))
 }
 
+# Wall-time budget uses the median of N runs after one discarded warm-up.
+# Single samples are dominated by host noise on Windows: the hook is ~150-250ms
+# steady state (always the ruff path), but bare `node -e 0` startup alone swings
+# 70ms->140ms under concurrent load and isolated runs spiked to 0.5-2s, hitting
+# dirty and clean fixtures together — environment, not a code path.
+TIMING_RUNS=5
+median_ms() { # $1=file_path -> sets MEDIAN_MS
+  local i samples=()
+  run_hook "$1"   # warm-up: page cache, AV scan of fresh fixture, ruff mmap
+  for ((i=0; i<TIMING_RUNS; i++)); do run_hook "$1"; samples+=("$ELAPSED_MS"); done
+  MEDIAN_MS=$(printf '%s\n' "${samples[@]}" | sort -n | sed -n "$(( (TIMING_RUNS+1)/2 ))p")
+  TIMING_SAMPLES="${samples[*]}"
+}
+
 json_valid() { printf '%s' "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{JSON.parse(s);process.exit(0)}catch{process.exit(1)}})'; }
 
 # --- (a) dirty .py: Diagnostics + F401, <400ms ---------------------------
@@ -55,10 +69,11 @@ case "$OUT" in
   *F401*) ok "(a) dirty.py output contains F401";;
   *) bad "(a) dirty.py output missing F401 — got: $OUT";;
 esac
-if [ "$ELAPSED_MS" -lt 400 ]; then
-  ok "(a) dirty.py wall time ${ELAPSED_MS}ms < 400ms"
+median_ms "$DIRTY"
+if [ "$MEDIAN_MS" -lt 400 ]; then
+  ok "(a) dirty.py median wall time ${MEDIAN_MS}ms < 400ms (runs: $TIMING_SAMPLES)"
 else
-  bad "(a) dirty.py wall time ${ELAPSED_MS}ms >= 400ms"
+  bad "(a) dirty.py median wall time ${MEDIAN_MS}ms >= 400ms (runs: $TIMING_SAMPLES)"
 fi
 
 # --- (b) clean .py: {} output, <400ms -------------------------------------
@@ -68,10 +83,11 @@ if [ "$OUT" = "{}" ]; then
 else
   bad "(b) clean.py output is not {} — got: $OUT"
 fi
-if [ "$ELAPSED_MS" -lt 400 ]; then
-  ok "(b) clean.py wall time ${ELAPSED_MS}ms < 400ms"
+median_ms "$CLEAN"
+if [ "$MEDIAN_MS" -lt 400 ]; then
+  ok "(b) clean.py median wall time ${MEDIAN_MS}ms < 400ms (runs: $TIMING_SAMPLES)"
 else
-  bad "(b) clean.py wall time ${ELAPSED_MS}ms >= 400ms"
+  bad "(b) clean.py median wall time ${MEDIAN_MS}ms >= 400ms (runs: $TIMING_SAMPLES)"
 fi
 
 # --- (c) .mjs file: tldr path, valid JSON, no time bound -------------------
