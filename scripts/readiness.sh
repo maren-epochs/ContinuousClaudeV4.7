@@ -71,6 +71,31 @@ LANG_DETECTED=$(cd "$TARGET" && detect_lang)
 SRC_DIR=$(find_src)
 HAS_TLDR=$(command -v tldr >/dev/null 2>&1 && echo 1 || echo 0)
 
+# ── Launch tldr analyses in the background ──────────────────────
+# Started here so the ~9s `tldr secure` run overlaps the filesystem checks
+# below. VAR=$(cmd) & loses the assignment (subshell), so each job writes to
+# a temp file; on failure the job writes the same default JSON the old
+# sequential version fell back to. Results are read in Category 7.
+if [[ "$HAS_TLDR" == "1" ]]; then
+  WORK_DIR=$(mktemp -d)
+  trap 'rm -rf "$WORK_DIR"' EXIT
+
+  { (cd "$TARGET" && tldr dead "$SRC_DIR" --format json --quiet > "$WORK_DIR/dead.json" 2>/dev/null) || echo '{"definitely_dead":[],"possibly_dead":[],"total_functions":0}' > "$WORK_DIR/dead.json"; } &
+  PID_DEAD=$!
+  { (cd "$TARGET" && tldr clones "$SRC_DIR" --format json --quiet > "$WORK_DIR/clones.json" 2>/dev/null) || echo '{"clone_pairs":[]}' > "$WORK_DIR/clones.json"; } &
+  PID_CLONES=$!
+  { (cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet > "$WORK_DIR/cognitive.json" 2>/dev/null) || echo '{"functions":[]}' > "$WORK_DIR/cognitive.json"; } &
+  PID_COG=$!
+  { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || echo '{"summary":{"debt_ratio":0}}' > "$WORK_DIR/debt.json"; } &
+  PID_DEBT=$!
+  { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || echo '{}' > "$WORK_DIR/secure.json"; } &
+  PID_SEC=$!
+  { (cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet > "$WORK_DIR/calls.json" 2>/dev/null) || echo '{"edges":[]}' > "$WORK_DIR/calls.json"; } &
+  PID_CG=$!
+  { (cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet > "$WORK_DIR/hotspots.json" 2>/dev/null) || echo '{"hotspots":[]}' > "$WORK_DIR/hotspots.json"; } &
+  PID_HOT=$!
+fi
+
 echo -e "${BOLD}Agent Readiness Check${NC}" >&2
 echo -e "${DIM}Target: $TARGET${NC}" >&2
 echo -e "${DIM}Language: $LANG_DETECTED${NC}" >&2
@@ -315,8 +340,13 @@ CAT="Code Analysis (tldr)"
 if [[ "$HAS_TLDR" == "1" ]]; then
   echo -e "${DIM}Running tldr analysis...${NC}" >&2
 
+  # Jobs were launched right after environment detection; wait for each one
+  # just before reading its result so the slow `secure` job overlaps the
+  # parsing of the fast ones.
+
   # dead_code
-  DEAD_JSON=$(cd "$TARGET" && tldr dead "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{"definitely_dead":[],"possibly_dead":[],"total_functions":0}')
+  wait "$PID_DEAD" || true
+  DEAD_JSON=$(cat "$WORK_DIR/dead.json" 2>/dev/null || echo '{"definitely_dead":[],"possibly_dead":[],"total_functions":0}')
   DEAD_DEF=$(echo "$DEAD_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('definitely_dead',[])))" 2>/dev/null || echo 0)
   DEAD_POS=$(echo "$DEAD_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('possibly_dead',[])))" 2>/dev/null || echo 0)
   DEAD_TOT=$(echo "$DEAD_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total_functions',0))" 2>/dev/null || echo 0)
@@ -327,7 +357,8 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   fi
 
   # clones
-  CLONE_JSON=$(cd "$TARGET" && tldr clones "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{"clone_pairs":[]}')
+  wait "$PID_CLONES" || true
+  CLONE_JSON=$(cat "$WORK_DIR/clones.json" 2>/dev/null || echo '{"clone_pairs":[]}')
   CLONE_N=$(echo "$CLONE_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('clone_pairs',[])))" 2>/dev/null || echo 0)
   if [[ "$CLONE_N" -lt 10 ]]; then
     record "clones" "pass" "$CLONE_N clone pairs (threshold: <10)" "$CAT"
@@ -336,7 +367,8 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   fi
 
   # cognitive complexity
-  COG_JSON=$(cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{"functions":[]}')
+  wait "$PID_COG" || true
+  COG_JSON=$(cat "$WORK_DIR/cognitive.json" 2>/dev/null || echo '{"functions":[]}')
   COG_SEVERE=$(echo "$COG_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -349,7 +381,8 @@ print(d.get('summary',{}).get('severe_violations_count', len([f for f in d.get('
   fi
 
   # tech debt
-  DEBT_JSON=$(cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{"summary":{"debt_ratio":0}}')
+  wait "$PID_DEBT" || true
+  DEBT_JSON=$(cat "$WORK_DIR/debt.json" 2>/dev/null || echo '{"summary":{"debt_ratio":0}}')
   DEBT_R=$(echo "$DEBT_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -363,7 +396,8 @@ print(round(ratio * 100, 1))
   fi
 
   # security
-  SEC_JSON=$(cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{}')
+  wait "$PID_SEC" || true
+  SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || echo '{}')
   SEC_N=$(echo "$SEC_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -377,7 +411,8 @@ print(s.get('taint_count',0) + s.get('leak_count',0))
   fi
 
   # call graph (novel)
-  CG_JSON=$(cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{"edges":[]}')
+  wait "$PID_CG" || true
+  CG_JSON=$(cat "$WORK_DIR/calls.json" 2>/dev/null || echo '{"edges":[]}')
   CG_EDGES=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('edges',[])))" 2>/dev/null || echo 0)
   CG_FILES=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('files_analyzed',0))" 2>/dev/null || echo 0)
   if [[ "$CG_EDGES" -gt 0 ]]; then
@@ -387,7 +422,8 @@ print(s.get('taint_count',0) + s.get('leak_count',0))
   fi
 
   # hotspots (novel)
-  HOT_JSON=$(cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet 2>/dev/null || echo '{"hotspots":[]}')
+  wait "$PID_HOT" || true
+  HOT_JSON=$(cat "$WORK_DIR/hotspots.json" 2>/dev/null || echo '{"hotspots":[]}')
   HOT_HIGH=$(echo "$HOT_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -480,9 +516,10 @@ for i in "${!IDS[@]}"; do
     fail) NUM=0 ;;
     skip) NUM="null" ;;
   esac
-  # Escape quotes in rationale
-  RAT=$(echo "${RATIONALS[$i]}" | sed 's/"/\\"/g')
-  CAT_ESC=$(echo "${CATS[$i]}" | sed 's/"/\\"/g')
+  # Escape quotes in rationale (parameter expansion: echo|sed here cost ~2.5s
+  # across 27 criteria on MSYS due to per-iteration process spawns)
+  RAT=${RATIONALS[$i]//\"/\\\"}
+  CAT_ESC=${CATS[$i]//\"/\\\"}
   REPORT_ITEMS="${REPORT_ITEMS}\"${IDS[$i]}\": {\"numerator\": $NUM, \"denominator\": 1, \"rationale\": \"$RAT\", \"category\": \"$CAT_ESC\"},"
 done
 # Remove trailing comma
