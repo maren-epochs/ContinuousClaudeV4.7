@@ -8,7 +8,7 @@
  *
  * Falls through silently if no backend is available.
  */
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { extname, basename, join } from 'path';
 import { homedir } from 'os';
@@ -20,12 +20,25 @@ const WIN = process.platform === 'win32';
 const CARGO_TLDR = join(homedir(), '.cargo', 'bin', WIN ? 'tldr.exe' : 'tldr');
 const TLDR = existsSync(CARGO_TLDR) ? CARGO_TLDR : 'tldr';
 
-// Same pattern for ruff: known install path first, bare name as fallback.
+// Same pattern for ruff: scan install dirs (newest Python first) so a Python
+// upgrade doesn't silently drop the fast path; bare name as fallback.
+function pythonScriptDirs(root) {
+  try {
+    return readdirSync(root)
+      .filter((d) => /^Python3\d+$/.test(d))
+      .sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)))
+      .map((d) => join(root, d, 'Scripts'));
+  } catch { return []; }
+}
+const RUFF_EXE = WIN ? 'ruff.exe' : 'ruff';
 const RUFF_CANDIDATES = [
-  ...(WIN ? [join(homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'Scripts', 'ruff.exe')] : []),
-  'ruff',
-];
-const RUFF = RUFF_CANDIDATES.find((c) => c === 'ruff' || existsSync(c));
+  ...(WIN ? [
+    ...pythonScriptDirs(join(homedir(), 'AppData', 'Local', 'Programs', 'Python')),
+    ...pythonScriptDirs(join(homedir(), 'AppData', 'Roaming', 'Python')),
+  ] : []),
+  join(homedir(), '.local', 'bin'),  // pipx / uv tool
+].map((d) => join(d, RUFF_EXE));
+const RUFF = RUFF_CANDIDATES.find((c) => existsSync(c)) || 'ruff';
 
 const ENABLED_EXTENSIONS = new Set([
   '.py', '.pyx', '.pyi',                    // Python: ruff + pyright
@@ -38,6 +51,10 @@ const RUFF_EXTENSIONS = new Set(['.py', '.pyi']);
 
 // Errors first, then warnings — the listing is capped, so rank by urgency
 const SEVERITY_RANK = { error: 0, warning: 1, info: 2, hint: 3 };
+
+// Ruff codes that mean the code is broken, not just unidiomatic — flake8's
+// standard "select=E9,F63,F7,F82" set, plus syntax errors (`invalid-syntax`, or no code).
+const RUFF_ERROR = /^(E9|F63|F7|F82|invalid-syntax)/;
 
 // Run ruff directly on a Python file. Returns the normalized diagnostics
 // shape, or null when ruff is unavailable/failed (caller falls back to tldr).
@@ -54,16 +71,16 @@ function ruffDiagnostics(filePath) {
   try { arr = JSON.parse(proc.stdout); } catch { return null; }
   if (!Array.isArray(arr)) return null;
 
-  // Ruff findings map to warning severity for parity with the tldr path.
   const findings = arr.map((f) => ({
-    severity: 'warning',
+    severity: !f.code || RUFF_ERROR.test(f.code) ? 'error' : 'warning',
     file: f.filename,
     line: f.location && f.location.row,
     column: f.location && f.location.column,
     code: f.code,
     message: f.message,
   }));
-  return { findings, errors: 0, warnings: findings.length, info: 0, hints: 0, total: findings.length };
+  const errors = findings.filter((f) => f.severity === 'error').length;
+  return { findings, errors, warnings: findings.length - errors, info: 0, hints: 0, total: findings.length };
 }
 
 // Run `tldr diagnostics` on a file. Returns the normalized diagnostics
