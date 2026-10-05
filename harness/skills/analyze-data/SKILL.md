@@ -39,7 +39,7 @@ Existing session loads by default; `--reset` wipes; `--list-vars` / `--get-var` 
 # step1.py — runs IN the sandbox; the triple-quoted code runs on host
 out = run_python(r'''
 import pandas as pd
-df = pd.read_csv(r"C:\data\sales.csv")
+df = pd.read_csv("C:/data/sales.csv")             # forward slashes: backslashes re-escape across the bridge
 df.to_parquet("raw.parquet")                      # checkpoint in work dir (cwd)
 print(df.shape)
 print(df.dtypes.to_string())
@@ -47,7 +47,7 @@ print(df.describe().round(2).to_string())
 print("nulls:", df.isna().sum().to_dict())
 ''')
 print(out)
-src = r"C:\data\sales.csv"      # small stuff persists as sandbox vars
+src = "C:/data/sales.csv"       # small stuff persists as sandbox vars
 findings = {}
 ```
 
@@ -73,18 +73,18 @@ print("saved scatter.png")
 print(out)
 ```
 
-**6 REPORT.** Telegraphic artifact, same convention as `/research`:
-
-```python
-write_file("continuum/research/{topic}/findings.md",
-           "# {topic}\n\n" + "\n".join(f"- {k}: {v}" for k, v in findings.items()))
-```
+**6 REPORT.** Telegraphic artifact at `continuum/research/{topic}/findings.md`, same convention
+as `/research`. Write it with the agent's Write tool — sandbox `write_file` only reaches the
+output root and is denied for `continuum/`. Include sources + exclusions, data-quality issues,
+distilled stats, artifact paths.
 
 Give the user: the stats summary, the absolute PNG path(s) from `artifacts:`, the
-findings.md path. Reusable discovery (API quirk, data gotcha) → `bloks new rule
---lib {lib} --text "..."`.
+findings.md path. Reusable discovery (API quirk, data gotcha) → `bloks new rule "<text>"
+--tags {lib},...`.
 
 **Failure modes:** `read_csv` PermissionError → path not under a readable root, fix
 OUROS_DATA_ROOTS (step 1). Output ends `[truncated]` → you printed too much; distill
 harder. `[exit code: N]` suffix → host traceback is in the tail, fix and rerun — the
-parquet checkpoints mean you never re-pay the load.
+parquet checkpoints mean you never re-pay the load. Spreadsheet-export CSV (banner rows,
+`Unnamed: N` columns) → `header=None`, locate the header row by a known label, slice; check
+for duplicated table blocks before aggregating.
