@@ -14,7 +14,8 @@ node_modules/
 .claude.json
 
 # Runtime state (session data, not source) — handoffs are kept: they carry session state across machines
-continuum/
+continuum/*
+!continuum/research/
 thoughts/shared/*
 !thoughts/shared/handoffs/
 backups/
@@ -35,3 +36,6 @@ specs/
 
 # Old Python hooks (replaced by .mjs)
 .claude/hooks/*.py
+
+# tldr auto-generates this with generic defaults
+.tldrignore

@@ -5,6 +5,12 @@
 # Self-contained; run from anywhere: bash .claude/hooks/test_tldr_read.sh
 set -u
 
+# Isolate from user env: with TLDR_READ_SHIM_AUTOSTART=1 a live shim would serve
+# reads and break the >1s mtime-invalidation proxy. Stop any session shim too;
+# the next real read re-autostarts it.
+unset TLDR_READ_SHIM_AUTOSTART
+node "$(cd "$(dirname "$0")" && pwd)/tldr-shim.mjs" stop > /dev/null 2>&1
+
 HOOK="$(cd "$(dirname "$0")" && pwd)/tldr-read.mjs"
 FIXTURE="~/.claude/tools/ouros_harness.py"
 BS_FIXTURE='~\\.claude\\hooks\\status.mjs'  # real, >1500B, backslashes
