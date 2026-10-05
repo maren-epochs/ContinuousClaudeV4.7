@@ -9,7 +9,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
-import { join, resolve } from 'path';
+import { join, resolve, basename } from 'path';
 import { tmpdir, homedir } from 'os';
 
 function getSessionId(data) {
@@ -96,8 +96,11 @@ function getGitInfo(cwd) {
   } catch { return ''; }
 }
 
+// Same root rule as pre-compact.mjs and the handoff skills: the project's own
+// thoughts/shared/handoffs/ if it exists, else ~/.claude/handoffs/<project>/.
 function findLatestHandoff(dir) {
-  const base = join(dir, 'thoughts', 'shared', 'handoffs');
+  const local = join(dir, 'thoughts', 'shared', 'handoffs');
+  const base = existsSync(local) ? local : join(homedir(), '.claude', 'handoffs', basename(resolve(dir)));
   if (!existsSync(base)) return null;
   const files = [];
   (function walk(d) {

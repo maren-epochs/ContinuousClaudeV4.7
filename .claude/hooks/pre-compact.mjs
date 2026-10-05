@@ -15,11 +15,16 @@
  * limited to the last MAX_ENTRIES conversational entries (lines parsed from
  * the end, so a multi-MB transcript does not pay full JSON.parse cost).
  *
+ * Location: projects that already have thoughts/shared/handoffs/ (opted into
+ * the convention) get the handoff there; any other project gets it under
+ * ~/.claude/handoffs/<project>/<session>/ so user repos stay clean.
+ *
  * Input: JSON on stdin with trigger, session_id, transcript_path
  * Output: JSON with continue: true, systemMessage
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, basename, resolve } from 'path';
+import { homedir } from 'os';
 
 const MAX_ENTRIES = 400;
 
@@ -245,14 +250,17 @@ function main() {
       const summary = parseTranscript(transcriptPath);
       const content = generateHandoff(summary, sessionName);
 
-      const handoffDir = join(projectDir, 'thoughts', 'shared', 'handoffs', sessionName);
+      const projectHandoffs = join(projectDir, 'thoughts', 'shared', 'handoffs');
+      const handoffDir = existsSync(projectHandoffs)
+        ? join(projectHandoffs, sessionName)
+        : join(homedir(), '.claude', 'handoffs', basename(resolve(projectDir)) || 'project', sessionName);
       mkdirSync(handoffDir, { recursive: true });
 
       const ts = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, '');
       const filename = `auto-handoff-${ts}.md`;
       writeFileSync(join(handoffDir, filename), content);
 
-      message = `[PreCompact:auto] Created ${filename} in thoughts/shared/handoffs/${sessionName}/`;
+      message = `[PreCompact:auto] Created ${join(handoffDir, filename).replace(/\\/g, '/')}`;
     } catch (err) {
       message = `[PreCompact:auto] Handoff generation failed (${err && err.message ? String(err.message).slice(0, 120) : 'unknown error'}). Consider running /create-handoff manually.`;
     }

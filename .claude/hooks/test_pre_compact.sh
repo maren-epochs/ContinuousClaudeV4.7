@@ -53,6 +53,8 @@ cat > "$FIXTURE" <<'EOF'
 {"type":"file-history-snapshot","uuid":"x02","timestamp":"2026-10-05T00:00:21Z"}
 EOF
 
+FAKEHOME="$WORK/home"; mkdir -p "$FAKEHOME"
+export HOME="$FAKEHOME" USERPROFILE="$FAKEHOME"   # non-opted-in projects write under ~/.claude/handoffs
 run_hook() { # <transcript_path> <project_dir> -> OUT, RC
   OUT=$(printf '{"trigger":"auto","session_id":"fixture-session-0001","transcript_path":"%s"}' "$1" \
         | CLAUDE_PROJECT_DIR="$2" node "$HOOK")
@@ -61,7 +63,7 @@ run_hook() { # <transcript_path> <project_dir> -> OUT, RC
 
 # --- VAL-101b: real-schema fixture -> handoff with real content ---
 PROJ="$WORK/proj"
-mkdir -p "$PROJ"
+mkdir -p "$PROJ/thoughts/shared/handoffs"   # project opted into the convention
 run_hook "$FIXTURE" "$PROJ"
 check "VAL-101b hook exit 0" $RC
 printf '%s' "$OUT" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8')); if(d.continue!==true)process.exit(1)"
@@ -124,6 +126,18 @@ RC=$?
 check "VAL-101k missing transcript: exit 0" $RC
 printf '%s' "$OUT" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8')); if(d.continue!==true)process.exit(1)"
 check "VAL-101k missing transcript: continue:true" $?
+
+# --- VAL-101l: project without thoughts/shared/handoffs -> ~/.claude/handoffs, repo untouched ---
+PROJ5="$WORK/userrepo"
+mkdir -p "$PROJ5"
+run_hook "$FIXTURE" "$PROJ5"
+[ ! -e "$PROJ5/thoughts" ]
+check "VAL-101l non-opted-in project: no thoughts/ written into the repo" $?
+H5=$(find "$FAKEHOME/.claude/handoffs/userrepo" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ -n "$H5" ] && grep -q "Placeholder goal two" "$H5"
+check "VAL-101l handoff written under ~/.claude/handoffs/<project>/" $?
+printf '%s' "$OUT" | grep -q "handoffs/userrepo/"
+check "VAL-101l systemMessage names the real location (got: ${OUT:0:120})" $?
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

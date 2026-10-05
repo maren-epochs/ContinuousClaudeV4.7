@@ -4,9 +4,11 @@ description: Create handoff document for transferring work to another session
 
 Handoffs transfer mental model to fresh sessions. Cardinal sin: forcing next instance to re-discover what you know.
 
-First determine session folder from existing handoffs: `ls -td thoughts/shared/handoffs/*/ 2>/dev/null | head -1 | xargs basename`. Returns most recent folder name (e.g., `open-source-release`). Use this name, or `general` if none exist.
+Handoff root `{H}`: `thoughts/shared/handoffs` if that directory exists in the project, else `~/.claude/handoffs/{project-dir-basename}` (keeps user repos clean; the statusline and pre-compact use the same rule). Never create `thoughts/` in a project that lacks it.
 
-Create file at `thoughts/shared/handoffs/{session-name}/YYYY-MM-DD_HH-MM_description.yaml` using today's date/time and brief kebab-case description.
+First determine session folder from existing handoffs: `ls -td {H}/*/ 2>/dev/null | head -1 | xargs basename`. Returns most recent folder name (e.g., `open-source-release`). Use this name, or `general` if none exist.
+
+Create file at `{H}/{session-name}/YYYY-MM-DD_HH-MM_description.yaml` using today's date/time and brief kebab-case description.
 
 Use EXACTLY this YAML format — `goal:` and `now:` fields appear in statusline and must be named precisely:
 
