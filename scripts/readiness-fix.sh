@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+# A shell started before rustup ran won't have ~/.cargo/bin; tldr lives there.
+[ -d "$HOME/.cargo/bin" ] && PATH="$PATH:$HOME/.cargo/bin"
+
 TARGET="${1:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
 DRY_RUN=0
