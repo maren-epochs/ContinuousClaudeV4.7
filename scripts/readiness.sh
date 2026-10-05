@@ -36,6 +36,12 @@ record() {
   esac
 }
 
+# A tldr sub-analysis that produced no parseable JSON is "skip" (excluded from
+# the pass rate), never a fabricated 0 that would score as pass.
+analysis_failed() {
+  record "$1" "skip" "analysis failed: $2 produced no parseable JSON" "$CAT"
+}
+
 # ── Helpers ─────────────────────────────────────────────────────
 has_file()  { [[ -f "$TARGET/$1" ]]; }
 has_dir()   { [[ -d "$TARGET/$1" ]]; }
@@ -86,22 +92,22 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   WORK_DIR=$(mktemp -d)
   trap 'rm -rf "$WORK_DIR"' EXIT
 
-  { (cd "$TARGET" && tldr dead "$SRC_DIR" --format json --quiet > "$WORK_DIR/dead.json" 2>/dev/null) || echo '{"definitely_dead":[],"possibly_dead":[],"total_functions":0}' > "$WORK_DIR/dead.json"; } &
+  { (cd "$TARGET" && tldr dead "$SRC_DIR" --format json --quiet > "$WORK_DIR/dead.json" 2>/dev/null) || true; } &
   PID_DEAD=$!
-  { (cd "$TARGET" && tldr clones "$SRC_DIR" --format json --quiet > "$WORK_DIR/clones.json" 2>/dev/null) || echo '{"clone_pairs":[]}' > "$WORK_DIR/clones.json"; } &
+  { (cd "$TARGET" && tldr clones "$SRC_DIR" --format json --quiet > "$WORK_DIR/clones.json" 2>/dev/null) || true; } &
   PID_CLONES=$!
-  { (cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet > "$WORK_DIR/cognitive.json" 2>/dev/null) || echo '{"functions":[]}' > "$WORK_DIR/cognitive.json"; } &
+  { (cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet > "$WORK_DIR/cognitive.json" 2>/dev/null) || true; } &
   PID_COG=$!
-  { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || echo '{"summary":{"debt_ratio":0}}' > "$WORK_DIR/debt.json"; } &
+  { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || true; } &
   PID_DEBT=$!
   PID_SEC=""
   if [[ "$SKIP_SECURE" != "1" ]]; then
-    { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || echo '{}' > "$WORK_DIR/secure.json"; } &
+    { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || true; } &
     PID_SEC=$!
   fi
-  { (cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet > "$WORK_DIR/calls.json" 2>/dev/null) || echo '{"edges":[]}' > "$WORK_DIR/calls.json"; } &
+  { (cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet > "$WORK_DIR/calls.json" 2>/dev/null) || true; } &
   PID_CG=$!
-  { (cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet > "$WORK_DIR/hotspots.json" 2>/dev/null) || echo '{"hotspots":[]}' > "$WORK_DIR/hotspots.json"; } &
+  { (cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet > "$WORK_DIR/hotspots.json" 2>/dev/null) || true; } &
   PID_HOT=$!
 fi
 
@@ -355,15 +361,17 @@ if [[ "$HAS_TLDR" == "1" ]]; then
 
   # dead_code
   wait "$PID_DEAD" || true
-  DEAD_JSON=$(cat "$WORK_DIR/dead.json" 2>/dev/null || echo '{"definitely_dead":[],"possibly_dead":[],"total_functions":0}')
+  DEAD_JSON=$(cat "$WORK_DIR/dead.json" 2>/dev/null || true)
   # One spawn for all three values: python3 startup is ~150ms on MSYS
   DEAD_STATS=$(echo "$DEAD_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print(len(d.get('definitely_dead',[])), len(d.get('possibly_dead',[])), d.get('total_functions',0))
-" 2>/dev/null || echo "0 0 0")
+" 2>/dev/null || echo ERR)
   read -r DEAD_DEF DEAD_POS DEAD_TOT <<< "$DEAD_STATS"
-  if [[ "$DEAD_DEF" -eq 0 ]]; then
+  if [[ "$DEAD_DEF" == ERR ]]; then
+    analysis_failed "dead_code" "tldr dead"
+  elif [[ "$DEAD_DEF" -eq 0 ]]; then
     record "dead_code" "pass" "0 dead, $DEAD_POS possibly dead / $DEAD_TOT funcs" "$CAT"
   else
     record "dead_code" "fail" "$DEAD_DEF dead, $DEAD_POS possibly / $DEAD_TOT funcs" "$CAT"
@@ -371,9 +379,11 @@ print(len(d.get('definitely_dead',[])), len(d.get('possibly_dead',[])), d.get('t
 
   # clones
   wait "$PID_CLONES" || true
-  CLONE_JSON=$(cat "$WORK_DIR/clones.json" 2>/dev/null || echo '{"clone_pairs":[]}')
-  CLONE_N=$(echo "$CLONE_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('clone_pairs',[])))" 2>/dev/null || echo 0)
-  if [[ "$CLONE_N" -lt 10 ]]; then
+  CLONE_JSON=$(cat "$WORK_DIR/clones.json" 2>/dev/null || true)
+  CLONE_N=$(echo "$CLONE_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('clone_pairs',[])))" 2>/dev/null || echo ERR)
+  if [[ "$CLONE_N" == ERR ]]; then
+    analysis_failed "clones" "tldr clones"
+  elif [[ "$CLONE_N" -lt 10 ]]; then
     record "clones" "pass" "$CLONE_N clone pairs (threshold: <10)" "$CAT"
   else
     record "clones" "fail" "$CLONE_N clone pairs (threshold: <10)" "$CAT"
@@ -381,13 +391,15 @@ print(len(d.get('definitely_dead',[])), len(d.get('possibly_dead',[])), d.get('t
 
   # cognitive complexity
   wait "$PID_COG" || true
-  COG_JSON=$(cat "$WORK_DIR/cognitive.json" 2>/dev/null || echo '{"functions":[]}')
+  COG_JSON=$(cat "$WORK_DIR/cognitive.json" 2>/dev/null || true)
   COG_SEVERE=$(echo "$COG_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print(d.get('summary',{}).get('severe_violations_count', len([f for f in d.get('functions',[]) if f.get('cognitive',0) >= 25])))
-" 2>/dev/null || echo 0)
-  if [[ "$COG_SEVERE" -lt 5 ]]; then
+" 2>/dev/null || echo ERR)
+  if [[ "$COG_SEVERE" == ERR ]]; then
+    analysis_failed "complexity" "tldr cognitive"
+  elif [[ "$COG_SEVERE" -lt 5 ]]; then
     record "complexity" "pass" "$COG_SEVERE severe functions (threshold: <5)" "$CAT"
   else
     record "complexity" "fail" "$COG_SEVERE severe functions (threshold: <5)" "$CAT"
@@ -395,7 +407,7 @@ print(d.get('summary',{}).get('severe_violations_count', len([f for f in d.get('
 
   # tech debt
   wait "$PID_DEBT" || true
-  DEBT_JSON=$(cat "$WORK_DIR/debt.json" 2>/dev/null || echo '{"summary":{"debt_ratio":0}}')
+  DEBT_JSON=$(cat "$WORK_DIR/debt.json" 2>/dev/null || true)
   # Ratio and threshold verdict in one spawn (was two)
   DEBT_STATS=$(echo "$DEBT_JSON" | python3 -c "
 import json,sys
@@ -403,9 +415,11 @@ d=json.load(sys.stdin)
 ratio = d.get('summary',{}).get('debt_ratio', d.get('debt_ratio',0))
 pct = round(ratio * 100, 1)
 print(pct, 1 if pct < 10 else 0)
-" 2>/dev/null || echo "0 1")
+" 2>/dev/null || echo ERR)
   read -r DEBT_R DEBT_OK <<< "$DEBT_STATS"
-  if [[ "$DEBT_OK" == "1" ]]; then
+  if [[ "$DEBT_R" == ERR ]]; then
+    analysis_failed "tech_debt" "tldr debt"
+  elif [[ "$DEBT_OK" == "1" ]]; then
     record "tech_debt" "pass" "Debt ratio ${DEBT_R}% (threshold: <10%)" "$CAT"
   else
     record "tech_debt" "fail" "Debt ratio ${DEBT_R}% (threshold: <10%)" "$CAT"
@@ -416,14 +430,16 @@ print(pct, 1 if pct < 10 else 0)
     record "security_scan" "skip" "Skipped (READINESS_SKIP_SECURE=1)" "$CAT"
   else
     wait "$PID_SEC" || true
-    SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || echo '{}')
+    SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || true)
     SEC_N=$(echo "$SEC_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 s=d.get('summary',{})
 print(s.get('taint_count',0) + s.get('leak_count',0))
-" 2>/dev/null || echo 0)
-    if [[ "$SEC_N" -eq 0 ]]; then
+" 2>/dev/null || echo ERR)
+    if [[ "$SEC_N" == ERR ]]; then
+      analysis_failed "security_scan" "tldr secure"
+    elif [[ "$SEC_N" -eq 0 ]]; then
       record "security_scan" "pass" "No security issues found" "$CAT"
     else
       record "security_scan" "fail" "$SEC_N security issues" "$CAT"
@@ -432,10 +448,12 @@ print(s.get('taint_count',0) + s.get('leak_count',0))
 
   # call graph (novel)
   wait "$PID_CG" || true
-  CG_JSON=$(cat "$WORK_DIR/calls.json" 2>/dev/null || echo '{"edges":[]}')
-  CG_STATS=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('edges',[])), d.get('files_analyzed',0))" 2>/dev/null || echo "0 0")
+  CG_JSON=$(cat "$WORK_DIR/calls.json" 2>/dev/null || true)
+  CG_STATS=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('edges',[])), d.get('files_analyzed',0))" 2>/dev/null || echo ERR)
   read -r CG_EDGES CG_FILES <<< "$CG_STATS"
-  if [[ "$CG_EDGES" -gt 0 ]]; then
+  if [[ "$CG_EDGES" == ERR ]]; then
+    analysis_failed "call_graph" "tldr calls"
+  elif [[ "$CG_EDGES" -gt 0 ]]; then
     record "call_graph" "pass" "$CG_EDGES edges, $CG_FILES files" "$CAT"
   else
     record "call_graph" "fail" "Could not build call graph" "$CAT"
@@ -443,13 +461,17 @@ print(s.get('taint_count',0) + s.get('leak_count',0))
 
   # hotspots (novel)
   wait "$PID_HOT" || true
-  HOT_JSON=$(cat "$WORK_DIR/hotspots.json" 2>/dev/null || echo '{"hotspots":[]}')
+  HOT_JSON=$(cat "$WORK_DIR/hotspots.json" 2>/dev/null || true)
   HOT_HIGH=$(echo "$HOT_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print(len([h for h in d.get('hotspots',[]) if h.get('risk_score',0) >= 0.7]))
-" 2>/dev/null || echo 0)
-  record "hotspots" "pass" "$HOT_HIGH high-risk hotspots" "$CAT"
+" 2>/dev/null || echo ERR)
+  if [[ "$HOT_HIGH" == ERR ]]; then
+    analysis_failed "hotspots" "tldr hotspots"
+  else
+    record "hotspots" "pass" "$HOT_HIGH high-risk hotspots" "$CAT"
+  fi
 
 else
   echo -e "${YELLOW}tldr not available - skipping code analysis${NC}" >&2
