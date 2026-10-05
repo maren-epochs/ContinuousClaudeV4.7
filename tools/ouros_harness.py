@@ -299,8 +299,8 @@ def _call_nia_help():
                 "prompt": "Task description for the agent (required)",
                 "agent": "'claude-code' (default) or 'codex'",
                 "model": "Model override: 'sonnet', 'opus', 'haiku' (optional)",
-                "max_turns": "Max agent turns (default 10)",
-                "timeout": "Max seconds to wait (default 300 = 5 min)",
+                "max_turns": "Max agent turns (default 25; claude-code only)",
+                "timeout": "Max seconds to wait (default 600 = 10 min)",
                 "cwd": "Working directory for the agent (optional)",
             },
             "returns": "str — the agent's final text output",
@@ -314,12 +314,12 @@ def _call_nia_help():
             "args": {"path": "File path (required)", "content": "str or bytes content (required)"},
         },
         "glob_files": {
-            "description": "Find files matching a glob pattern.",
+            "description": "Find files matching a glob pattern (root and results filtered by the read policy; secrets never returned).",
             "args": {"pattern": "Glob pattern (required)", "path": "Base directory (default '.')"},
         },
         "run_command": {
-            "description": "Run a shell command (subject to security policy allowlist).",
-            "args": {"cmd": "Command to run (required)", "timeout": "Timeout in seconds (default 30)"},
+            "description": "Run an allowlisted command WITHOUT a shell: tldr, grep, rg, wc, echo, git log/diff/show/blame, cargo build/test/clippy, npm test/run, python -m pytest, uv run python. No pipes, chaining, redirection or substitution.",
+            "args": {"cmd": "Command string or argv list (required)", "timeout": "Timeout in seconds (default 30)"},
         },
         "run_python": {
             "description": "Execute Python on the HOST CPython (py -3.13, full DS stack: pandas, numpy, matplotlib, polars, duckdb, sklearn...). Use for numerics the sandbox cannot do (import pandas is impossible in-sandbox). cwd is the per-session work dir under the sandbox output root; relative savefig()/to_csv() outputs are surfaced as artifacts. print() inside the code to get data back.",
@@ -446,34 +446,41 @@ def _call_research_package(package, version=None, registry="npm", max_results=3,
 SECURITY_POLICY = {
     # Directories the sandbox can read from (resolved to absolute paths at runtime)
     "read_allow": [
-        ".",              # current project
+        ".",              # current project (cwd; ignored when cwd is home or a drive root)
         "/tmp/ouros",     # ouros source
+    ],
+    # Secrets are never readable, even under an allowed root (checked after
+    # resolving symlinks and '..'). Names match case-insensitively.
+    "read_deny_names": [
+        ".env", ".env.*",                    # .env.example/.sample/.template stay readable
+        "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore",
+        "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
+        ".credentials*", ".claude.json", ".netrc", "_netrc", ".git-credentials",
+        ".npmrc", ".pypirc",
+    ],
+    "read_deny_dirs": [                      # relative to home
+        ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gh",
     ],
     # Directories the sandbox can write to
     "write_allow": [
         "/tmp/ouros-sandbox-output",
     ],
-    # Shell commands the sandbox can run (prefix match)
+    # Commands the sandbox can run: argv-prefix match on the PARSED command,
+    # executed with shell=False, so chaining (& | ; && ||), redirection and
+    # substitution are never interpreted. claude/codex are not here — spawn
+    # agents through agent_call, which bounds turns and permission mode.
+    # cargo/npm/pytest/uv run project code by design (same trust as run_python).
     "command_allow": [
-        "tldr ",
-        "grep ",
-        "rg ",
-        "git log",
-        "git diff",
-        "git show",
-        "git blame",
-        "wc ",
-        "echo ",
-        "claude ",
-        "codex ",
-        "cargo build",
-        "cargo test",
-        "cargo clippy",
-        "npm test",
-        "npm run ",
-        "python -m pytest",
-        "uv run python",
+        ("tldr",), ("grep",), ("rg",), ("wc",), ("echo",),
+        ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "blame"),
+        ("cargo", "build"), ("cargo", "test"), ("cargo", "clippy"),
+        ("npm", "test"), ("npm", "run"),
+        ("python", "-m", "pytest"), ("uv", "run", "python"),
     ],
+    # Arguments that turn an allowed command into an exec or arbitrary write:
+    # rg --pre runs a program per file; git --output writes anywhere;
+    # --ext-diff/--textconv run configured external programs.
+    "command_deny_args": ["--pre", "--output", "--ext-diff", "--textconv", "--open-in-pager"],
     # Patterns that are always blocked
     "command_deny": [
         "rm ", "rm\t", "rmdir",
@@ -486,6 +493,8 @@ SECURITY_POLICY = {
         "| sh", "| bash", "| zsh",
         "eval ", "exec ",
     ],
+    # agent_call turn bound when the caller passes none (claude -p --max-turns).
+    "agent_default_max_turns": 25,
     # run_python — the DS bridge. The ouros sandbox is a reimplemented Rust
     # interpreter (sys.version "3.14.0 (Ouros)", empty sys.path): importing
     # pandas/numpy in-sandbox is architecturally impossible. run_python
@@ -533,34 +542,119 @@ def _apply_data_roots():
             SECURITY_POLICY["read_allow"].append(root)
 
 
-def _check_path_allowed(path, allowlist):
-    """Check if a path falls under an allowed directory."""
-    resolved = Path(path).resolve()
+def _is_under(path, root):
+    """True if resolved `path` is `root` or inside it (case-insensitive on Windows)."""
+    p, r = os.path.normcase(str(path)), os.path.normcase(str(root))
+    try:
+        return os.path.commonpath([p, r]) == r
+    except ValueError:          # different drives
+        return False
+
+
+def _effective_roots(allowlist):
+    """Resolve allowlist entries. A root that is the home dir or a drive root
+    (e.g. "." with cwd = home) grants too much: it is dropped, not widened."""
+    home = os.path.normcase(str(Path.home().resolve()))
+    roots = []
     for allowed in allowlist:
-        allowed_resolved = Path(allowed).resolve()
-        try:
-            resolved.relative_to(allowed_resolved)
-            return True
-        except ValueError:
+        r = Path(allowed).resolve()
+        if os.path.normcase(str(r)) in (home, os.path.normcase(r.anchor)):
             continue
-    return False
+        roots.append(r)
+    return roots
+
+
+def _check_path_allowed(path, allowlist):
+    """Check if a path (symlinks and '..' resolved) falls under an allowed directory."""
+    resolved = Path(path).resolve()
+    return any(_is_under(resolved, root) for root in _effective_roots(allowlist))
+
+
+def _is_secret(path):
+    """True if the resolved path is a credential file or under a credential dir."""
+    import fnmatch
+    resolved = Path(path).resolve()
+    name = resolved.name.lower()
+    if name in (".env.example", ".env.sample", ".env.template"):
+        return False
+    if any(fnmatch.fnmatchcase(name, pat) for pat in SECURITY_POLICY["read_deny_names"]):
+        return True
+    home = Path.home().resolve()
+    return any(_is_under(resolved, home / d) for d in SECURITY_POLICY["read_deny_dirs"])
+
+
+def _check_read_allowed(path):
+    """(allowed, reason) for reading `path`: under read_allow and not a secret."""
+    if _is_secret(path):
+        return False, "a credential/secret file"
+    if not _check_path_allowed(path, SECURITY_POLICY["read_allow"]):
+        return False, "outside allowed directories"
+    return True, ""
+
+
+# Unquoted shell operators come out of shlex (punctuation_chars) as their own
+# tokens; quoted ones stay inside an argument and are passed literally.
+_SHELL_OPERATOR_CHARS = set("();<>|&")
+# .cmd/.bat targets (e.g. npm) run under cmd.exe even with shell=False, which
+# re-parses the command line, so no cmd metacharacter may reach them at all.
+_CMD_META_CHARS = set('&|<>^%"()!')
+
+
+def _parse_command(cmd):
+    """Split a command (str or argv list) into argv without a shell.
+
+    Backslash is NOT an escape character, so Windows paths and regexes like
+    \\bfoo\\b survive; quotes group as usual. Returns (argv, error).
+    """
+    import shlex
+    if isinstance(cmd, (list, tuple)):
+        argv = [str(a) for a in cmd]
+    else:
+        if any(c in cmd for c in ("\n", "\r", "\x00")):
+            return None, "newline/NUL in command"
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.escape = ""
+        try:
+            argv = list(lex)
+        except ValueError as e:
+            return None, f"unparseable command: {e}"
+        for tok in argv:
+            if tok and set(tok) <= _SHELL_OPERATOR_CHARS:
+                return None, f"shell operator '{tok}' not allowed (no chaining/redirection)"
+    if not argv:
+        return None, "empty command"
+    return argv, ""
 
 
 def _check_command_allowed(cmd):
-    """Check if a command is allowed by policy."""
-    cmd_lower = cmd.strip().lower()
+    """Check a command against policy. Returns (allowed, reason, argv)."""
+    raw = cmd if isinstance(cmd, str) else " ".join(map(str, cmd))
+    raw_lower = raw.strip().lower()
     for deny in SECURITY_POLICY["command_deny"]:
-        if deny in cmd_lower:
-            return False, f"blocked by deny rule: '{deny}'"
-    for allow in SECURITY_POLICY["command_allow"]:
-        if cmd_lower.startswith(allow):
-            return True, ""
-    return False, f"not in command allowlist"
+        if deny in raw_lower:
+            return False, f"blocked by deny rule: '{deny}'", None
+    argv, err = _parse_command(cmd)
+    if err:
+        return False, err, None
+    exe = os.path.basename(argv[0]).lower()
+    for ext in (".exe", ".cmd", ".bat"):
+        if exe.endswith(ext):
+            exe = exe[: -len(ext)]
+    argv = [exe] + argv[1:]
+    if not any(tuple(argv[: len(allow)]) == allow for allow in SECURITY_POLICY["command_allow"]):
+        return False, "not in command allowlist", None
+    for arg in argv[1:]:
+        if arg.split("=", 1)[0] in SECURITY_POLICY["command_deny_args"]:
+            return False, f"argument '{arg}' not allowed", None
+    return True, "", argv
+
 
 def _call_read_file(path):
     """Read a file from the host filesystem."""
-    if not _check_path_allowed(path, SECURITY_POLICY["read_allow"]):
-        return {"error": f"read_file denied: '{path}' is outside allowed directories"}
+    allowed, reason = _check_read_allowed(path)
+    if not allowed:
+        return {"error": f"read_file denied: '{path}' is {reason}"}
     try:
         return Path(path).read_text()
     except Exception as e:
@@ -591,21 +685,33 @@ def _call_write_file(path, content):
 
 
 def _call_glob_files(pattern, path="."):
-    """Find files matching a glob pattern."""
+    """Find files matching a glob pattern. The root and every match go through
+    the read policy, so '..' patterns and secret files never come back."""
     import glob as g
+    if not _check_path_allowed(path, SECURITY_POLICY["read_allow"]):
+        return {"error": f"glob_files denied: '{path}' is outside allowed directories"}
     matches = sorted(g.glob(os.path.join(path, pattern), recursive=True))
-    return matches[:500]
+    return [m for m in matches if _check_read_allowed(m)[0]][:500]
 
 
 def _call_run_command(cmd, timeout=30):
-    """Run a shell command and return stdout/stderr."""
+    """Run an allowlisted command (str or argv list) WITHOUT a shell."""
+    import shutil
     import subprocess
-    allowed, reason = _check_command_allowed(cmd)
+    allowed, reason, argv = _check_command_allowed(cmd)
     if not allowed:
         return {"error": f"run_command denied: {reason}"}
+    if argv[0] == "echo":       # cmd builtin on Windows: answer in-process
+        return {"stdout": " ".join(argv[1:]) + "\n", "stderr": "", "returncode": 0}
+    exe = shutil.which(argv[0])
+    if not exe:
+        return {"error": f"run_command failed: '{argv[0]}' not found on PATH"}
+    if exe.lower().endswith((".cmd", ".bat")) and any(
+            c in _CMD_META_CHARS for a in argv[1:] for c in a):
+        return {"error": "run_command denied: cmd metacharacters in arguments to a .cmd/.bat target"}
     try:
         r = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
+            [exe] + argv[1:], shell=False, capture_output=True, text=True,
             timeout=timeout,
         )
         result = {"stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
@@ -856,8 +962,9 @@ def _call_agent(prompt, agent="claude-code", model=None, max_turns=None,
         agent: Which agent to spawn (default: claude-code)
         model: Model override. Claude Code: 'sonnet', 'opus', 'haiku'.
                Codex: 'o3', 'o4-mini', 'gpt-4.1', etc.
-        max_turns: Max agent turns (default: None = unlimited, runs until done).
-                   Only set this if you want to cap a potentially runaway task.
+        max_turns: Max agent turns (default: None -> policy
+                   agent_default_max_turns, 25). The agent exits with an
+                   error at the limit; pass a larger value for long tasks.
         timeout: Max seconds to wait (default 600 = 10 min). This is the
                  real safety valve — if the agent hasn't finished, it's stuck.
         cwd: Working directory for the agent (default: current directory)
@@ -879,8 +986,9 @@ def _call_agent(prompt, agent="claude-code", model=None, max_turns=None,
         cmd = ["claude", "-p", prompt, "--output-format", "text"]
         if model:
             cmd.extend(["--model", model])
-        if max_turns is not None:
-            cmd.extend(["--max-turns", str(max_turns)])
+        if max_turns is None:
+            max_turns = SECURITY_POLICY["agent_default_max_turns"]
+        cmd.extend(["--max-turns", str(max_turns)])
         if isolated:
             cmd.append("--worktree")
         if permission_mode != "default":
