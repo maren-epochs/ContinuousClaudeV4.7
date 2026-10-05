@@ -8,6 +8,12 @@
  *
  * Falls through silently if tldr is not installed.
  *
+ * Cold-read fast path: if the persistent tldr-mcp shim (tldr-shim.mjs) is
+ * running, cache-miss extracts go through it (~50ms) instead of spawnSync
+ * tldr (~2s init per invocation). Fails open to spawnSync in all cases.
+ * Env: TLDR_READ_SHIM=0 disables the shim path;
+ *      TLDR_READ_SHIM_AUTOSTART=1 launches the shim on a miss (detached).
+ *
  * Bypass rules (always pass through):
  *  - Non-code files (.json, .yaml, .md, etc.)
  *  - Small files (<1500 bytes, ~50 lines)
@@ -16,11 +22,13 @@
  *  - Targeted reads (offset/limit already set)
  */
 import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
-import { spawnSync } from 'child_process';
-import { extname, basename } from 'path';
+import { spawnSync, spawn } from 'child_process';
+import { extname, basename, dirname } from 'path';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { connect } from 'net';
+import { fileURLToPath } from 'url';
 
 // Resolve tldr by absolute path first: a Claude Code process started before
 // ~/.cargo/bin joined PATH can't find it by name, and the failure is silent.
@@ -51,6 +59,62 @@ const SIZE_THRESHOLD = 1500; // ~50 lines
 // tldr pays a ~2s fixed init per invocation; cache the final hook output
 // keyed on path+mtime+size so unchanged files skip the spawn entirely.
 const CACHE_DIR = join(tmpdir(), 'tldr-read-cache');
+
+// Persistent tldr-mcp shim (tldr-shim.mjs): serves extracts in ~50ms over a
+// localhost TCP endpoint, avoiding the ~2s CLI init on cache-miss cold reads.
+// Fails open: no port file / refused connect / slow response -> spawnSync path.
+// TLDR_READ_SHIM=0 disables; TLDR_READ_SHIM_AUTOSTART=1 opt-in launches the
+// shim (detached, unref'd) on a miss so the NEXT cold read is fast.
+const SHIM_PORT_FILE = join(tmpdir(), 'tldr-shim.json');
+const SHIM_CONNECT_TIMEOUT_MS = 150;  // worst-case added latency when shim is gone
+const SHIM_RESPONSE_TIMEOUT_MS = 2000;
+
+// Resolves raw extract-JSON string from the shim, or null on any failure.
+function tryShimExtract(filePath) {
+  return new Promise(resolve => {
+    let info;
+    try { info = JSON.parse(readFileSync(SHIM_PORT_FILE, 'utf-8')); } catch { return resolve(null); }
+    if (!info || !Number.isInteger(info.port) || info.port <= 0) return resolve(null);
+    let settled = false;
+    const sock = connect({ port: info.port, host: '127.0.0.1' });
+    const done = v => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectTimer);
+      clearTimeout(responseTimer);
+      sock.destroy();
+      resolve(v);
+    };
+    const connectTimer = setTimeout(() => done(null), SHIM_CONNECT_TIMEOUT_MS);
+    const responseTimer = setTimeout(() => done(null), SHIM_RESPONSE_TIMEOUT_MS);
+    sock.on('error', () => done(null));
+    sock.on('close', () => done(null));
+    sock.on('connect', () => {
+      clearTimeout(connectTimer);
+      sock.write(JSON.stringify({ op: 'extract', file: filePath }) + '\n');
+    });
+    let buf = '';
+    sock.on('data', d => {
+      buf += d.toString();
+      const i = buf.indexOf('\n');
+      if (i === -1) return;
+      try {
+        const r = JSON.parse(buf.slice(0, i));
+        done(r && r.ok && typeof r.json === 'string' ? r.json : null);
+      } catch { done(null); }
+    });
+  });
+}
+
+// Fire-and-forget detached shim launch (opt-in); current read still pays the
+// spawnSync cost once, subsequent cold reads hit the shim.
+function autostartShim() {
+  try {
+    const shimPath = join(dirname(fileURLToPath(import.meta.url)), 'tldr-shim.mjs');
+    if (!existsSync(shimPath)) return;
+    spawn(process.execPath, [shimPath, 'serve'], { detached: true, stdio: 'ignore' }).unref();
+  } catch { /* fail open */ }
+}
 
 function cachePathFor(normPath) {
   return join(CACHE_DIR, createHash('sha1').update(normPath).digest('hex') + '.json');
@@ -106,7 +170,7 @@ function formatNavMap(info, fileName) {
   return parts;
 }
 
-function main() {
+async function main() {
   let data;
   try { data = JSON.parse(readFileSync(0, 'utf-8')); } catch { console.log('{}'); return; }
 
@@ -143,7 +207,7 @@ function main() {
     }
   } catch { /* missing/corrupt cache -> fall through to normal path */ }
 
-  const output = buildOutput(filePath, fileSize);
+  const output = await buildOutput(filePath, fileSize);
 
   // Write-through cache; temp+rename for atomicity; failures never block the hook.
   // '{}' can mean a transient failure (tldr timeout/spawn error), and caching it
@@ -160,14 +224,23 @@ function main() {
 }
 
 // Returns the final hook output string ('{}' or hookSpecificOutput JSON)
-function buildOutput(filePath, fileSize) {
-  // Run tldr extract — falls through if tldr not installed
+async function buildOutput(filePath, fileSize) {
+  // Prefer the persistent shim (~50ms); fall back to spawnSync tldr (~2s).
+  let raw = null;
+  if (process.env.TLDR_READ_SHIM !== '0') {
+    raw = await tryShimExtract(filePath);
+    if (raw === null && process.env.TLDR_READ_SHIM_AUTOSTART === '1') autostartShim();
+  }
+  if (raw === null) {
+    // Run tldr extract — falls through if tldr not installed
+    const proc = spawnSync(TLDR, ['extract', filePath, '--format', 'json'], {
+      encoding: 'utf-8', timeout: 10000,
+    });
+    if (proc.error || !proc.stdout) { return '{}'; }
+    raw = proc.stdout;
+  }
   let info;
-  const proc = spawnSync(TLDR, ['extract', filePath, '--format', 'json'], {
-    encoding: 'utf-8', timeout: 10000,
-  });
-  if (proc.error || !proc.stdout) { return '{}'; }
-  try { info = JSON.parse(proc.stdout); } catch { return '{}'; }
+  try { info = JSON.parse(raw); } catch { return '{}'; }
 
   // Build nav map
   const fileName = basename(filePath);
@@ -200,4 +273,4 @@ function buildOutput(filePath, fileSize) {
   });
 }
 
-main();
+main().catch(() => { console.log('{}'); });

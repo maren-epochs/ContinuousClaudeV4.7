@@ -79,11 +79,60 @@ print("JSON shape OK")
 PYEOF
 check "JSON parses with expected keys and shape" "$?"
 
+# ── Toggle run: READINESS_SKIP_SECURE=1 skips the slow secure job ──
+OUT_JSON_SKIP="$OUT_DIR/out_skip.json"
+START=$(date +%s)
+(cd "$REPO_ROOT" && READINESS_SKIP_SECURE=1 bash scripts/readiness.sh . > "$OUT_JSON_SKIP" 2>/dev/null)
+RC=$?
+END=$(date +%s)
+ELAPSED_SKIP=$((END - START))
+
+check "toggle: exit code is 0 (got $RC)" "$([[ $RC -eq 0 ]]; echo $?)"
+check "toggle: wall time < 5s (got ${ELAPSED_SKIP}s)" "$([[ $ELAPSED_SKIP -lt 5 ]]; echo $?)"
+
+if command -v cygpath >/dev/null 2>&1; then
+  OUT_JSON_SKIP_W="$(cygpath -w "$OUT_JSON_SKIP")"
+else
+  OUT_JSON_SKIP_W="$OUT_JSON_SKIP"
+fi
+
+py -3.13 - "$OUT_JSON_W" "$OUT_JSON_SKIP_W" <<'PYEOF'
+import json, sys
+
+base = json.load(open(sys.argv[1]))
+skip = json.load(open(sys.argv[2]))
+
+# identical key set at every level the baseline run asserts
+assert set(skip.keys()) == set(base.keys()), \
+    f"toggle top-level keys mismatch: {sorted(skip.keys())}"
+assert set(skip["summary"].keys()) == set(base["summary"].keys()), \
+    f"toggle summary keys mismatch: {sorted(skip['summary'].keys())}"
+assert set(skip["report"].keys()) == set(base["report"].keys()), \
+    f"toggle report keys mismatch: {sorted(skip['report'].keys())}"
+
+# security_scan is skipped the same way tldr-absent criteria are: numerator null
+sec = skip["report"]["security_scan"]
+assert set(sec.keys()) == {"numerator", "denominator", "rationale", "category"}, \
+    f"security_scan entry keys mismatch: {sorted(sec.keys())}"
+assert sec["numerator"] is None, f"security_scan numerator not null: {sec['numerator']}"
+assert sec["denominator"] == 1, "security_scan denominator != 1"
+assert skip["summary"]["skipped"] == base["summary"]["skipped"] + 1, \
+    "toggle run should skip exactly one more criterion than baseline"
+
+# the other six tldr-powered criteria still evaluate normally
+for k in ("dead_code", "clones", "complexity", "tech_debt", "call_graph", "hotspots"):
+    entry = skip["report"][k]
+    assert entry["numerator"] in (0, 1), f"{k} numerator not 0/1: {entry['numerator']}"
+
+print("toggle JSON shape OK")
+PYEOF
+check "toggle: JSON shape identical, security_scan skipped" "$?"
+
 echo ""
 if [[ "$FAILURES" -eq 0 ]]; then
-  echo "ALL CHECKS PASSED (wall time: ${ELAPSED}s)"
+  echo "ALL CHECKS PASSED (wall time: ${ELAPSED}s full, ${ELAPSED_SKIP}s with READINESS_SKIP_SECURE=1)"
   exit 0
 else
-  echo "$FAILURES CHECK(S) FAILED (wall time: ${ELAPSED}s)"
+  echo "$FAILURES CHECK(S) FAILED (wall time: ${ELAPSED}s full, ${ELAPSED_SKIP}s with READINESS_SKIP_SECURE=1)"
   exit 1
 fi

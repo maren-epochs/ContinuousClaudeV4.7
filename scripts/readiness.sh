@@ -3,6 +3,8 @@
 # Prototype for `tldr readiness` command
 #
 # Usage: ./readiness.sh [path]
+# Env:   READINESS_SKIP_SECURE=1  skip the slow `tldr secure` job (~8-9s);
+#        security_scan is reported as skipped, JSON shape is unchanged
 # Output: Human summary to stderr, JSON to stdout
 
 set -euo pipefail
@@ -70,6 +72,10 @@ find_src() {
 LANG_DETECTED=$(cd "$TARGET" && detect_lang)
 SRC_DIR=$(find_src)
 HAS_TLDR=$(command -v tldr >/dev/null 2>&1 && echo 1 || echo 0)
+# READINESS_SKIP_SECURE=1 skips `tldr secure` (8-9s, the slowest job by far)
+# and records security_scan as "skip" — same mechanism as the tldr-absent
+# fallback — cutting the full run to a few seconds for fast iteration.
+SKIP_SECURE="${READINESS_SKIP_SECURE:-0}"
 
 # ── Launch tldr analyses in the background ──────────────────────
 # Started here so the ~9s `tldr secure` run overlaps the filesystem checks
@@ -88,8 +94,11 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   PID_COG=$!
   { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || echo '{"summary":{"debt_ratio":0}}' > "$WORK_DIR/debt.json"; } &
   PID_DEBT=$!
-  { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || echo '{}' > "$WORK_DIR/secure.json"; } &
-  PID_SEC=$!
+  PID_SEC=""
+  if [[ "$SKIP_SECURE" != "1" ]]; then
+    { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || echo '{}' > "$WORK_DIR/secure.json"; } &
+    PID_SEC=$!
+  fi
   { (cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet > "$WORK_DIR/calls.json" 2>/dev/null) || echo '{"edges":[]}' > "$WORK_DIR/calls.json"; } &
   PID_CG=$!
   { (cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet > "$WORK_DIR/hotspots.json" 2>/dev/null) || echo '{"hotspots":[]}' > "$WORK_DIR/hotspots.json"; } &
@@ -347,9 +356,13 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   # dead_code
   wait "$PID_DEAD" || true
   DEAD_JSON=$(cat "$WORK_DIR/dead.json" 2>/dev/null || echo '{"definitely_dead":[],"possibly_dead":[],"total_functions":0}')
-  DEAD_DEF=$(echo "$DEAD_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('definitely_dead',[])))" 2>/dev/null || echo 0)
-  DEAD_POS=$(echo "$DEAD_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('possibly_dead',[])))" 2>/dev/null || echo 0)
-  DEAD_TOT=$(echo "$DEAD_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total_functions',0))" 2>/dev/null || echo 0)
+  # One spawn for all three values: python3 startup is ~150ms on MSYS
+  DEAD_STATS=$(echo "$DEAD_JSON" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(len(d.get('definitely_dead',[])), len(d.get('possibly_dead',[])), d.get('total_functions',0))
+" 2>/dev/null || echo "0 0 0")
+  read -r DEAD_DEF DEAD_POS DEAD_TOT <<< "$DEAD_STATS"
   if [[ "$DEAD_DEF" -eq 0 ]]; then
     record "dead_code" "pass" "0 dead, $DEAD_POS possibly dead / $DEAD_TOT funcs" "$CAT"
   else
@@ -383,38 +396,45 @@ print(d.get('summary',{}).get('severe_violations_count', len([f for f in d.get('
   # tech debt
   wait "$PID_DEBT" || true
   DEBT_JSON=$(cat "$WORK_DIR/debt.json" 2>/dev/null || echo '{"summary":{"debt_ratio":0}}')
-  DEBT_R=$(echo "$DEBT_JSON" | python3 -c "
+  # Ratio and threshold verdict in one spawn (was two)
+  DEBT_STATS=$(echo "$DEBT_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 ratio = d.get('summary',{}).get('debt_ratio', d.get('debt_ratio',0))
-print(round(ratio * 100, 1))
-" 2>/dev/null || echo 0)
-  if python3 -c "exit(0 if float('$DEBT_R') < 10 else 1)" 2>/dev/null; then
+pct = round(ratio * 100, 1)
+print(pct, 1 if pct < 10 else 0)
+" 2>/dev/null || echo "0 1")
+  read -r DEBT_R DEBT_OK <<< "$DEBT_STATS"
+  if [[ "$DEBT_OK" == "1" ]]; then
     record "tech_debt" "pass" "Debt ratio ${DEBT_R}% (threshold: <10%)" "$CAT"
   else
     record "tech_debt" "fail" "Debt ratio ${DEBT_R}% (threshold: <10%)" "$CAT"
   fi
 
   # security
-  wait "$PID_SEC" || true
-  SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || echo '{}')
-  SEC_N=$(echo "$SEC_JSON" | python3 -c "
+  if [[ "$SKIP_SECURE" == "1" ]]; then
+    record "security_scan" "skip" "Skipped (READINESS_SKIP_SECURE=1)" "$CAT"
+  else
+    wait "$PID_SEC" || true
+    SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || echo '{}')
+    SEC_N=$(echo "$SEC_JSON" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 s=d.get('summary',{})
 print(s.get('taint_count',0) + s.get('leak_count',0))
 " 2>/dev/null || echo 0)
-  if [[ "$SEC_N" -eq 0 ]]; then
-    record "security_scan" "pass" "No security issues found" "$CAT"
-  else
-    record "security_scan" "fail" "$SEC_N security issues" "$CAT"
+    if [[ "$SEC_N" -eq 0 ]]; then
+      record "security_scan" "pass" "No security issues found" "$CAT"
+    else
+      record "security_scan" "fail" "$SEC_N security issues" "$CAT"
+    fi
   fi
 
   # call graph (novel)
   wait "$PID_CG" || true
   CG_JSON=$(cat "$WORK_DIR/calls.json" 2>/dev/null || echo '{"edges":[]}')
-  CG_EDGES=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('edges',[])))" 2>/dev/null || echo 0)
-  CG_FILES=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('files_analyzed',0))" 2>/dev/null || echo 0)
+  CG_STATS=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('edges',[])), d.get('files_analyzed',0))" 2>/dev/null || echo "0 0")
+  read -r CG_EDGES CG_FILES <<< "$CG_STATS"
   if [[ "$CG_EDGES" -gt 0 ]]; then
     record "call_graph" "pass" "$CG_EDGES edges, $CG_FILES files" "$CAT"
   else
@@ -453,23 +473,24 @@ for i in "${!IDS[@]}"; do
   esac
 done
 
-ERROR_SURFACE=$(python3 -c "print(round(1.0 - ($CONSTRAINTS / $MAX_CONSTRAINTS), 2))")
-
 # ════════════════════════════════════════════════════════════════
 # OUTPUT
 # ════════════════════════════════════════════════════════════════
 
 EVALUATED=$((PASS + FAIL))
 TOTAL=$((PASS + FAIL + SKIP))
-PASS_RATE=$(python3 -c "print(round($PASS / max($EVALUATED,1) * 100, 1))")
-LEVEL=$(python3 -c "
-r = $PASS_RATE
+# Error surface, pass rate, and level in one spawn (was three)
+SCORES=$(python3 -c "
+print(round(1.0 - ($CONSTRAINTS / $MAX_CONSTRAINTS), 2))
+r = round($PASS / max($EVALUATED,1) * 100, 1)
+print(r)
 if r >= 80: print(5)
 elif r >= 60: print(4)
 elif r >= 40: print(3)
 elif r >= 20: print(2)
 else: print(1)
 ")
+{ read -r ERROR_SURFACE; read -r PASS_RATE; read -r LEVEL; } <<< "$SCORES"
 
 # ── Human summary ──────────────────────────────────────────────
 echo -e "" >&2

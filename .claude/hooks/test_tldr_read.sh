@@ -86,6 +86,42 @@ run_hook "$(payload "$TMP_PY")"
 [ "$MS" -gt 1000 ]; check "VAL-001c mtime change invalidates cache (re-run took ${MS}ms, want >1000ms)" $?
 rm -f "$TMP_PY"
 
+# --- VAL-201: persistent tldr-mcp shim (tldr-shim.mjs) — additive assertions ---
+# Shim is opt-in (explicit start / TLDR_READ_SHIM_AUTOSTART=1), so the
+# assertions above always run against the spawnSync path. These verify:
+# shim-on cold read is fast and byte-identical; fallback survives a stale
+# port file; stopping the shim restores today's behavior.
+SHIM="$(cd "$(dirname "$0")" && pwd)/tldr-shim.mjs"
+SHIM_PORT_FILE="$TMPWIN/tldr-shim.json"
+
+node "$SHIM" stop > /dev/null 2>&1   # clean slate
+node "$SHIM" start > /dev/null 2>&1
+[ -f "$SHIM_PORT_FILE" ]; check "VAL-201a shim start writes port file" $?
+
+# --- VAL-201b/c: cold read via shim: byte-identical to spawnSync cold, <500ms ---
+rm -rf "$CACHE_DIR"
+run_hook "$(payload "$FIXTURE")" 500
+[ "$OUT" = "$COLD_OUT" ]; check "VAL-201b shim cold output byte-identical to spawnSync cold" $?
+[ "$MS" -lt 500 ]; check "VAL-201c shim cold read <500ms (got ${MS}ms)" $?
+
+# --- VAL-201d: stale port file (no listener) falls back to spawnSync, still works ---
+node "$SHIM" stop > /dev/null 2>&1
+printf '{"port":1,"pid":0}' > "$SHIM_PORT_FILE"
+rm -rf "$CACHE_DIR"
+run_hook "$(payload "$FIXTURE")"
+[ "$OUT" = "$COLD_OUT" ]; check "VAL-201d stale port file falls back to spawnSync, identical output (${MS}ms)" $?
+rm -f "$SHIM_PORT_FILE"
+
+# --- VAL-201e: TLDR_READ_SHIM=0 ignores a live shim (spawnSync path, >1s) ---
+node "$SHIM" start > /dev/null 2>&1
+rm -rf "$CACHE_DIR"
+start=$(date +%s%N)
+OUT=$(printf '%s' "$(payload "$FIXTURE")" | TLDR_READ_SHIM=0 node "$HOOK")
+end=$(date +%s%N); MS=$(( (end - start) / 1000000 ))
+[ "$OUT" = "$COLD_OUT" ] && [ "$MS" -gt 1000 ]
+check "VAL-201e TLDR_READ_SHIM=0 bypasses live shim (${MS}ms, want >1000ms)" $?
+node "$SHIM" stop > /dev/null 2>&1
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
