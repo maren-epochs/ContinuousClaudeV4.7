@@ -38,7 +38,7 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 5 hooks.
 
 | Tool | What it does |
 |------|-------------|
-| [bloks](https://github.com/parcadei/bloks) | Library knowledge cards — API docs, taste, corrections |
+| [bloks](https://github.com/maren-epochs/bloks) (fork; upstream archived) | Library knowledge cards — API docs, taste, corrections |
 | [tldr](https://github.com/parcadei/tldr-code) | Token-efficient code analysis (AST, call graphs, diagnostics) |
 | [ouros](https://github.com/parcadei/ouros) | Sandboxed Python REPL with fork/save/resume |
 | [fastedit](https://github.com/parcadei/fastedit) | Fast code editing via merge model (`pip install fastedits`) |
@@ -92,7 +92,7 @@ Skills orchestrate — they never implement directly. Workers build. Bloks cards
 
 **Enforcement hierarchy:** lint rule > type system > formatter > pre-commit hook > CI check > CLAUDE.md (last resort). Deterministic enforcement always preferred over probabilistic instructions.
 
-**Knowledge flow:** PREPARE consumes bloks cards → workers execute → EVOLVE produces new cards via `bloks new rule`. Cards score through ack/nack.
+**Knowledge flow:** PREPARE consumes bloks cards → workers execute → EVOLVE produces new cards via `bloks new rule`. Cards score through ack/nack (score in [-1,1]; `bloks context` ranks rules/tastes by score and hides cards below -0.5 — fork fix, upstream scoring was a no-op).
 
 ## Project structure (created at runtime)
 

@@ -58,7 +58,7 @@ Hooks that use `tldr` (tldr-read, post-edit-diagnostics) fall through silently i
 
 | Tool | Install | What it does |
 |------|---------|-------------|
-| [bloks](https://github.com/parcadei/bloks) | `cargo install bloks` | Library knowledge cards — API docs, taste, corrections |
+| [bloks](https://github.com/maren-epochs/bloks) (fork of archived parcadei/bloks — ack/nack scoring fixed) | `cargo install --git https://github.com/maren-epochs/bloks` | Library knowledge cards — API docs, taste, corrections |
 | [tldr](https://github.com/parcadei/tldr-code) | `cargo install --git https://github.com/parcadei/tldr-code tldr-cli` | Token-efficient code analysis (AST, call graphs, impact, diagnostics) |
 | [ouros](https://github.com/parcadei/ouros) | `python -m pip install ouros` | Sandboxed Python REPL with fork/save/resume |
 | [fastedit](https://github.com/parcadei/fastedit) | `pip install fastedits` | Fast code editing via merge model — 10x fewer tokens per edit |

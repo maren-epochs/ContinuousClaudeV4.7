@@ -28,7 +28,9 @@ User approves. Worker applies only approved changes. Then run this checklist in 
   4. issues → surface blocking items, create follow-ups
   5. bloks ack/nack — MANDATORY. For each card injected during PREPARE:
      - Worker used it and it was correct → bloks ack {card-id}
-     - Worker found it wrong/outdated → bloks nack {card-id} + bloks report
+     - Worker found it wrong/outdated → bloks nack {card-id} (one nack hides a rule
+       from future context); if the right answer is known, also `bloks new rule "<fix>"`.
+       `bloks report` only works for registry-indexed library cards.
      - Worker never referenced it → skip (no signal)
      If PREPARE injected 0 cards (no bloks output), skip this step.
   6. readiness.sh again → diff against ASSESS baseline for health delta
