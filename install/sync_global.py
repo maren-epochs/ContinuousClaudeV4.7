@@ -11,12 +11,16 @@ Files that would be overwritten are backed up first under
 ~/.claude/.ccv47-backup/<timestamp>/.
 
 Never touches settings.json, CLAUDE.md, .env, or *.orig / *.bak-* files.
-Hook registration in settings.json is a one-time manual step (see README).
+Hook registration in settings.json is a one-time manual step (see README);
+the dry run only READS settings.json to warn about installed-but-unregistered
+hooks, and compares .ccv47-installed against git HEAD. Those drift checks are
+informational: exit codes stay 1 = file drift, 0 = in sync.
 """
 from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import re
 import shutil
 import subprocess
@@ -54,6 +58,55 @@ def render(src: Path, rules, eol: str) -> bytes:
         for pat, repl in rules:
             text = pat.sub(repl, text)
     return text.replace("\n", eol).encode("utf-8")
+
+
+def registered_mjs(settings: Path) -> set[str] | None:
+    """Basenames of .mjs files referenced under hooks.* / statusLine, or None if unparseable."""
+    try:
+        cfg = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    strings: list[str] = []
+
+    def walk(node) -> None:
+        if isinstance(node, str):
+            strings.append(node)
+        elif isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(cfg.get("hooks"))
+    walk(cfg.get("statusLine"))
+    return {m for s in strings for m in re.findall(r"[\w.-]+\.mjs", s)}
+
+
+def drift_checks(target: Path, sha: str, file_drift: bool) -> None:
+    """Read-only drift diagnostics: never writes, never changes exit codes."""
+    installed = target / ".ccv47-installed"
+    if sha and installed.is_file():
+        recorded = (installed.read_text(encoding="utf-8").split() or ["?"])[0]
+        if recorded != sha:
+            if file_drift:
+                print(f"warn: installed SHA {recorded} != HEAD {sha}")
+            else:
+                print(f"note: recorded SHA {recorded} != HEAD {sha} (file contents in sync; record is stale)")
+
+    settings = target / "settings.json"
+    if not settings.is_file():
+        print(f"note: {settings} not found - skipping hook registration check")
+        return
+    refs = registered_mjs(settings)
+    if refs is None:
+        print(f"note: {settings} is not valid JSON - skipping hook registration check")
+        return
+    for hook in sorted((REPO / ".claude/hooks").glob("*.mjs")):
+        if hook.name.startswith("test"):
+            continue
+        if hook.name not in refs:
+            print(f"warn: hooks/{hook.name} is installed but not registered in {settings}")
 
 
 def main() -> int:
@@ -95,6 +148,7 @@ def main() -> int:
     dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain"], capture_output=True, text=True, check=False).stdout.strip()
 
     if not args.apply:
+        drift_checks(target, sha, file_drift=bool(plan))
         if plan:
             print("\ndry run - pass --apply to write (exit 1: out of sync)")
         return 1 if plan else 0

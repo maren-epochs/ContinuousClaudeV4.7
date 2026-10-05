@@ -5,11 +5,12 @@
  * Reads context percentage from the temp file written by status.mjs.
  * This ensures 1:1 match with status line display.
  */
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 const CONTEXT_THRESHOLD = 85;
+const MAX_PCT_AGE_MS = 2 * 60 * 60 * 1000; // ignore pct files older than 2h (crashed/stale sessions)
 
 function getSessionId(data) {
   const sid = data.session_id || '';
@@ -18,7 +19,9 @@ function getSessionId(data) {
 }
 
 function main() {
-  const data = JSON.parse(readFileSync(0, 'utf-8'));
+  // Fail OPEN: this guard must never block a stop on missing/corrupt data.
+  let data = {};
+  try { data = JSON.parse(readFileSync(0, 'utf-8')); } catch {}
 
   if (data.stop_hook_active) { console.log('{}'); return; }
 
@@ -27,7 +30,15 @@ function main() {
 
   let pct = null;
   try {
-    if (existsSync(file)) pct = parseInt(readFileSync(file, 'utf-8').trim(), 10);
+    if (!existsSync(file)) {
+      // status.mjs never wrote a pct for this session (headless/-p run or
+      // unconfigured statusline). Degrade silently but leave one trace in logs.
+      process.stderr.write(`auto-handoff-stop: pct file missing for session ${sid} (statusline hook not running?); context guard inactive, allowing stop\n`);
+    } else if (Date.now() - statSync(file).mtimeMs <= MAX_PCT_AGE_MS) {
+      const parsed = parseInt(readFileSync(file, 'utf-8').trim(), 10);
+      if (Number.isFinite(parsed)) pct = parsed;
+    }
+    // Stale file (mtime > 2h): ignore — likely a crashed session reusing the key.
   } catch {}
 
   if (pct == null || pct < CONTEXT_THRESHOLD) {
@@ -35,9 +46,9 @@ function main() {
   } else {
     console.log(JSON.stringify({
       decision: 'block',
-      reason: `Context at ${pct}%. Run: /create_handoff`,
+      reason: `Context at ${pct}%. Run: /create-handoff`,
     }));
   }
 }
 
-main();
+try { main(); } catch { console.log('{}'); }
