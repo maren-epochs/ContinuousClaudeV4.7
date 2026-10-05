@@ -39,6 +39,8 @@ MAPPINGS = [
     ("tools", "tools"),
 ]
 INCLUDE_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".py", ".txt"}
+# installed .mjs that are NOT event hooks (spawned by other hooks): skip registration check
+NOT_EVENT_HOOKS = {"tldr-shim.mjs"}
 
 
 def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
@@ -103,7 +105,7 @@ def drift_checks(target: Path, sha: str, file_drift: bool) -> None:
         print(f"note: {settings} is not valid JSON - skipping hook registration check")
         return
     for hook in sorted((REPO / ".claude/hooks").glob("*.mjs")):
-        if hook.name.startswith("test"):
+        if hook.name.startswith("test") or hook.name in NOT_EVENT_HOOKS:
             continue
         if hook.name not in refs:
             print(f"warn: hooks/{hook.name} is installed but not registered in {settings}")

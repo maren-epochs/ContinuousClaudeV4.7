@@ -23,11 +23,14 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "sync_global.py"
+sys.path.insert(0, str(SCRIPT.parent))
+from sync_global import NOT_EVENT_HOOKS  # noqa: E402
+
 TIMEOUT = 120
 HOOKS = sorted(
     p.name
     for p in (SCRIPT.parent.parent / ".claude" / "hooks").glob("*.mjs")
-    if not p.name.startswith("test")
+    if not p.name.startswith("test") and p.name not in NOT_EVENT_HOOKS
 )
 FAKE_SHA = "0" * 40
 
@@ -110,6 +113,24 @@ class DriftChecks(unittest.TestCase):
             for name in registered:
                 self.assertFalse(any(name in w for w in warns),
                                  f"registered hook {name} must not be warned: {warns}")
+
+    def test_non_event_hooks_never_warned(self) -> None:
+        self.assertIn("tldr-shim.mjs", NOT_EVENT_HOOKS)
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            # every event hook registered; non-event hooks deliberately absent
+            settings = {"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [
+                {"type": "command", "command": f'node "{target.as_posix()}/hooks/{name}"'}
+                for name in HOOKS]}]}}
+            (target / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+
+            dry = run_sync(target)
+            self.assertEqual(dry.returncode, 0, f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}")
+            self.assertTrue((target / "hooks" / "tldr-shim.mjs").is_file(),
+                            "non-event hooks must still be installed")
+            self.assertEqual(warn_lines(dry.stdout), [],
+                             f"no registration warnings expected: {dry.stdout}")
 
     def test_missing_settings_json_is_informational(self) -> None:
         with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
