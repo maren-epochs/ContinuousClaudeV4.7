@@ -68,6 +68,6 @@ Test end-to-end with smoke tests (does it work?), security tests (blocks unautho
 echo 'result = new_function("test_arg"); print(result)' | python tools/ouros_harness.py
 ```
 
-Add test cases to `test_ouros_harness.py` if it exists. Update the function table in `.claude/CLAUDE.md` with the new capability. Install any Python package dependencies into `/tmp/ouros/.venv/bin/pip install package-name` and document what was installed. Copy any separate scripts to the harness directory.
+Add test cases to `test_ouros_harness.py` if it exists. Update the function table in the repo root `CLAUDE.md` with the new capability. Install any Python package dependencies into `/tmp/ouros/.venv/bin/pip install package-name` and document what was installed. Copy any separate scripts to the harness directory.
 
 Present completion checklist: bridge function written, security policy added, registered in EXTERNAL_FUNCTIONS, smoke tested, security tested, CLAUDE.md updated, dependencies installed and documented.
