@@ -1,0 +1,171 @@
+---
+session: general
+date: 2026-10-05
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: Made fork maren-epochs/ContinuousClaudeV4.7 the source of truth; audited live ~/.claude vs upstream; opened PR #20; built installer
+now: Restart session; verify hooks/skills load from updated ~/.claude; exercise /autonomous to confirm bloks knowledge loop round-trips
+test: py -3.13 install/sync_global.py   # must report "in sync"; and bash -n ~/.claude/scripts/readiness.sh
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  Continuous Claude v4.7 lives in TWO places: the live global install in ~/.claude
+  (skills/, agents/, hooks/, scripts/, tools/ — hooks registered in ~/.claude/settings.json
+  with absolute `node "~/.claude/hooks/*.mjs"` commands) and the git
+  clone at ~\Documents\ccv47-readme-fix.
+  As of this session the clone's `origin` is the fork (maren-epochs/ContinuousClaudeV4.7)
+  and `upstream` is parcadei/ContinuousClaudeV4.7. Fork main = upstream main (a500a2c, the
+  only upstream commit) + seven fix branches merged --no-ff (one merge commit each, so each
+  is droppable when its upstream PR lands) + two fork-only commits (cargo-PATH prepend in
+  readiness scripts; install/sync_global.py + install/README.md).
+  install/sync_global.py is the bridge: copies agents/hooks/skills/scripts/tools into
+  ~/.claude, rewriting repo-relative paths in .md files to absolute ones and pinning
+  `py -3.13` (ouros has wheels only through cp313; default python is 3.14). Dry run by
+  default, --apply writes with backups to ~/.claude/.ccv47-backup/<timestamp>/ and records
+  the commit in ~/.claude/.ccv47-installed. It NEVER touches settings.json, CLAUDE.md,
+  .env, or *.orig — hook registration stays manual.
+  Upstream repo is effectively unmaintained: issues #11-#15 and PRs #13-#20 all open, zero
+  maintainer response since 2026-09-21; only CodeRabbit bot ever replied.
+  Git line-ending trap in this repo: core.autocrlf=true, no .gitattributes, working tree is
+  CRLF, blobs are LF. All live-vs-repo diffs must normalize with `tr -d '\r'`. Also MSYS
+  bash mangles `origin/main:path` args — export MSYS2_ARG_CONV_EXCL='*' before git cat-file
+  style commands.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: n/a (no test suite in repo; verification = installer idempotence + bash -n + node --check)
+  test_command: py -3.13 install/sync_global.py   # dry run must print "in sync"
+  pre_existing_failures: []
+  uncommitted_changes: true
+  branch: main
+  dirty_files: [thoughts/shared/handoffs/general/2026-10-05_16-53_fork-source-of-truth.yaml (this handoff, untracked)]
+  warnings: "git prints 'LF will be replaced by CRLF' warnings constantly — benign, core.autocrlf=true"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: Audited live ~/.claude against origin/main + all six fix branches (merged in temp worktree, CRLF-normalized diff)
+    files: []
+  - task: Checked upstream status — #11-#19 all open, no maintainer activity since 2026-09-21
+    files: []
+  - task: Restored missing backup ~/.claude/scripts/readiness-fix.sh.orig from a500a2c (CRLF, matching sibling .orig files)
+    files: [~/.claude/scripts/readiness-fix.sh.orig]
+  - task: Created fix/tldr-read-spawn branch (absolute tldr path + spawnSync, no shell) from the local-only fix; verified functionally with/without cargo on PATH; opened upstream PR #20
+    files: [.claude/hooks/tldr-read.mjs]
+  - task: Swapped remotes (origin=fork, upstream=parcadei); merged all 7 fix branches into fork main --no-ff; pushed
+    files: []
+  - task: Promoted cargo-PATH prepend from live install into fork (commit 2789279)
+    files: [scripts/readiness.sh, scripts/readiness-fix.sh]
+  - task: Wrote install/sync_global.py + install/README.md (commit f1f7553); applied it — live install now matches fork main exactly, incl. previously-missing PR #16 bloks fix
+    files: [install/sync_global.py, install/README.md, ~/.claude/agents/oracle.md, ~/.claude/skills/autonomous/SKILL.md, ~/.claude/skills/autonomous-research/SKILL.md, ~/.claude/skills/upgrade-harness/SKILL.md, ~/.claude/scripts/readiness.sh]
+  - task: Updated memory note ccv47-global-install.md with audit results and new fork-as-source-of-truth layout
+    files: [~/.claude/projects/<project-B transcript dir>/memory/ccv47-global-install.md]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: fork_main_as_integration_branch
+    chose: merge all fix branches into fork main with --no-ff merge commits
+    over: [rebasing fixes into one linear branch, keeping branches separate and hand-patching ~/.claude]
+    because: upstream is unresponsive; --no-ff keeps each fix revertable/droppable when its PR eventually merges upstream
+    constraint: fix branches must stay untouched — they back open upstream PRs
+  - name: installer_rewrites_at_copy_time
+    chose: sync_global.py rewrites repo-relative paths to absolute during copy (.md files only)
+    over: [committing absolute paths into the fork, symlinking ~/.claude dirs to the repo]
+    because: fork stays upstream-mergeable and portable; the install-specific deltas (paths, py -3.13 pin) are machine-local concerns
+  - name: installer_never_touches_config
+    chose: settings.json, CLAUDE.md, .env, *.orig excluded from sync
+    over: [full-directory sync]
+    because: settings.json/CLAUDE.md hold user config predating the harness; repo ships a CLAUDE.md that would clobber user preferences
+  - name: crlf_output
+    chose: installer writes CRLF on Windows (--eol crlf default)
+    over: [LF]
+    because: matches what the original hand-install produced; keeps diffs against existing ~/.claude files clean
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - Live ~/.claude is synced to fork main f1f7553 (recorded in ~/.claude/.ccv47-installed). Any future edits to harness files should go into the repo and be re-applied via installer, not hand-edited in ~/.claude.
+    - The running Claude Code session loaded hooks/skills BEFORE this sync — a restart is required for the updated oracle.md/autonomous skills (bloks new rule) to take effect. That is the purpose of this handoff.
+    - grep for 'bloks learn' in ~/.claude after sync returns 2 hits in oracle.md and autonomous/SKILL.md — these are intentional explanatory text ("what bloks learn writes by default"), not regressions.
+  useful:
+    - Functional test harness for tldr-read.mjs - feed '{"tool_name":"Read","tool_input":{"file_path":"<big .py>"}}' to `node hook.mjs` with and without ~/.cargo/bin on PATH; upstream returns {} without it, patched returns nav map.
+    - upgrade-harness/SKILL.md flagged as "update" on first sync solely because the hand-edited live copy ended with LF instead of CRLF — content was identical.
+    - gh repo set-default is maren-epochs/ContinuousClaudeV4.7; `gh pr create -R parcadei/... --head maren-epochs:<branch>` is the cross-fork PR invocation that worked.
+  fyi:
+    - ~/.claude/.ccv47-installed briefly recorded a dirty SHA (278927..., handoff-less working tree); re-applied after commit f1f7553 so it now records the clean SHA.
+    - Temp worktree for the merge audit needed PowerShell Remove-Item after `git worktree remove` hit Permission denied (Windows file locks); `git worktree prune` finished the cleanup.
+
+# ── APPROACHES ───────────────────────────────────────────────────
+worked:
+  - Temp git worktree at $TEMP/ccv47-merge to merge all fix branches and diff against live install without touching the main checkout
+  - tr -d '\r' on both sides of every diff to neutralize the CRLF working tree
+  - MSYS2_ARG_CONV_EXCL='*' to stop Git Bash path-mangling rev:path arguments
+
+failed:
+  - attempted: bash for-loop calling `git show origin/main:$f | diff - $live` without MSYS2_ARG_CONV_EXCL
+    root_cause: MSYS path conversion rewrote 'origin/main:.claude/...' into 'origin\main;.claude\...' making git see an ambiguous revision
+    avoid: any Git Bash command passing colon-containing rev:path args without the env guard
+    use_instead: export MSYS2_ARG_CONV_EXCL='*' first, or use git cat-file -p
+  - attempted: git worktree remove --force from Git Bash
+    root_cause: Windows held a lock on a file inside the worktree (likely the shell's CWD)
+    avoid: removing a worktree while any process has CWD inside it
+    use_instead: cd out, Remove-Item -Recurse -Force from PowerShell, then git worktree prune
+
+# ── TRAJECTORY ───────────────────────────────────────────────────
+trajectory:
+  started_as: "find the harness loaded from github.com/parcadei/ContinuousClaudeV4.7 in my folders"
+  evolved_to: full audit of live install vs upstream+fixes, upstream PR status check, backup restoration, then applying the gaps found (PR #16 locally, tldr-read fix upstream as PR #20)
+  scoped_to: fork as permanent source of truth with a repeatable installer
+  user_approved_scope: true
+
+# ── USER INTENT ──────────────────────────────────────────────────
+user_intent: |
+  User runs this harness globally across all projects and has given up waiting on the
+  unresponsive upstream maintainer. They want the fork to be the maintained line: every
+  local fix lands in the fork first, ~/.claude is a build artifact of the fork, and
+  upstream PRs remain open as a courtesy. Session restart requested specifically so the
+  freshly-synced hooks and skills actually load.
+
+# ── BLOCKERS & QUESTIONS ─────────────────────────────────────────
+blockers: []
+questions:
+  - Should the *.orig / ouros_harness.py.bak-prestdoutfix hand-patch backups in ~/.claude be deleted now that fork git history serves that role? (Proposed, not yet approved.)
+  - Set up a periodic upstream-PR watch (/schedule) for #13-#20? (Proposed, not yet approved.)
+
+# ── NEXT STEPS ───────────────────────────────────────────────────
+next:
+  - Commit this handoff file in ccv47-readme-fix (only untracked change on main)
+  - Verify fresh session loads updated harness; statusline hook (status.mjs) should render; tldr-read nav map should appear on Reads of large code files
+  - Exercise /autonomous on a small task; in EVOLVE confirm findings land via `bloks new rule` and that `bloks context .` in a subsequent PREPARE emits them (the loop PR #16 fixes)
+  - If user approves - delete ~/.claude/scripts/*.orig, ~/.claude/hooks/post-edit-diagnostics.mjs.orig, ~/.claude/tools/ouros_harness.py.bak-prestdoutfix
+  - Periodically - git fetch upstream && git merge upstream/main && py -3.13 install/sync_global.py --apply
+
+# ── NEXT SESSION PROMPT (REQUIRED) ───────────────────────────────
+next_session_prompt: |
+  Resume from handoff thoughts/shared/handoffs/general/2026-10-05_16-53_fork-source-of-truth.yaml
+  in ~\Documents\ccv47-readme-fix.
+  Context: my fork maren-epochs/ContinuousClaudeV4.7 is now the source of truth for the
+  Continuous Claude harness; ~/.claude was synced to fork main f1f7553 via
+  install/sync_global.py, but the previous session's hooks/skills predated that sync.
+  First: confirm this fresh session is running the updated harness (status line renders;
+  reading a large .py file injects a tldr nav map). Then run
+  `py -3.13 install/sync_global.py` — it must report "in sync". Then commit the handoff
+  file sitting untracked on main. Pending decisions for me: deleting the old *.orig
+  hand-patch backups in ~/.claude, and scheduling a watch on upstream PRs #13-#20.
+
+# ── FILE MANIFEST ────────────────────────────────────────────────
+files:
+  created:
+    - install/sync_global.py
+    - install/README.md
+    - thoughts/shared/handoffs/general/2026-10-05_16-53_fork-source-of-truth.yaml
+    - ~/.claude/scripts/readiness-fix.sh.orig (restored from a500a2c)
+    - ~/.claude/.ccv47-installed
+  modified:
+    - .claude/hooks/tldr-read.mjs (branch fix/tldr-read-spawn, PR #20)
+    - scripts/readiness.sh, scripts/readiness-fix.sh (cargo PATH prepend, commit 2789279)
+    - ~/.claude/agents/oracle.md, ~/.claude/skills/autonomous/SKILL.md, ~/.claude/skills/autonomous-research/SKILL.md, ~/.claude/skills/upgrade-harness/SKILL.md, ~/.claude/scripts/readiness.sh (installer sync)
+    - ~/.claude/projects/<project-B transcript dir>/memory/ccv47-global-install.md (audit + fork notes appended)

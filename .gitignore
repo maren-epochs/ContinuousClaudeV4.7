@@ -13,9 +13,10 @@ node_modules/
 .mcp.json
 .claude.json
 
-# Runtime state (session data, not source)
+# Runtime state (session data, not source) — handoffs are kept: they carry session state across machines
 continuum/
-thoughts/shared/
+thoughts/shared/*
+!thoughts/shared/handoffs/
 backups/
 cache/
 file-history/
