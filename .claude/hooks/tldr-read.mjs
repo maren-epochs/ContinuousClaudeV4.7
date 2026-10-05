@@ -15,11 +15,12 @@
  *  - Files under .claude/hooks/ or .claude/skills/
  *  - Targeted reads (offset/limit already set)
  */
-import { readFileSync, statSync, existsSync } from 'fs';
+import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { extname, basename } from 'path';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 
 // Resolve tldr by absolute path first: a Claude Code process started before
 // ~/.cargo/bin joined PATH can't find it by name, and the failure is silent.
@@ -46,6 +47,14 @@ const BYPASS_PATTERNS = [
 ];
 
 const SIZE_THRESHOLD = 1500; // ~50 lines
+
+// tldr pays a ~2s fixed init per invocation; cache the final hook output
+// keyed on path+mtime+size so unchanged files skip the spawn entirely.
+const CACHE_DIR = join(tmpdir(), 'tldr-read-cache');
+
+function cachePathFor(normPath) {
+  return join(CACHE_DIR, createHash('sha1').update(normPath).digest('hex') + '.json');
+}
 
 function formatNavMap(info, fileName) {
   const parts = [`# ${fileName}`];
@@ -105,36 +114,64 @@ function main() {
 
   const toolInput = data.tool_input || {};
   const filePath = toolInput.file_path || '';
+  // Windows paths arrive with backslashes; patterns use forward slashes
+  const normPath = filePath.replace(/\\/g, '/');
   const ext = extname(filePath);
 
   // Pass through: non-code files
   if (!CODE_EXTENSIONS.has(ext)) { console.log('{}'); return; }
 
   // Pass through: bypassed patterns
-  if (BYPASS_PATTERNS.some(p => p.test(filePath))) { console.log('{}'); return; }
+  if (BYPASS_PATTERNS.some(p => p.test(normPath))) { console.log('{}'); return; }
 
   // Pass through: targeted reads (offset/limit already set)
   if (toolInput.offset || (toolInput.limit && toolInput.limit < 100)) { console.log('{}'); return; }
 
   // Pass through: small files
-  let fileSize;
-  try { fileSize = statSync(filePath).size; } catch { console.log('{}'); return; }
+  let stat;
+  try { stat = statSync(filePath); } catch { console.log('{}'); return; }
+  const fileSize = stat.size;
   if (fileSize < SIZE_THRESHOLD) { console.log('{}'); return; }
 
+  // Cache hit: unchanged file (same mtime+size) reuses the exact prior output
+  const cacheFile = cachePathFor(normPath);
+  try {
+    const cached = JSON.parse(readFileSync(cacheFile, 'utf-8'));
+    if (cached.mtimeMs === stat.mtimeMs && cached.size === fileSize && typeof cached.stdout === 'string') {
+      console.log(cached.stdout);
+      return;
+    }
+  } catch { /* missing/corrupt cache -> fall through to normal path */ }
+
+  const output = buildOutput(filePath, fileSize);
+
+  // Write-through cache; temp+rename for atomicity; failures never block the hook
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    const tmpFile = cacheFile + '.' + process.pid + '.tmp';
+    writeFileSync(tmpFile, JSON.stringify({ mtimeMs: stat.mtimeMs, size: fileSize, stdout: output }));
+    renameSync(tmpFile, cacheFile);
+  } catch { /* cache is best-effort */ }
+
+  console.log(output);
+}
+
+// Returns the final hook output string ('{}' or hookSpecificOutput JSON)
+function buildOutput(filePath, fileSize) {
   // Run tldr extract — falls through if tldr not installed
   let info;
   const proc = spawnSync(TLDR, ['extract', filePath, '--format', 'json'], {
     encoding: 'utf-8', timeout: 10000,
   });
-  if (proc.error || !proc.stdout) { console.log('{}'); return; }
-  try { info = JSON.parse(proc.stdout); } catch { console.log('{}'); return; }
+  if (proc.error || !proc.stdout) { return '{}'; }
+  try { info = JSON.parse(proc.stdout); } catch { return '{}'; }
 
   // Build nav map
   const fileName = basename(filePath);
   const parts = formatNavMap(info, fileName);
 
   // Only inject if we got meaningful content
-  if (!parts.some(p => p.startsWith('## '))) { console.log('{}'); return; }
+  if (!parts.some(p => p.startsWith('## '))) { return '{}'; }
 
   parts.push('', '---', 'Read specific lines: offset=N limit=M');
 
@@ -150,14 +187,14 @@ function main() {
   let additionalContext = `[Nav Map: ${fileName}]\n\n${parts.join('\n')}`;
   if (truncateLimit) additionalContext += `\nFile truncated to ${truncateLimit} lines. Use offset/limit for more.`;
 
-  console.log(JSON.stringify({
+  return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
       updatedInput,
       additionalContext,
     },
-  }));
+  });
 }
 
 main();
