@@ -1,13 +1,4 @@
 {
-  "statusLine": {
-    "type": "command",
-    "command": "node .claude/hooks/status.mjs"
-  },
-  "env": {
-    "MAX_THINKING_TOKENS": "31999",
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000"
-  },
   "hooks": {
     "PreToolUse": [
       {
@@ -16,72 +7,6 @@
           {
             "type": "command",
             "command": "fastedit-hook"
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          { "type": "command", "if": "Read(*.py)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.ts)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.tsx)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.js)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.jsx)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.mjs)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.go)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.rs)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.java)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.kt)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.c)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.cpp)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.cc)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.h)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.hpp)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.rb)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.php)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.swift)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.cs)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.scala)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.ex)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.exs)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 },
-          { "type": "command", "if": "Read(*.lua)", "command": "node .claude/hooks/tldr-read.mjs", "timeout": 15 }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .claude/hooks/pre-compact.mjs"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|Update",
-        "hooks": [
-          { "type": "command", "if": "Edit(*.py)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.pyx)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.pyi)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.ts)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.tsx)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.js)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.jsx)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.mjs)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 },
-          { "type": "command", "if": "Edit(*.rs)", "command": "node .claude/hooks/post-edit-diagnostics.mjs", "timeout": 15 }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .claude/hooks/auto-handoff-stop.mjs"
           }
         ]
       }

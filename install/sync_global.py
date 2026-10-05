@@ -46,7 +46,7 @@ NOT_EVENT_HOOKS = {"tldr-shim.mjs"}
 def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
     harness = f"{dest}/tools/ouros_harness.py"
     return [
-        (re.compile(r"\bpython3? tools/ouros_harness\.py"), f"{python} {harness}"),
+        (re.compile(r"\b(?:py -3\.13|python3?) tools/ouros_harness\.py"), f"{python} {harness}"),
         (re.compile(r"(?m)^tools/ouros_harness\.py"), f"{python} {harness}"),
         (re.compile(r"`tools/ouros_harness\.py`"), f"`{harness}`"),
         (re.compile(r"\b(?:py -3\.13|python3?) tools/(validate_report\.py)"), rf"{python} {dest}/tools/\1"),
