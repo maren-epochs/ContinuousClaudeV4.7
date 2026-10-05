@@ -13,7 +13,7 @@ import { join, resolve, basename } from 'path';
 import { tmpdir, homedir } from 'os';
 
 function getSessionId(data) {
-  const sid = data.session_id || '';
+  const sid = typeof data.session_id === 'string' ? data.session_id : '';
   if (sid) return sid.slice(0, 8);
   return process.env.CLAUDE_SESSION_ID || String(process.ppid);
 }
@@ -152,13 +152,15 @@ function findProjectRoot(start) {
 function main() {
   let data = {};
   try { data = JSON.parse(readFileSync(0, 'utf-8')); } catch {}
+  if (!data || typeof data !== 'object') data = {};
 
-  let cwd = (data.workspace || {}).current_dir || process.env.CLAUDE_PROJECT_DIR || '';
+  const cd = (data.workspace || {}).current_dir;
+  let cwd = (typeof cd === 'string' && cd) || process.env.CLAUDE_PROJECT_DIR || '';
   if (!cwd) cwd = findProjectRoot(process.cwd());
   else if (!existsSync(join(cwd, '.git'))) cwd = findProjectRoot(cwd);
 
   const { pct, display, known } = getContextInfo(data);
-  if (known) writeContextPct(pct, data);
+  if (known && Number.isFinite(pct)) writeContextPct(pct, data);
   const git = getGitInfo(cwd);
   const { goal, now } = getContinuityInfo(cwd);
 
