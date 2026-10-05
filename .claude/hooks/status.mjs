@@ -18,16 +18,25 @@ function getSessionId(data) {
   return process.env.CLAUDE_SESSION_ID || String(process.ppid);
 }
 
+// Last API call's input tokens already include system prompt + tools, so no
+// overhead is added (the old +45K double-counted). Prefer Claude Code's own
+// used_percentage (same input-only formula). current_usage is null before the
+// first call and right after /compact: pct 0 is written so a pre-compact value
+// can't keep the stop guard tripped. No context_window at all: known=false.
 function getContextInfo(data) {
   const ctx = data.context_window || {};
-  const usage = ctx.current_usage || {};
-  const total = (usage.input_tokens || 0)
-    + (usage.cache_read_input_tokens || 0)
-    + (usage.cache_creation_input_tokens || 0)
-    + 45000; // system overhead estimate
+  const usage = ctx.current_usage;
   const size = ctx.context_window_size || 200000;
-  const pct = Math.min(100, Math.floor(total * 100 / size));
-  return { pct, display: `${(total / 1000).toFixed(1)}K` };
+  const total = typeof ctx.total_input_tokens === 'number' && ctx.total_input_tokens > 0
+    ? ctx.total_input_tokens
+    : usage ? (usage.input_tokens || 0)
+      + (usage.cache_read_input_tokens || 0)
+      + (usage.cache_creation_input_tokens || 0) : 0;
+  const native = typeof ctx.used_percentage === 'number';
+  const pct = native
+    ? Math.min(100, Math.floor(ctx.used_percentage))
+    : Math.min(100, Math.floor(total * 100 / size));
+  return { pct, display: `${(total / 1000).toFixed(1)}K`, known: data.context_window != null };
 }
 
 function writeContextPct(pct, data) {
@@ -145,8 +154,8 @@ function main() {
   if (!cwd) cwd = findProjectRoot(process.cwd());
   else if (!existsSync(join(cwd, '.git'))) cwd = findProjectRoot(cwd);
 
-  const { pct, display } = getContextInfo(data);
-  writeContextPct(pct, data);
+  const { pct, display, known } = getContextInfo(data);
+  if (known) writeContextPct(pct, data);
   const git = getGitInfo(cwd);
   const { goal, now } = getContinuityInfo(cwd);
 
