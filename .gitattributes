@@ -1,0 +1,3 @@
+# Normalize all text files to LF in blobs; checkout EOL follows core.autocrlf/eol.
+# Ends the CRLF working-tree vs LF-blob diff tax (every live-vs-repo diff needed tr -d '\r').
+* text=auto
