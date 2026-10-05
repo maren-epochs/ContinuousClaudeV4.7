@@ -121,6 +121,41 @@ node --check "$HOOK"
 check "T13 node --check passes" $?
 
 for s in $SIDS; do rm -f "$(pctfile "$s")"; done
+# --- T11: no pct file -> transcript_path fallback (headless -p / agent_call) ---
+TR="$TMPWIN/stopguard_tr_$$.jsonl"
+mk_tr() { # <main-thread input tokens> [sidechain tokens]
+  : > "$TR"
+  printf '{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":%s,"cache_creation_input_tokens":0}}}\n' "$1" >> "$TR"
+  printf '{"type":"user","message":{"content":"x"}}\n' >> "$TR"
+  [ -n "${2:-}" ] && printf '{"type":"assistant","isSidechain":true,"message":{"usage":{"input_tokens":%s}}}\n' "$2" >> "$TR"
+  return 0
+}
+trpayload() { printf '{"session_id":"%s-0000-4000-8000-tail","stop_hook_active":false,"transcript_path":"%s"}' "$1" "$TR"; }
+rm -f "$(pctfile sgtstJ1x)"
+mk_tr 180000
+run_hook "$(trpayload sgtstJ1x)"
+case "$OUT" in *'"decision":"block"'*'90%'*) r=0;; *) r=1;; esac
+check "T11a transcript 180K/200K blocks at 90% (got: ${OUT:0:80})" $r
+NLINES=$(printf '%s' "$ERR" | grep -c . || true)
+[ "$NLINES" -eq 1 ]; check "T11b exactly one stderr note (got $NLINES)" $?
+mk_tr 100000 190000
+run_hook "$(trpayload sgtstJ1x)"
+[ "$OUT" = "{}" ]; check "T11c 100K main-thread allows; sidechain usage ignored (got: ${OUT:0:60})" $?
+mk_tr 250000
+run_hook "$(trpayload sgtstJ1x)"
+[ "$OUT" = "{}" ]; check "T11d usage >200K implies 1M window -> 25%, allow (got: ${OUT:0:60})" $?
+mk_tr 180000
+OUT=$(printf '%s' "$(trpayload sgtstJ1x)" | CLAUDE_CONTEXT_WINDOW=1000000 node "$HOOK" 2>/dev/null)
+[ "$OUT" = "{}" ]; check "T11e CLAUDE_CONTEXT_WINDOW override -> 18%, allow (got: ${OUT:0:60})" $?
+printf '20' > "$(pctfile sgtstJ1x)"; set_mtime_hours_ago "$(pctfile sgtstJ1x)" 3
+run_hook "$(trpayload sgtstJ1x)"
+case "$OUT" in *'"decision":"block"'*) r=0;; *) r=1;; esac
+check "T11f stale pct file -> transcript fallback blocks at 90% (got: ${OUT:0:60})" $r
+printf 'garbage\n{"type":"assistant"}\n' > "$TR"; rm -f "$(pctfile sgtstJ1x)"
+run_hook "$(trpayload sgtstJ1x)"
+[ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; check "T11g unusable transcript fails open" $?
+rm -f "$TR" "$(pctfile sgtstJ1x)"
+
 rm -f "$ERRFILE"
 
 echo

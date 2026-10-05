@@ -3,14 +3,41 @@
  * Stop hook — block when context is too high and suggest handoff.
  *
  * Reads context percentage from the temp file written by status.mjs.
- * This ensures 1:1 match with status line display.
+ * This ensures 1:1 match with status line display. When that file is missing
+ * or stale (headless -p runs, agent_call: no statusline), falls back to the
+ * last main-thread usage in transcript_path. Window: CLAUDE_CONTEXT_WINDOW env,
+ * else 200K (1M once usage exceeds 200K, which proves the larger window).
  */
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 const CONTEXT_THRESHOLD = 85;
 const MAX_PCT_AGE_MS = 2 * 60 * 60 * 1000; // ignore pct files older than 2h (crashed/stale sessions)
+
+const TAIL_BYTES = 512 * 1024;
+
+// Context % from the newest non-sidechain assistant usage in the transcript
+// tail; null when unavailable. Input-only, same formula as used_percentage.
+function pctFromTranscript(path) {
+  if (!path || !existsSync(path)) return null;
+  const size = statSync(path).size;
+  const len = Math.min(size, TAIL_BYTES);
+  const buf = Buffer.alloc(len);
+  const fd = openSync(path, 'r');
+  try { readSync(fd, buf, 0, len, size - len); } finally { closeSync(fd); }
+  const lines = buf.toString('utf-8').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let e;
+    try { e = JSON.parse(lines[i]); } catch { continue; }
+    const u = e && e.type === 'assistant' && !e.isSidechain && e.message && e.message.usage;
+    if (!u) continue;
+    const tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    const window = Number(process.env.CLAUDE_CONTEXT_WINDOW) || (tokens > 200000 ? 1000000 : 200000);
+    return Math.min(100, Math.floor(tokens * 100 / window));
+  }
+  return null;
+}
 
 function getSessionId(data) {
   const sid = data.session_id || '';
@@ -33,12 +60,16 @@ function main() {
     if (!existsSync(file)) {
       // status.mjs never wrote a pct for this session (headless/-p run or
       // unconfigured statusline). Degrade silently but leave one trace in logs.
-      process.stderr.write(`auto-handoff-stop: pct file missing for session ${sid} (statusline hook not running?); context guard inactive, allowing stop\n`);
+      pct = pctFromTranscript(data.transcript_path);
+      process.stderr.write(pct == null
+        ? `auto-handoff-stop: pct file missing for session ${sid} (statusline hook not running?) and no transcript usage; context guard inactive, allowing stop\n`
+        : `auto-handoff-stop: pct file missing for session ${sid}; using transcript usage (${pct}%)\n`);
     } else if (Date.now() - statSync(file).mtimeMs <= MAX_PCT_AGE_MS) {
       const parsed = parseInt(readFileSync(file, 'utf-8').trim(), 10);
       if (Number.isFinite(parsed)) pct = parsed;
     }
     // Stale file (mtime > 2h): ignore — likely a crashed session reusing the key.
+    if (pct == null && existsSync(file)) pct = pctFromTranscript(data.transcript_path);
   } catch {}
 
   if (pct == null || pct < CONTEXT_THRESHOLD) {
