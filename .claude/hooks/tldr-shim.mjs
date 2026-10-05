@@ -90,7 +90,7 @@ async function serve() {
   if (await shimAlive()) return;
 
   // Own the tldr-mcp child over stdio (newline-delimited JSON-RPC).
-  const child = spawn(TLDR_MCP, [], { stdio: ['pipe', 'pipe', 'ignore'] });
+  const child = spawn(TLDR_MCP, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
   let childDead = false;
   child.on('error', () => { childDead = true; shutdown(1); });
   child.on('exit', () => { childDead = true; shutdown(1); });
@@ -200,7 +200,7 @@ async function serve() {
 async function start() {
   if (await shimAlive()) { console.log('tldr-shim already running'); return; }
   const childProc = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve'], {
-    detached: true, stdio: 'ignore',
+    detached: true, stdio: 'ignore', windowsHide: true,
   });
   childProc.unref();
   // Wait for readiness so callers (tests, users) can rely on the shim.

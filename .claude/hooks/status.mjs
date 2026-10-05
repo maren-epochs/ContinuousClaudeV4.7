@@ -60,7 +60,7 @@ function getGitInfo(cwd) {
   try {
     // Single call: branch + staged/unstaged/untracked
     const out = execSync('git --no-optional-locks status --porcelain -b', {
-      cwd, encoding: 'utf-8', stdio: 'pipe', timeout: 5000,
+      cwd, encoding: 'utf-8', stdio: 'pipe', timeout: 5000, windowsHide: true,
     });
     const lines = out.split('\n');
     let branch = '';

@@ -46,7 +46,7 @@ function ruffDiagnostics(filePath) {
   // spawnSync, not execSync: ruff exits 1 whenever it has findings,
   // which is exactly when we want its stdout.
   const proc = spawnSync(RUFF, ['check', filePath, '--output-format', 'json', '--quiet'], {
-    encoding: 'utf-8', timeout: 15000,
+    encoding: 'utf-8', timeout: 15000, windowsHide: true,
   });
   if (proc.error || typeof proc.stdout !== 'string' || proc.stdout.trim() === '') return null;
 
@@ -72,7 +72,7 @@ function tldrDiagnostics(filePath) {
   // spawnSync, not execSync: tldr exits 1 whenever it has findings,
   // which is exactly when we want its stdout.
   const proc = spawnSync(TLDR, ['diagnostics', filePath, '--format', 'json'], {
-    encoding: 'utf-8', timeout: 15000,
+    encoding: 'utf-8', timeout: 15000, windowsHide: true,
   });
   if (proc.error || !proc.stdout) return null;
 

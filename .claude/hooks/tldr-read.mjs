@@ -112,7 +112,7 @@ function autostartShim() {
   try {
     const shimPath = join(dirname(fileURLToPath(import.meta.url)), 'tldr-shim.mjs');
     if (!existsSync(shimPath)) return;
-    spawn(process.execPath, [shimPath, 'serve'], { detached: true, stdio: 'ignore' }).unref();
+    spawn(process.execPath, [shimPath, 'serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   } catch { /* fail open */ }
 }
 
@@ -293,7 +293,7 @@ async function buildOutput(filePath, fileSize) {
   if (raw === null) {
     // Run tldr extract — falls through if tldr not installed
     const proc = spawnSync(TLDR, ['extract', filePath, '--format', 'json'], {
-      encoding: 'utf-8', timeout: 10000,
+      encoding: 'utf-8', timeout: 10000, windowsHide: true,
     });
     if (proc.error || !proc.stdout) { return '{}'; }
     raw = proc.stdout;
