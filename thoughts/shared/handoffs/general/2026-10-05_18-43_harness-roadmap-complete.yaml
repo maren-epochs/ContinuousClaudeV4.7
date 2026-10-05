@@ -1,0 +1,188 @@
+---
+session: general
+date: 2026-10-05
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: Shipped full harness roadmap (12/12 assertions, 4 milestones) - perf, reliability, token economy, DS workbench; fork at 4e36ca2, ~/.claude synced
+now: Fresh session - verify new harness loads (skill router, shim, /analyze-data), then exercise /analyze-data on a real dataset
+test: bash .claude/hooks/test_tldr_read.sh && py -3.13 tools/test_ouros_harness_ds.py && py -3.13 install/sync_global.py   # 21/21, OK, in sync exit 0
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  Fork maren-epochs/ContinuousClaudeV4.7 is source of truth; ~/.claude is a build
+  artifact of install/sync_global.py (dry run exits 1 on drift, warns on stale
+  .ccv47-installed SHA and unregistered repo hooks; --apply writes with backups).
+  Repo layout changed this session: skills/agents live in harness/ (NOT .claude/)
+  so a checkout no longer double-registers them; .claude/ holds only hooks + the
+  settings template; one root CLAUDE.md (the old .claude/CLAUDE.md is deleted).
+  The autonomous skill is a 3.3KB router — phase detail lives in
+  harness/skills/autonomous/phases/{plan,premortem,prepare,execute,validate,evolve}.md,
+  read when entering each phase. PREPARE now writes captures ONCE to
+  continuum/autonomous/{task}/context/ and worker prompts carry file PATHS, not
+  verbatim pastes (98% prompt-payload reduction measured).
+  tldr economics: the ~2s per analysis call is a per-directory daemon probe on a
+  closed loopback port (parcadei/tldr-code#99), not init. tldr-read.mjs mitigates
+  with an mtime+size output cache ('{}' never cached) + optional persistent shim
+  (.claude/hooks/tldr-shim.mjs owns a tldr-mcp child; cold 2.2s->150ms;
+  TLDR_READ_SHIM=0 disables, TLDR_READ_SHIM_AUTOSTART=1 opt-in). .ipynb reads get
+  a pure-JS cell map, truncated before the first base64 line.
+  DS: the ouros sandbox is a reimplemented Rust interpreter — pandas is impossible
+  IN-sandbox. run_python(code) bridges to host py -3.13 (full DS stack installed:
+  pandas 3.0.6/numpy/matplotlib/seaborn/scipy/pyarrow/polars/sklearn/statsmodels/
+  duckdb/openpyxl), cwd pinned to C:\tmp\ouros-sandbox-output\{session}\, new files
+  surfaced as 'artifacts:' lines. OUROS_DATA_ROOTS extends read access. --session
+  loads by default now (--reset wipes). /analyze-data skill prescribes the loop.
+  bloks: context injection works (40+ rule cards); ack/nack scoring is broken
+  INSIDE bloks 0.1.0 and upstream parcadei/bloks is ARCHIVED — treat scoring as
+  nonfunctional, corrections go in as superseding rule cards.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: all (tldr-read 21/21, stop-guard 24/24, pre-compact 19/19, readiness 8/8, installer 5/5, DS 10/10)
+  test_command: bash .claude/hooks/test_tldr_read.sh && py -3.13 tools/test_ouros_harness_ds.py
+  pre_existing_failures: []
+  uncommitted_changes: true
+  branch: main (pushed, even with origin at 4e36ca2)
+  dirty_files: [.tldrignore (untracked, pre-existing, decision pending), thoughts/shared/handoffs/general/2026-10-05_18-43_harness-roadmap-complete.yaml (this file, commit it)]
+  warnings: "git CRLF warnings benign; sync dry run warns tldr-shim.mjs unregistered — false positive, the shim is spawned by tldr-read.mjs, not an event hook"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: Harness evaluation (measured hook latencies, token weights) + 4 research analysts (internal, external, reliability, datascience) — reports in continuum/autonomous/hook-latency-p1/reports/analyst-*.json
+    files: []
+  - task: P1 perf (8103aa1, 8d14fe0, 47e2d62) — nav-map cache + Windows bypass fix + never-cache-failures in tldr-read.mjs; direct-ruff diagnostics (~130ms); readiness parallelized 21.6s->10s
+    files: [.claude/hooks/tldr-read.mjs, .claude/hooks/post-edit-diagnostics.mjs, scripts/readiness.sh]
+  - task: P2 dedup (f621a09) — single CLAUDE.md; skills/agents moved to harness/; installer map updated
+    files: [CLAUDE.md, harness/, install/sync_global.py]
+  - task: M1 reliability (90e0d15) — pre-compact.mjs rewritten for REAL transcript schema (message.content[] blocks; old parser matched nothing ever); stop guard fail-open + staleness + NaN fix; worker.md matches pipeline contract; installer drift detection
+    files: [.claude/hooks/pre-compact.mjs, .claude/hooks/auto-handoff-stop.mjs, harness/agents/worker.md, install/sync_global.py]
+  - task: M2 latency (65ceef6) — tldr-mcp shim (cold 150ms); per-extension hook if-filters in repo settings template (docs-verified; matcher=tool_name only); READINESS_SKIP_SECURE=1 (4s)
+    files: [.claude/hooks/tldr-shim.mjs, .claude/settings.json, scripts/readiness.sh]
+  - task: M3 tokens (3857e79) — autonomous SKILL.md 13.7KB->3.3KB router + phases/; context-by-reference; disable-model-invocation on resume-handoff/upgrade-harness
+    files: [harness/skills/autonomous/, harness/agents/worker.md]
+  - task: M4 data science (3857e79, 4e36ca2) — run_python bridge, OUROS_DATA_ROOTS, binary-safe write_file, --session default-load, artifacts surfacing, .ipynb cell maps, /analyze-data skill (demoed end-to-end twice), DS stack pip-installed on py -3.13
+    files: [tools/ouros_harness.py, tools/test_ouros_harness_ds.py, harness/skills/analyze-data/SKILL.md, .claude/hooks/tldr-read.mjs]
+  - task: Upstream - filed parcadei/tldr-code#99 with daemon-probe root cause; parcadei/bloks ARCHIVED so scoring bug unfixable upstream
+    files: []
+  - task: EVOLVE - 25+ bloks rule cards from worker discoveries; stale cards nacked/corrected; both sync --apply runs recorded
+    files: []
+  - task: User settings (user-directed, not harness) - permissions.defaultMode auto, voice tap mode, model opus in ~/.claude/settings.json
+    files: []
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: shim_autostart_off_by_default
+    chose: tldr-shim must be started explicitly (or TLDR_READ_SHIM_AUTOSTART=1)
+    over: [auto-spawn on first read]
+    because: the mtime-invalidation test uses a >1s timing proxy that a live shim would break; fail-open semantics preserved
+  - name: context_by_reference
+    chose: PREPARE writes captures to continuum context/ dir, prompts carry paths
+    over: [verbatim paste per worker (old doctrine)]
+    because: measured 66KB->1.3KB for a 2-worker task; workers read what they need
+  - name: run_python_bridge
+    chose: host-CPython bridge function inside ouros sandbox
+    over: [replacing ouros with plain Bash python, abandoning DS]
+    because: ouros is a reimplemented interpreter (no site-packages, ever); the bridge keeps session persistence + token discipline while CPython does numerics; not a privilege escalation (agent already has Bash)
+  - name: bloks_scoring_accepted_broken
+    chose: document scoring as nonfunctional, corrections as superseding rule cards
+    over: [forking parcadei/bloks (Rust) to fix ack/nack]
+    because: upstream archived; fork cost unsized; context injection (the valuable half) works
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - This session predates the sync of the split skill router + new hooks: a RESTART is required for the new autonomous router, phases/, shim-aware tldr-read, and settings (defaultMode auto, voice tap) to load. That is the purpose of this handoff.
+    - Paths passed INTO run_python source strings must use forward slashes (C:/tmp/x) — backslash escapes are interpreted crossing the ouros->host string boundary (\a became BEL despite r-prefix).
+    - sync_global.py dry run exit 1 means file drift (scriptable); 'warn: hooks/tldr-shim.mjs ... not registered' is a known false positive (shim is not an event hook) — candidate exclusion, do not register it in settings.json.
+  useful:
+    - Worker report schema drifts (invented bloks_cmd flag syntaxes, result values outside enum) — EVOLVE normalized from the 'finding' field; a report schema validator is the open fix (analyst-internal rec 6).
+    - bloks CLI real syntax is `bloks new rule "<text>" --tags a,b` (positional text; no --lib/--title/--body flags).
+    - Hook matcher matches tool_name only; per-input filtering is the handler-level `if` field, one permission rule each (verified at code.claude.com/docs/en/hooks).
+    - Analyst reports (4x8 ranked recommendations) remain at continuum/autonomous/hook-latency-p1/reports/analyst-*.json — ranks not yet shipped are listed there.
+  fyi:
+    - Weekly cloud routine 'ccv47 upstream PR watch' (trig_01CvcuQrz1qt613S9tzr8hVF) checks upstream PRs #13-#20 + main movement git-only, Mondays 13:00 UTC.
+    - Retired hand-patch backups live in ~/.claude/.ccv47-backup/retired-orig-20261005/ (keep; inert).
+    - pandas 3.x prints string dtypes as 'str' not 'object'.
+
+# ── APPROACHES ───────────────────────────────────────────────────
+worked:
+  - Parallel workers on disjoint files with orchestrator-side commits after validation (no index races)
+  - Measuring before prescribing - the '7x2s' readiness model was wrong (tldr secure alone is 8-9s); worker corrected and overlapped instead
+  - Spike-first for the shim - JSON-RPC probe of tldr-mcp before integration
+  - Adversarial reliability analyst - caught a real defect (failure-caching) in freshly written worker code
+
+failed:
+  - attempted: backslash Windows paths inside run_python code strings
+    root_cause: escape interpretation crossing ouros triple-quoted string -> host CPython
+    avoid: any backslash path literal through the bridge
+    use_instead: forward slashes
+  - attempted: embedding add_repo access:"push" in the cloud routine prompt
+    root_cause: auto-mode classifier denies credential grants to cloud agents (permission laundering class)
+    avoid: routine prompts that attach user credentials
+    use_instead: git-only checks; user can edit the routine themselves if API access wanted
+  - attempted: bloks report for tldr correction; filing issue on parcadei/bloks
+    root_cause: bloks report requires registry-indexed libs; bloks repo is archived read-only
+    avoid: correction flows through bloks report for user cards; upstream bloks issues
+    use_instead: superseding `bloks new rule` cards
+
+# ── TRAJECTORY ───────────────────────────────────────────────────
+trajectory:
+  started_as: resume fork-source-of-truth handoff; verify bloks loop via a small /autonomous task
+  evolved_to: full harness evaluation (measured), 4-analyst research, then 'run all three / make any and all improvements' - the complete 4-milestone roadmap
+  scoped_to: everything shipped except analyst items below the shipped ranks (report-schema validation, status.mjs 45K calibration, readiness fabricated-zero fallbacks, bloks fork decision)
+  user_approved_scope: true
+
+# ── USER INTENT ──────────────────────────────────────────────────
+user_intent: |
+  User wants the harness to be a world-class local Claude Code platform for
+  software builds, data science, and project delivery - fast, token-efficient,
+  self-improving. They delegate broadly ("run all three", "make any and all
+  improvements"), expect autonomous execution with validation gates, and
+  explicitly prioritized DS capability ("make this as data science capable as
+  possible"). Session restarts are routine; handoffs + contract files carry state.
+
+# ── BLOCKERS & QUESTIONS ─────────────────────────────────────────
+blockers: []
+questions:
+  - Commit or ignore .tldrignore (untracked, pre-existing)?
+  - Fork archived parcadei/bloks to fix ack/nack scoring, or live with write-only cards?
+  - Enable TLDR_READ_SHIM_AUTOSTART=1 in user env for automatic 150ms cold reads?
+
+# ── NEXT STEPS ───────────────────────────────────────────────────
+next:
+  - Commit this handoff (thoughts/shared/handoffs/ is tracked since 60ff1fd) and push
+  - Verify fresh session: /autonomous resolves to the 3.3KB router; Read of a large .py is fast (cache/shim); /analyze-data appears in skills
+  - Exercise /analyze-data on a real dataset end-to-end as the first production use
+  - Optional second wave from analyst reports: report-schema validation in VALIDATE, status.mjs overhead calibration, readiness fabricated-zero fallbacks, shim exclusion in installer registration check
+
+# ── NEXT SESSION PROMPT (REQUIRED) ───────────────────────────────
+next_session_prompt: |
+  Resume from handoff thoughts/shared/handoffs/general/2026-10-05_18-43_harness-roadmap-complete.yaml
+  in ~\Documents\ccv47-readme-fix.
+  Context: the full harness roadmap shipped last session (fork main 4e36ca2, pushed;
+  ~/.claude synced; 12/12 assertions across 4 milestones). You are the first session
+  running the new harness: 3.3KB autonomous router with phases/, cached+shim-capable
+  tldr-read, run_python DS bridge, /analyze-data skill.
+  First: run the verification trio — bash .claude/hooks/test_tldr_read.sh (21/21),
+  py -3.13 tools/test_ouros_harness_ds.py (OK), py -3.13 install/sync_global.py
+  (in sync, exit 0; ignore the tldr-shim registration warn — known false positive).
+  Then commit this handoff file and push. Then I'll likely want /analyze-data on a
+  real dataset. Pending decisions for me: .tldrignore, bloks fork, shim autostart.
+
+# ── FILE MANIFEST ────────────────────────────────────────────────
+files:
+  created:
+    - .claude/hooks/tldr-shim.mjs, test_tldr_read.sh, test_pre_compact.sh, test_auto_handoff_stop.sh, test_post_edit_diagnostics.sh
+    - harness/skills/autonomous/phases/*.md (6), harness/skills/analyze-data/SKILL.md
+    - scripts/test_readiness_parallel.sh, tools/test_ouros_harness_ds.py
+    - install/sync_global.py drift checks, continuum/autonomous/{hook-latency-p1,context-dedup-p2,roadmap-tier0-3}/ (contracts, reports, validation)
+    - thoughts/shared/handoffs/general/2026-10-05_18-43_harness-roadmap-complete.yaml (this file)
+  modified:
+    - .claude/hooks/{tldr-read,post-edit-diagnostics,pre-compact,auto-handoff-stop}.mjs, .claude/settings.json (template)
+    - harness/agents/worker.md, harness/skills/autonomous/SKILL.md, harness/skills/{resume-handoff,upgrade-harness}/SKILL.md
+    - scripts/readiness.sh, tools/ouros_harness.py, tools/requirements.txt, CLAUDE.md, install/README.md
+    - ~/.claude/* (23 files via sync --apply), ~/.claude/settings.json (user: defaultMode auto, voice tap, model opus)
