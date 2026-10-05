@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 9 skills, 2 agents, 5 hooks.
+Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 5 hooks.
 
 ## Skills
 
@@ -9,6 +9,7 @@ Autonomous SDLC pipeline for Claude Code. 9 skills, 2 agents, 5 hooks.
 | `/autonomous` | Bounded implementation tasks | ASSESS → PLAN → PREMORTEM → PREPARE → EXECUTE → VALIDATE → EVOLVE |
 | `/autonomous-research` | Open-ended research | Looping research pipeline via Ouros — EVOLVE loops back to PLAN |
 | `/research` | Quick exploration | Single-pass Ouros REPL exploration |
+| `/analyze-data` | "analyze this data", "explore this CSV", "plot" | load → explore → transform → visualize → report via Ouros sessions + `run_python` DS bridge |
 | `/premortem` | Before implementation | Failure analysis gate — first-principles risk check |
 | `/bootup` | Session start | Assess readiness, route to research/autonomous/review |
 | `/review` | Code review | Structural + semantic review |
