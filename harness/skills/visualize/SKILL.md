@@ -33,10 +33,14 @@ distribution, relationship, part-to-whole, ranking, flow, spatial), then ask the
 py -3.13 tools/viz/recommend.py agg.parquet --json      # job inferred; --job ranking to set it
 ```
 
-Python: `recommend.recommend(df_or_profile, job=None)`. Accept the form, or override it with one
-stated reason in the report. Its refusals bind: dual axis -> small multiples; pie past 5 slices
--> bar; one bar / 2-slice pie -> stat tile; over 8 series -> fold into "Other" or small
-multiples; over 7 meaningful color classes -> table. The answer may be a stat tile.
+Python: `recommend.recommend(df_or_profile, job=None)` -> `{job, job_inferred, form, reason,
+encoding, warnings}`; `job_inferred` True = guessed from the profile: check it against the named
+job. Accept the form, or override it with one stated reason in the report. Its refusals bind:
+measures of differing scale -> small multiples (identity, grouped bar and change-over-time
+alike), never a dual axis; pie past 5 slices -> bar; one bar / 2-slice pie -> stat tile; over 8
+series -> fold into "Other" or small multiples; over 7 meaningful color classes -> table. A
+categorical with one row per time value is a per-row attribute, not a series (the warning names
+it): facet, filter or aggregate by it, never color a line by it. The answer may be a stat tile.
 
 **2 COLOR BY JOB.** `recommend`'s `encoding["color"]` names the job; one rule per job, all from
 `tools.viz.palette`:
@@ -72,11 +76,16 @@ altair `with alt.theme.enable(style.altair_theme(mode)):` around build + save; b
 `export.save(p, stem, bokeh_theme=style.bokeh_theme(mode))`. The style carries 2px lines, 8px
 markers with a 2px surface ring, 2px surface gaps, solid hairline grid. Yours to enforce: bars
 <= `style.BAR_MAX_PX` (24px) thick (size the figure, see 7a), selective direct labels only.
+Dense series (> ~500 points per series) -> 1px lines. Raw + smoothed pair -> raw series in
+`palette.text(mode)["muted"]` (or `palette.surface(mode)["axis"]`), only the smoothed series in
+a categorical slot.
 Inspect the values: `py -3.13 tools/viz/style.py dark` prints the matplotlib rcParams, altair
 config and bokeh attrs for one mode as JSON (mode `light` default or `dark`; `--help`).
 
 **5 HOVER.** Interactive = hover by default: crosshair + every-series tooltip on line/area,
-per-mark on bar/dot (`artifact_page` adds both). Tooltips never gate; filters in one top row.
+per-mark on bar/dot (`artifact_page` adds both). Vega-Lite: automatic on single-view specs only
+(no layer/facet/concat/`params`); those need their own pointer params (`nearest` on x + rule);
+artifact_page handles fold/calculate series. Tooltips never gate; filters in one top row.
 
 **6 ACCESSIBILITY.** >= 2 series -> legend always, <= 4 also direct-labeled; one series -> no
 legend, the title names it. Interactive pages ship a table view. Dark mode is its own validated
@@ -118,17 +127,24 @@ html = artifact_page.write_page(charts, "hours.html", title="Team Hours", descri
 ```
 
 CLI: `py -3.13 tools/viz/artifact_page.py charts.json out.html --title "Two Words"` (list of
-`{kind: vega-lite|plotly|echarts, spec, title, caption, rows, height}`). Title 2-4 words. The page
-carries tokens, dark mode, hover, the legend rule, a Table toggle + CSV link per card, and strips
-dual axes with a visible warning. Preview light, dark, phone (waits on `window.__chartsReady`):
+`{kind: vega-lite|plotly|echarts, spec, title, caption, rows, height, end_labels}`). Title 2-4
+words. The page carries tokens, dark mode, hover, the legend rule, a Table toggle + CSV link per
+card, and strips dual axes with a visible warning. Vega-Lite fold color fields get legend +
+every-series tooltip, slots in fold order; calculate-derived ones keep the author's legend.
+ECharts lines: `end_labels: True` -> themed end labels (meets `label: direct`); grid.top is
+sized to the legend. Preview light, dark, phone (waits on `window.__chartsReady`):
 `py -3.13 tools/viz/export.py render out.html out.png --mode dark --width 390`. Monthly
 Vega-Lite data: `timeUnit: "utcyearmonth"` (else local time shows "Feb 28" for March).
 Known gaps - warn or work around: facet/concat/repeat Vega-Lite specs are not resized at phone
 width (one chart per card); Vega-Lite bars have no 24px cap (set `size`, or ECharts/Plotly);
 Vega-Lite area has no hover dots.
 PUBLISHING: only the orchestrator (main session) has the Artifact tool. Workers cannot publish:
-leave the absolute HTML path + `PUBLISH-PENDING` in findings.md. The orchestrator publishes it
-private (default), declares downloads only when the user wants the CSV export, records the URL.
+leave the repo-relative HTML path + `PUBLISH-PENDING` in findings.md (absolute path in chat).
+The orchestrator publishes it private (default) and records the URL, passing
+`artifact_page.capabilities_for(charts)` as the Artifact tool's `capabilities`:
+`{"downloads": True}` when any card has rows (CSV link), else `{}`; full set:
+`artifact_page.REQUIRED_CAPABILITIES`. Without it the CSV buttons fall back to inert links in
+the claude.ai viewer.
 
 (c) Render static site: only after the user names the workspace (never pick one); else report "not deployed".
 
@@ -149,7 +165,9 @@ band, overflow. Then the hard rules - any match is wrong, fix before reporting:
 - No one-bar bar chart, no 2-slice pie, no pie for close values (bar instead).
 
 **9 REPORT.** Token doctrine: print paths, never data. `continuum/research/<topic>/findings.md`
-(Write tool): absolute artifact paths, validator output, form + reason, publish status (URL /
-`PUBLISH-PENDING` / "not deployed"). Reusable gotcha -> `bloks new rule "<text>" --tags viz,<lib>`.
+(Write tool): repo-relative artifact paths, validator output, form + reason, publish status
+(URL / `PUBLISH-PENDING` / "not deployed"). Absolute host paths go to stdout/chat only -
+continuum/research is tracked and the repo may be public; never write other project names or
+full session ids. Reusable gotcha -> `bloks new rule "<text>" --tags viz,<lib>`.
 
 Install: `tools/requirements-viz.txt` header. Live copy: `py -3.13 install/sync_global.py --apply`.

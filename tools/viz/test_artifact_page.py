@@ -529,6 +529,347 @@ class Render(unittest.TestCase):
                          "true")
 
 
+# --------------------------------------------------------------------------- VAL-401
+
+
+def fold_chart(transform=None, legend=None):
+    """Wide rows; series come from a fold (or the given transform), not the inline rows."""
+    rows = [{"month": r["month"], "North": r["sales"]} for r in line_rows()
+            if r["region"] == "North"]
+    for r, s in zip(rows, [r for r in line_rows() if r["region"] == "South"]):
+        r["South"] = s["sales"]
+    color = {"field": "series", "type": "nominal"}
+    if legend is not None:
+        color["legend"] = legend
+    return {"kind": "vega-lite", "title": "Folded sales", "height": 300, "spec": {
+        "data": {"values": rows},
+        "transform": transform or [{"fold": ["North", "South"], "as": ["series", "value"]}],
+        "mark": "line",
+        "encoding": {
+            "x": {"field": "month", "type": "temporal", "timeUnit": "utcyearmonth",
+                  "title": "Month"},
+            "y": {"field": "value", "type": "quantitative", "title": "Sales"},
+            "color": color}}}
+
+
+def calc_chart():
+    """Long rows; the color field is a calculate output (series names unknown up front)."""
+    c = line_chart()
+    c["spec"]["transform"] = [{"calculate": "'Region ' + datum.region", "as": "zone"}]
+    c["spec"]["encoding"]["color"] = {"field": "zone", "type": "nominal"}
+    return c
+
+
+def stock_lines(names, show_symbol=False, **extra):
+    days = [f"2026-01-{d:02d}" for d in range(1, 11)]
+    series = [{"name": n, "type": "line", "showSymbol": show_symbol,
+               "data": [[d, 10 * (i + 1) + j] for j, d in enumerate(days)]}
+              for i, n in enumerate(names)]
+    chart = {"kind": "echarts", "title": "Price lines", "height": 300,
+             "spec": {"xAxis": {"type": "time"}, "yAxis": {"type": "value"},
+                      "series": series}}
+    chart.update(extra)
+    return chart
+
+
+class Capabilities(unittest.TestCase):
+    def test_required_capabilities_constant_and_docstring(self):
+        self.assertEqual(ap.REQUIRED_CAPABILITIES, {"downloads": True})
+        self.assertIn("REQUIRED_CAPABILITIES", ap.__doc__)
+        self.assertIn("capabilities_for", ap.__doc__)
+
+    def test_capabilities_for_pages_with_and_without_csv(self):
+        self.assertEqual(ap.capabilities_for([line_chart(), bar_chart()]), {"downloads": True})
+        no_rows = stock_lines(["A", "B"])        # time axis, no category data -> no table rows
+        self.assertEqual(ap.capabilities_for([no_rows]), {})
+        no_rows["rows"] = [{"a": 1}]
+        self.assertEqual(ap.capabilities_for([no_rows]), {"downloads": True})
+
+    def test_page_keeps_data_href_and_wires_downloads(self):
+        html = two_chart_page()
+        self.assertEqual(html.count('href="data:text/csv;charset=utf-8,'), 2)
+        self.assertIn('use("downloads")', html)
+
+
+class VegaLiteTransformSeries(unittest.TestCase):
+    def rule(self, spec):
+        return next(lyr for lyr in spec["layer"] if ap._mark_type(lyr.get("mark")) == "rule")
+
+    def test_fold_series_keep_legend_and_pivot_tooltip(self):
+        spec = ap.prepare_chart(fold_chart())["spec"]
+        legend = spec["layer"][0]["encoding"]["color"]["legend"]
+        self.assertIsInstance(legend, dict)
+        self.assertEqual(legend.get("symbolType"), "stroke")
+        rule = self.rule(spec)
+        self.assertEqual(rule["transform"][0],
+                         {"pivot": "series", "value": "value", "groupby": ["month"]})
+        titles = [t.get("title") for t in rule["encoding"]["tooltip"]]
+        self.assertEqual(titles, ["Month", "North", "South"])
+        self.assertEqual(spec["transform"][0]["fold"], ["North", "South"])  # stays top-level
+
+    def test_fold_default_key_name_and_author_legend_kept(self):
+        tf = [{"window": [{"op": "mean", "field": "North", "as": "North_7d"}], "frame": [-2, 0]},
+              {"fold": ["North", "North_7d"]}]
+        c = fold_chart(transform=tf, legend={"title": None, "orient": "bottom"})
+        c["spec"]["encoding"]["color"]["field"] = "key"
+        spec = ap.prepare_chart(c)["spec"]
+        legend = spec["layer"][0]["encoding"]["color"]["legend"]
+        self.assertEqual(legend["orient"], "bottom")
+        self.assertIsNone(legend["title"])
+        titles = [t.get("title") for t in self.rule(spec)["encoding"]["tooltip"]]
+        self.assertEqual(titles[1:], ["North", "North_7d"])
+
+    def test_fold_order_sets_color_sort_unless_author_set(self):
+        c = fold_chart(transform=[{"fold": ["South", "North"], "as": ["series", "value"]}])
+        color = ap.prepare_chart(c)["spec"]["layer"][0]["encoding"]["color"]
+        self.assertEqual(color["sort"], ["South", "North"])
+        own = fold_chart()
+        own["spec"]["encoding"]["color"]["sort"] = "descending"
+        color = ap.prepare_chart(own)["spec"]["layer"][0]["encoding"]["color"]
+        self.assertEqual(color["sort"], "descending")
+        dom = fold_chart()
+        dom["spec"]["encoding"]["color"]["scale"] = {"domain": ["South", "North"]}
+        color = ap.prepare_chart(dom)["spec"]["layer"][0]["encoding"]["color"]
+        self.assertNotIn("sort", color)
+        self.assertEqual(color["scale"]["domain"], ["South", "North"])
+
+    def test_single_fold_field_hides_legend(self):
+        c = fold_chart(transform=[{"fold": ["North"], "as": ["series", "value"]}])
+        base = ap.prepare_chart(c)["spec"]["layer"][0]
+        self.assertIsNone(base["encoding"]["color"]["legend"])
+
+    def test_calculate_series_keep_legend_and_list_every_series(self):
+        spec = ap.prepare_chart(calc_chart())["spec"]
+        self.assertIsInstance(spec["layer"][0]["encoding"]["color"]["legend"], dict)
+        rule = self.rule(spec)
+        self.assertEqual(rule["transform"][0]["pivot"], "zone")
+        self.assertEqual(rule["mark"].get("tooltip"), {"content": "data"})
+        self.assertNotIn("tooltip", rule["encoding"])
+        off = calc_chart()
+        off["spec"]["encoding"]["color"]["legend"] = None    # author's explicit choice stays
+        base = ap.prepare_chart(off)["spec"]["layer"][0]
+        self.assertIsNone(base["encoding"]["color"]["legend"])
+
+
+class EchartsLines(unittest.TestCase):
+    def test_markerless_lines_get_stroke_legend_icon(self):
+        opt = ap.prepare_chart(stock_lines(["AAPL", "MSFT"]))["spec"]
+        self.assertEqual((opt["legend"]["icon"], opt["legend"]["itemWidth"],
+                          opt["legend"]["itemHeight"]), ("rect", 16, 2))
+        marked = ap.prepare_chart(stock_lines(["AAPL", "MSFT"], show_symbol=True))["spec"]
+        self.assertNotIn("icon", marked["legend"])
+        own = stock_lines(["AAPL", "MSFT"])
+        own["spec"]["legend"] = {"icon": "circle"}
+        self.assertEqual(ap.prepare_chart(own)["spec"]["legend"]["icon"], "circle")
+
+    def test_auto_grid_is_flagged_for_runtime_fit(self):
+        self.assertTrue(ap.prepare_chart(stock_lines(["A", "B"]))["fit"])
+        own = stock_lines(["A", "B"])
+        own["spec"]["grid"] = {"top": 80}
+        self.assertFalse(ap.prepare_chart(own)["fit"])
+        html = ap.build_page([stock_lines(["A", "B"])], "Fit Flag Page")
+        self.assertIn('"fit":true', html)
+
+    def test_end_labels_opt_in(self):
+        plain = ap.prepare_chart(stock_lines(["A", "B"]))["spec"]
+        self.assertNotIn("endLabel", plain["series"][0])
+        opt = ap.prepare_chart(stock_lines(["A", "B"], end_labels=True))["spec"]
+        for s in opt["series"]:
+            self.assertTrue(s["endLabel"]["show"])
+            self.assertEqual(s["endLabel"]["formatter"], "{a}")
+            self.assertNotIn("color", s["endLabel"])     # theme token applied at render time
+
+
+FAKE_CLAUDE = """
+(() => {
+  const cfg = %s;
+  window.__saves = [];
+  window.__useCalls = [];
+  const ns = Object.freeze({save(req) {
+    window.__saves.push({filename: req.filename, data: req.data});
+    return cfg.reject ? Promise.reject({code: cfg.reject, message: "x"})
+                      : Promise.resolve({status: "saved"});
+  }});
+  window.claude = {use(name) {
+    window.__useCalls.push(name);
+    if (cfg.hang) { return new Promise(() => {}); }
+    return Promise.resolve(cfg.nullns || name !== "downloads" ? null : ns);
+  }};
+  window.addEventListener("click", (ev) => {
+    if (ev.target.closest && ev.target.closest("a.csv")) {
+      window.__lastPrevented = ev.defaultPrevented;
+      ev.preventDefault();              // keep the test page from downloading
+    }
+  });
+})();
+"""
+
+
+@unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
+class Downloads(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from urllib.parse import unquote
+        cls.html = ap.build_page([bar_chart()], "Downloads Check Page")
+        href = re.search(r'href="data:text/csv;charset=utf-8,([^"]+)"', cls.html).group(1)
+        cls.csv = unquote(href)
+        # init scripts run on navigation only (not set_content): load from a file URL
+        cls.tmp = tempfile.TemporaryDirectory()
+        path = os.path.join(cls.tmp.name, "downloads.html")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(cls.html)
+        cls.url = "file:///" + path.replace(os.sep, "/").lstrip("/")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def open(self, absent=False, **cfg):
+        import json
+        ctx = export.get_browser().new_context(viewport={"width": 900, "height": 700})
+        self.addCleanup(ctx.close)
+        page = ctx.new_page()
+        if not absent:
+            page.add_init_script(FAKE_CLAUDE % json.dumps(cfg))
+        page.goto(self.url, wait_until="domcontentloaded", timeout=45000)
+        return page
+
+    def settle(self, page, ms=100):
+        page.evaluate(f"() => new Promise((r) => setTimeout(r, {ms}))")
+
+    def test_viewer_click_saves_csv_through_capability(self):
+        page = self.open()
+        page.wait_for_selector('a.csv[data-save="ready"]', state="attached", timeout=15000)
+        self.assertEqual(page.evaluate("() => window.__saves.length"), 0, "save on load")
+        page.click("a.csv")
+        page.wait_for_function("() => window.__saves.length === 1", timeout=5000)
+        saved = page.evaluate("() => window.__saves[0]")
+        self.assertEqual(saved["filename"], "tickets-by-team.csv")
+        self.assertEqual(saved["data"], self.csv)
+        self.assertTrue(page.evaluate("() => window.__lastPrevented"))
+        self.assertEqual(page.evaluate("() => window.__useCalls"), ["downloads"])
+        self.assertTrue(page.get_attribute("a.csv", "href").startswith("data:text/csv"))
+        page.wait_for_selector('a.csv[data-save="saved"]', state="attached", timeout=5000)
+
+    def test_null_namespace_keeps_data_link(self):
+        page = self.open(nullns=True)
+        page.wait_for_function("() => window.__useCalls.length === 1", timeout=15000)
+        self.settle(page)
+        self.assertIsNone(page.get_attribute("a.csv", "data-save"))
+        page.click("a.csv")
+        self.assertFalse(page.evaluate("() => window.__lastPrevented"))
+        self.assertEqual(page.evaluate("() => window.__saves.length"), 0)
+        self.assertTrue(page.is_visible("a.csv"))
+        self.assertTrue(page.get_attribute("a.csv", "href").startswith("data:text/csv"))
+
+    def test_no_window_claude_keeps_data_link(self):
+        page = self.open(absent=True)
+        self.settle(page)
+        self.assertIsNone(page.get_attribute("a.csv", "data-save"))
+        self.assertTrue(page.is_visible("a.csv"))
+
+    def test_unavailable_hides_button_and_declined_does_not_retry(self):
+        page = self.open(reject="unavailable")
+        page.wait_for_selector('a.csv[data-save="ready"]', state="attached", timeout=15000)
+        page.click("a.csv")
+        page.wait_for_selector("a.csv", state="hidden", timeout=5000)
+        page = self.open(reject="declined")
+        page.wait_for_selector('a.csv[data-save="ready"]', state="attached", timeout=15000)
+        page.click("a.csv")
+        page.wait_for_selector('a.csv[data-save="declined"]', state="attached", timeout=5000)
+        self.settle(page)
+        self.assertEqual(page.evaluate("() => window.__saves.length"), 1)
+        self.assertTrue(page.is_visible("a.csv"))
+
+    def test_pending_use_does_not_block_first_paint(self):
+        page = self.open(hang=True)
+        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        self.assertEqual(page.evaluate("() => window.__useCalls"), ["downloads"])
+        self.assertTrue(page.is_visible("a.csv"))
+
+
+@unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
+@unittest.skipUnless(CDN_OK, CDN_SKIP)
+class LiveCharts(unittest.TestCase):
+    def open(self, charts, width, title="Live Check Page"):
+        ctx = export.get_browser().new_context(viewport={"width": width, "height": 900},
+                                               color_scheme="light")
+        self.addCleanup(ctx.close)
+        page = ctx.new_page()
+        page.set_content(ap.build_page(charts, title), wait_until="networkidle", timeout=45000)
+        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        self.assertEqual(page.evaluate("() => window.__chartsErrors"), [])
+        return page
+
+    def tooltip_keys(self, page):
+        box = page.locator("#chart-1-plot").bounding_box()
+        page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.6)
+        page.wait_for_selector("#vg-tooltip-element.visible", timeout=5000)
+        return page.evaluate("() => [...document.querySelectorAll("
+                             "'#vg-tooltip-element td.key')].map((t) => t.textContent)")
+
+    def test_fold_and_calculate_tooltip_lists_every_series(self):
+        page = self.open([fold_chart()], 900)
+        keys = self.tooltip_keys(page)
+        self.assertTrue({"North", "South"} <= set(keys), keys)
+        labels = page.evaluate("() => document.querySelectorAll("
+                               "'#chart-1-plot .role-legend-label text').length")
+        self.assertEqual(labels, 2)
+        page = self.open([calc_chart()], 900)
+        keys = self.tooltip_keys(page)
+        self.assertTrue({"Region North", "Region South"} <= set(keys), keys)
+
+    def test_fold_series_take_slots_in_fold_order(self):
+        # fold order South, North (not alphabetical): South must draw in series-1.
+        # South starts at 160, North at 120, so South's first point sits higher.
+        c = fold_chart(transform=[{"fold": ["South", "North"], "as": ["series", "value"]}])
+        for mode in ("light", "dark"):
+            ctx = export.get_browser().new_context(viewport={"width": 900, "height": 900},
+                                                   color_scheme=mode)
+            self.addCleanup(ctx.close)
+            page = ctx.new_page()
+            page.set_content(ap.build_page([c], "Fold Order Page"), wait_until="networkidle",
+                             timeout=45000)
+            page.wait_for_function("() => window.__chartsReady.then(() => true)",
+                                   timeout=45000)
+            lines = page.evaluate(r"""() => [...document.querySelectorAll(
+                '#chart-1-plot g.mark-line path')].map((p) => {
+                  const m = /^M\s*([-\d.]+)[ ,]([-\d.]+)/.exec(p.getAttribute('d'));
+                  return {stroke: (p.getAttribute('stroke') || '').toLowerCase(),
+                          y0: m ? parseFloat(m[2]) : null};
+                })""")
+            self.assertEqual(len(lines), 2, lines)
+            top, low = sorted(lines, key=lambda d: d["y0"])     # smaller y = higher value
+            tok = palette.tokens(mode)
+            self.assertEqual(top["stroke"], tok["series-1"].lower(), f"{mode}: South")
+            self.assertEqual(low["stroke"], tok["series-2"].lower(), f"{mode}: North")
+
+    def option(self, page):
+        return page.evaluate("""() => {
+          const o = echarts.getInstanceByDom(document.getElementById('chart-1-plot'))
+            .getOption();
+          return {top: o.grid[0].top, right: o.grid[0].right, type: o.legend[0].type,
+                  end: o.series.map((s) => s.endLabel && s.endLabel.color)};
+        }""")
+
+    def test_echarts_grid_top_fits_one_or_two_legend_rows(self):
+        names = ["Alpha Holdings", "Beta Partners", "Gamma Group", "Delta Works"]
+        wide = self.option(self.open([stock_lines(names)], 1200))
+        narrow = self.option(self.open([stock_lines(names)], 390))
+        self.assertEqual(wide["top"], 40)
+        self.assertGreater(narrow["top"], wide["top"])
+        self.assertNotEqual(narrow["type"], "scroll")
+        many = [f"Company number {i}" for i in range(8)]
+        crowded = self.option(self.open([stock_lines(many)], 390))
+        self.assertEqual(crowded["type"], "scroll")
+
+    def test_echarts_end_labels_use_text_token(self):
+        o = self.option(self.open([stock_lines(["AAPL", "MSFT"], end_labels=True)], 900))
+        t2 = palette.tokens("light")["text-secondary"].lower()
+        self.assertEqual([c.lower() for c in o["end"]], [t2, t2])
+        self.assertGreater(o["right"], 16)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

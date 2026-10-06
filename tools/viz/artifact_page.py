@@ -15,14 +15,41 @@ returns one self-contained HTML string:
 - window.__chartsReady is assigned synchronously in <head> (a promise that
   settles when every chart has drawn) for tools.viz.export.render_html.
 - every card has a Table toggle (plain <table>, sticky header, <= table_rows
-  rows, default 500) and a Download CSV data: link.
+  rows, default 500) and a Download CSV link.
+
+Downloads. The CSV link's href is a data: URL - the fallback for a saved file
+or any host without the capability. Inside the claude.ai viewer the data: link
+cannot download, so after first paint the bridge calls
+`await window.claude.use("downloads")` (never awaited by rendering); when it
+resolves a namespace, a click is intercepted (preventDefault) and the CSV text
+goes through `save({filename, data})`. Null keeps the data: link. Rejections:
+declined / rate_limited do nothing (no retry); unavailable, not_granted,
+capability_* and unknown codes hide every CSV link; extension_not_enabled
+hides them with a note. save() is only ever called from a click.
+Publishers: REQUIRED_CAPABILITIES = {"downloads": True} is every capability
+the page code can use; capabilities_for(charts) returns the subset a given
+page needs ({} when no card has rows) - pass it as the Artifact's
+`capabilities` when publishing, or the viewer resolves use() to null.
 
 A chart is a dict: {'kind': 'vega-lite'|'plotly'|'echarts', 'spec': dict,
-'title': str, 'caption': str|None, 'rows': list[dict]|None, 'height': int}.
+'title': str, 'caption': str|None, 'rows': list[dict]|None, 'height': int,
+'end_labels': bool (ECharts lines only)}.
 Spec patching (prepare_chart): Vega-Lite line/area gets a crosshair+tooltip
 layer, other marks tooltip:true; ECharts tooltip axis/item; Plotly hovermode
 'x unified' for lines; legend shown for >= 2 series, hidden for one; a second
 (overlaid / independent) y axis is removed and a visible warning added.
+Vega-Lite series whose color field is a transform output (fold `as`, default
+'key'; calculate/window/... `as`) are counted from the transform: fold lists
+its series, so legend + every-series pivot tooltip work as for inline rows,
+and its series take slots in fold order (color.sort, unless the author set
+sort or scale.domain);
+other outputs keep the author's legend and the pivot rule shows every pivoted
+field (mark tooltip content 'data'). ECharts lines: markerless lines (showSymbol
+false / symbol 'none') get a 16x2 'rect' legend icon; with no author grid the
+bridge measures the legend at render/resize time and sets grid.top for one or
+two rows (more rows -> legend type 'scroll'), plus room for a y-axis name;
+end_labels=True adds series endLabel ('{a}') colored with --text-secondary at
+render time and widens grid.right to fit the longest name.
 
 No colors live here - every value comes from tools/viz/palette.json.
 """
@@ -65,6 +92,8 @@ MAX_INLINE_BYTES = 2 * 1024 * 1024
 MAX_PAGE_BYTES = 16 * 1024 * 1024
 DEFAULT_HEIGHT = 320
 BAR_MAX_PX = 24
+REQUIRED_CAPABILITIES = {"downloads": True}   # Download CSV -> claude.use("downloads")
+LEGEND_STROKE = {"icon": "rect", "itemWidth": 16, "itemHeight": 2}
 DUAL_AXIS_WARNING = ("Dual y-axis removed: two scales on one plot mislead. "
                      "Plot the second measure as its own chart or index both to a common base.")
 
@@ -140,6 +169,39 @@ def _mark_with(mark, **extra):
 # --------------------------------------------------------------------------- vega-lite
 
 
+def _vl_derived(transforms):
+    """Fields a Vega-Lite transform list creates -> series names (fold key) or None.
+
+    fold's key field (as[0], default 'key') maps to the folded field names, so
+    its series are known without data; every other output (fold value, calculate,
+    window, joinaggregate, aggregate, bin, timeUnit, lookup, ...) maps to None.
+    """
+    out = {}
+    for t in transforms or []:
+        if not isinstance(t, dict):
+            continue
+        if "fold" in t:
+            as_ = [str(a) for a in _as_list(t.get("as"))] or ["key", "value"]
+            out[as_[0]] = [str(f) for f in _as_list(t["fold"])]
+            out[as_[1] if len(as_) > 1 else "value"] = None
+            continue
+        for key in ("window", "joinaggregate", "aggregate"):
+            for item in _as_list(t.get(key)):
+                if isinstance(item, dict) and item.get("as"):
+                    out[str(item["as"])] = None
+        for a in _as_list(t.get("as")):
+            if isinstance(a, str):
+                out[a] = None
+    return out
+
+
+def _vl_series(field, values, derived):
+    """Series of a color field: list, None (transform output, unknown), [] (no data)."""
+    if field in derived:
+        return derived[field]
+    return _distinct(values, field) if values else []
+
+
 def _vl_crosshair(spec, values):
     """Single-view line/area -> layer [mark, hover points, pivot rule with tooltip]."""
     enc = dict(spec.get("encoding") or {})
@@ -152,7 +214,8 @@ def _vl_crosshair(spec, values):
     x_tip = {k: x[k] for k in ("field", "type", "timeUnit", "title", "format") if k in x}
     y_plain = isinstance(y, dict) and y.get("field") and not y.get("aggregate")
     color_field = color.get("field") if isinstance(color, dict) else None
-    series = _distinct(values, color_field) if color_field and values else []
+    derived = _vl_derived(spec.get("transform"))
+    series = _vl_series(color_field, values, derived) if color_field else []
     rule = {
         "mark": {"type": "rule", "strokeWidth": 1},
         "encoding": {"opacity": {"condition": {"value": 1, "param": "hover", "empty": False},
@@ -161,12 +224,15 @@ def _vl_crosshair(spec, values):
             "type": "point", "fields": [x["field"]], "nearest": True,
             "on": "pointerover", "clear": "pointerout"}}],
     }
-    if color_field and series and y_plain:
+    if color_field and y_plain and (series or series is None):
         rule["transform"] = [{"pivot": color_field, "value": y["field"],
                               "groupby": [x["field"]]}]
-        rule["encoding"]["tooltip"] = [x_tip] + [
-            {"field": _vl_field_escape(s), "type": "quantitative", "title": str(s)}
-            for s in series]
+        if series:
+            rule["encoding"]["tooltip"] = [x_tip] + [
+                {"field": _vl_field_escape(s), "type": "quantitative", "title": str(s)}
+                for s in series]
+        else:   # transform output with unknown values: show every pivoted field
+            rule["mark"]["tooltip"] = {"content": "data"}
     else:
         tips = [x_tip]
         if color_field:
@@ -190,13 +256,29 @@ def _vl_crosshair(spec, values):
 
 
 def _vl_legend(spec, values):
-    """Legend on for >= 2 series (by the color field), off for one."""
+    """Legend on for >= 2 series (by the color field), off for one.
+
+    A color field created by a transform is counted from the transform (fold)
+    and takes categorical slots in fold order (color.sort = the fold list unless
+    the author set sort or scale.domain); when its values are unknown
+    (calculate, ...) the author's legend is kept.
+    """
+    top = _vl_derived(spec.get("transform"))
     targets = [spec] + [lyr for lyr in spec.get("layer", []) if isinstance(lyr, dict)]
     for t in targets:
         color = (t.get("encoding") or {}).get("color")
-        if not (isinstance(color, dict) and color.get("field")) or values is None:
+        if not (isinstance(color, dict) and color.get("field")):
             continue
-        n = len(_distinct(values, color["field"]))
+        derived = top if t is spec else {**top, **_vl_derived(t.get("transform"))}
+        field = color["field"]
+        if field in derived and derived[field] is None:
+            color.setdefault("legend", {})
+            continue
+        if field in derived and "sort" not in color and                 "domain" not in (color.get("scale") or {}):
+            color["sort"] = list(derived[field])  # slots follow the fold order
+        if field not in derived and values is None:
+            continue
+        n = len(_vl_series(field, values, derived))
         if n < 2:
             color["legend"] = None
         elif not isinstance(color.get("legend"), dict):
@@ -243,7 +325,17 @@ def _as_list(v):
     return v if isinstance(v, list) else [v]
 
 
-def _prepare_echarts(opt, warnings):
+def _markerless(s):
+    return s.get("type") == "line" and (s.get("showSymbol") is False
+                                        or s.get("symbol") == "none")
+
+
+def _prepare_echarts(opt, warnings, end_labels=False):
+    """Patch an ECharts option; returns (option, rows, fit).
+
+    fit is True when the grid is ours (author gave none): the bridge then sizes
+    grid.top / grid.right to the measured legend and end labels at render time.
+    """
     series = [s for s in _as_list(opt.get("series")) if isinstance(s, dict)]
     y_axes = _as_list(opt.get("yAxis"))
     if len(y_axes) > 1:
@@ -266,8 +358,12 @@ def _prepare_echarts(opt, warnings):
         legend["show"] = show
         if show:
             legend.setdefault("top", 0)
+            if all(_markerless(s) for s in series):   # key mirrors the stroke
+                for k, v in LEGEND_STROKE.items():
+                    legend.setdefault(k, v)
         opt["legend"] = legend
-    if "grid" not in opt:
+    fit = "grid" not in opt
+    if fit:
         opt["grid"] = {"left": 8, "right": 16, "top": 40 if show else 16, "bottom": 8,
                        "containLabel": True}
     for s in series:
@@ -278,7 +374,12 @@ def _prepare_echarts(opt, warnings):
         elif s.get("type") == "line":
             s.setdefault("lineStyle", {}).setdefault("width", 2)
             s.setdefault("symbolSize", 8)
-    return opt, _echarts_rows(opt, series, x_axes)
+            if end_labels:      # color comes from --text-secondary in the bridge
+                label = s.setdefault("endLabel", {})
+                label.setdefault("show", True)
+                label.setdefault("formatter", "{a}")
+                s.setdefault("labelLayout", {"moveOverlap": "shiftY"})
+    return opt, _echarts_rows(opt, series, x_axes), fit
 
 
 def _echarts_rows(opt, series, x_axes):
@@ -377,10 +478,12 @@ def prepare_chart(chart):
         raise TypeError(f"chart {chart.get('title')!r}: 'spec' must be a dict")
     spec = _plain(copy.deepcopy(spec))
     warnings = []
+    fit = False
     if kind == "vega-lite":
         spec, rows = _prepare_vega_lite(spec, warnings)
     elif kind == "echarts":
-        spec, rows = _prepare_echarts(spec, warnings)
+        spec, rows, fit = _prepare_echarts(spec, warnings,
+                                           end_labels=bool(chart.get("end_labels")))
     else:
         spec, rows = _prepare_plotly(spec, warnings)
     given = chart.get("rows")
@@ -389,7 +492,15 @@ def prepare_chart(chart):
     height = int(chart.get("height") or DEFAULT_HEIGHT)
     return {"kind": kind, "spec": spec, "rows": rows, "warnings": warnings,
             "title": str(chart.get("title") or ""), "caption": chart.get("caption"),
-            "height": max(120, height)}
+            "height": max(120, height), "fit": fit}
+
+
+def capabilities_for(charts):
+    """Capabilities a page built from charts needs: {'downloads': True} when any
+    card has rows (it gets a Download CSV link), else {}. Publish with these."""
+    if any(prepare_chart(c)["rows"] for c in charts or []):
+        return dict(REQUIRED_CAPABILITIES)
+    return {}
 
 
 def from_altair(chart, title="", caption=None, rows=None, height=DEFAULT_HEIGHT):
@@ -565,6 +676,7 @@ div.chart {{ display: block; width: 100%; position: relative; }}
 .warning {{ margin: 0 0 8px; padding: 4px 8px; font-size: 13px; color: var(--text-primary);
   border-left: 3px solid var(--status-warning); }}
 figcaption {{ color: var(--text-secondary); font-size: 13px; margin-top: 8px; }}
+.csv-note {{ color: var(--text-secondary); font-size: 13px; align-self: center; }}
 .table-wrap {{ max-height: 360px; overflow: auto; }}
 .table-note {{ color: var(--text-secondary); font-size: 13px; margin: 0 0 6px; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 13px;
@@ -707,17 +819,71 @@ _BRIDGE_JS = r"""(function () {
       .then(function (res) { return {dispose: function () { res.finalize(); }}; });
   }
 
+  var measureCtx = null;
+  function textWidth(text) {
+    if (!measureCtx) { measureCtx = document.createElement("canvas").getContext("2d"); }
+    measureCtx.font = "12px " + fontStack();
+    return measureCtx.measureText(String(text)).width;
+  }
+  function asList(v) { return Array.isArray(v) ? v : (v ? [v] : []); }
+
+  // End labels wear the text token; an auto grid (c.fit) is sized to the legend
+  // rows at this width (1-2 rows, else a scroll legend), a y-axis name and the
+  // longest end label. Returns a key that changes when the layout must change.
+  function fitEcharts(opt, c, width) {
+    var series = asList(opt.series), ends = [];
+    series.forEach(function (s) {
+      if (s && s.endLabel && s.endLabel.show) {
+        s.endLabel = Object.assign({color: tok("text-secondary"), fontFamily: fontStack(),
+                                    fontSize: 12}, s.endLabel);
+        ends.push(s.name || "");
+      }
+    });
+    var grid = opt.grid, legend = opt.legend;
+    if (!c.fit || !grid || Array.isArray(grid) || !(width > 0)) { return ""; }
+    var top = 16, rows = 0;
+    if (legend && !Array.isArray(legend) && legend.show !== false) {
+      var names = asList(legend.data).length ? asList(legend.data) : series.map(
+        function (s, i) { return (s && s.name) || "series " + i; });
+      var iw = legend.itemWidth == null ? 25 : legend.itemWidth;
+      var gap = legend.itemGap == null ? 10 : legend.itemGap;
+      var x = 0;
+      rows = 1;
+      names.forEach(function (n) {
+        var w = iw + 5 + textWidth(n && typeof n === "object" ? n.name : n);
+        if (x > 0 && x + w > width - 10) { rows += 1; x = 0; }
+        x += w + gap;
+      });
+      if (rows > 2 && !legend.type) { legend.type = "scroll"; }
+      if (legend.type === "scroll") { rows = 1; }
+      top = 26 + rows * 14 + (rows - 1) * gap;
+    }
+    var y = asList(opt.yAxis)[0];
+    if (y && y.name && (!y.nameLocation || y.nameLocation === "end")) { top += 18; }
+    grid.top = top;
+    if (ends.length) {
+      grid.right = Math.ceil(16 + 8 + Math.max.apply(null, ends.map(textWidth)));
+    }
+    return [top, grid.right, legend && legend.type].join("|");
+  }
+
   function renderEcharts(el, c, m) {
     var name = "viz-" + m;
     echarts.registerTheme(name, echartsTheme());
     var chart = echarts.init(el, name, {renderer: "svg"});
+    var opt = clone(c.spec);
+    var fitKey = fitEcharts(opt, c, el.clientWidth);
     var handle = {dispose: function () { chart.dispose(); },
-                  resize: function () { chart.resize(); }};
+                  resize: function () {
+                    var next = clone(c.spec), key = fitEcharts(next, c, el.clientWidth);
+                    if (key && key !== fitKey) { fitKey = key; chart.setOption(next, true); }
+                    chart.resize();
+                  }};
     return new Promise(function (resolve) {
       var done = false;
       function finish() { if (!done) { done = true; resolve(handle); } }
       chart.on("finished", finish);
-      chart.setOption(clone(c.spec));
+      chart.setOption(opt);
       setTimeout(finish, 5000);
     });
   }
@@ -802,8 +968,70 @@ _BRIDGE_JS = r"""(function () {
     handles.forEach(function (h) { if (h && h.resize) { h.resize(); } });
   });
 
+  // Downloads: in the claude.ai viewer a data: link cannot download, so a granted
+  // `downloads` capability takes the click. use() is never awaited by rendering;
+  // save() runs only from a click; the data: href stays the fallback.
+  var QUIET = {declined: 1, rate_limited: 1};
+  var CALLER = {too_large: 1, bad_request: 1, transform_error: 1, rejected_extension: 1,
+                request_unknown: 1};
+  function csvLinks() { return Array.prototype.slice.call(document.querySelectorAll("a.csv")); }
+  function csvText(a) {
+    var href = a.getAttribute("href") || "";
+    return decodeURIComponent(href.slice(href.indexOf(",") + 1));
+  }
+  function hideCsv(note) {
+    csvLinks().forEach(function (a) {
+      a.hidden = true;
+      if (note) {
+        var span = document.createElement("span");
+        span.className = "csv-note";
+        span.textContent = note;
+        a.parentNode.insertBefore(span, a.nextSibling);
+      }
+    });
+  }
+  function wireDownloads(d) {
+    csvLinks().forEach(function (a) {
+      a.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        if (a.getAttribute("data-save") === "pending") { return; }
+        a.setAttribute("data-save", "pending");
+        var req;
+        try {
+          req = d.save({filename: a.getAttribute("download") || "data.csv", data: csvText(a)});
+        } catch (e) { req = Promise.reject(e); }
+        Promise.resolve(req).then(function (res) {
+          a.setAttribute("data-save", (res && res.status) || "saved");
+        }, function (err) {
+          var code = err && typeof err.code === "string" ? err.code : "unavailable";
+          a.setAttribute("data-save", code);
+          if (QUIET[code]) { return; }                  // the viewer said no / try later
+          if (CALLER[code]) {
+            if (window.console) { console.warn("downloads.save: " + code); }
+            return;
+          }
+          if (code === "extension_not_enabled") {
+            hideCsv("CSV download is not available in this view.");
+            return;
+          }
+          hideCsv("");          // unavailable, not_granted, capability_*, unknown codes
+        });
+      });
+      a.setAttribute("data-save", "ready");
+    });
+  }
+  function setupDownloads() {
+    var cl = window.claude, p;
+    if (!csvLinks().length || !cl || typeof cl.use !== "function") { return; }
+    try { p = cl.use("downloads"); } catch (e) { return; }
+    Promise.resolve(p).then(function (d) {
+      if (d && typeof d.save === "function") { wireDownloads(d); }
+    }, function () { /* same as null: keep the data: link */ });
+  }
+
   label();
   window.__vizStart(renderAll());
+  setupDownloads();
 })();"""
 
 
@@ -848,7 +1076,9 @@ def build_page(charts, title, description="", mode_default="auto", table_rows=No
     """Self-contained Artifact-ready HTML for one or more chart dicts.
 
     table_rows caps the rows each table view renders (default 500); the CSV
-    download always carries every row. Raises ValueError on a bad title
+    download always carries every row. The page uses the claude.ai `downloads`
+    capability when granted: publish with capabilities_for(charts)
+    (REQUIRED_CAPABILITIES is the full set). Raises ValueError on a bad title
     (not 2-4 words), unknown kind/mode, inline data over 2 MB (aggregate
     first) or a page over 16 MB.
     """
@@ -861,7 +1091,7 @@ def build_page(charts, title, description="", mode_default="auto", table_rows=No
     max_rows = MAX_TABLE_ROWS if table_rows is None else max(1, int(table_rows))
     prepared = [prepare_chart(c) for c in charts]
     payload = [{"id": f"chart-{i + 1}-plot", "kind": c["kind"], "spec": c["spec"],
-                "height": c["height"]} for i, c in enumerate(prepared)]
+                "height": c["height"], "fit": c["fit"]} for i, c in enumerate(prepared)]
     payload_json = _script_json(payload)
     inline = len(payload_json) + sum(
         len(json.dumps(c["rows"], default=_json_default)) for c in prepared if c["rows"])
