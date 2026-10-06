@@ -55,7 +55,9 @@ findings = {}
 (`clean.parquet`, `agg.parquet`, ...), prints one distilled sanity check. Store conclusions
 in the sandbox `findings` dict as you go.
 
-**5 VISUALIZE.** `savefig` to cwd — the harness diffs the output root after every run and
+**5 VISUALIZE.** Any chart a person will read follows `/visualize` (form, color by job, palette
+validation, house style, render + LOOK); the example below is only the mechanical path.
+`savefig` to cwd — the harness diffs the output root after every run and
 prints new files as `artifacts:` lines with absolute host paths. Report that path verbatim.
 
 ```python
