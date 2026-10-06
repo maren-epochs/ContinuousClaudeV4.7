@@ -17,7 +17,10 @@ and assert, with USERPROFILE/HOME pointing at home/:
       and recommend from the install, as a script and via `-c`; each __file__
       is under the install; `import tools` still yields the user's package;
       intra-package imports resolve through the alias (no `tools.viz` loaded)
-  (b) from the repo cwd the same PRELUDE resolves to the repo's tools/viz
+  (b) from the repo cwd, or any repo subdirectory, the same PRELUDE resolves to
+      the repo's tools/viz; with no repo up the cwd chain and no install it
+      raises an error naming `py -3.13 install/sync_global.py --apply`; the
+      installed PRELUDE is byte-identical to the repo's
   (c) in-repo `from tools.viz import ...` keeps working
   (d) every documented CLI runs from the shadowing project against the install
   (e) skill snippets: no `tools.viz` import left; every python block / `-c`
@@ -145,6 +148,35 @@ class ShadowingProject(unittest.TestCase):
         p = run([sys.executable, "-c", code], REPO, self.env)
         self.assertEqual(Path(p.stdout.strip()).resolve().parent, (REPO / "tools" / "viz").resolve())
 
+    def test_prelude_from_repo_subdir_uses_repo(self):
+        """W508: the PRELUDE walks cwd and its parents before ~/.claude."""
+        sub = REPO / "continuum" / "research" / "dataviz-suite"
+        code = self.prelude + "\nfrom ccv_viz import palette\nprint(palette.__file__)\n"
+        p = run([sys.executable, "-c", code], sub, self.env)
+        self.assertEqual(Path(p.stdout.strip()).resolve().parent, (REPO / "tools" / "viz").resolve())
+
+    def test_prelude_without_install_names_sync_global(self):
+        """W508: no repo up the cwd chain and no ~/.claude install -> an error naming the fix,
+        not a bare StopIteration."""
+        with tempfile.TemporaryDirectory(prefix="ccv47-viz-noinst-") as td:
+            empty_home, cwd = Path(td) / "home", Path(td) / "elsewhere"
+            empty_home.mkdir()
+            cwd.mkdir()
+            env = dict(self.env, USERPROFILE=str(empty_home), HOME=str(empty_home))
+            p = run([sys.executable, "-c", self.prelude + "\nfrom ccv_viz import palette\n"], cwd, env, check=False)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn("StopIteration", p.stderr)
+        self.assertIn("py -3.13 install/sync_global.py --apply", p.stderr)
+
+    def test_installed_prelude_is_byte_identical(self):
+        """sync_global rewrites CLI lines only; the PRELUDE (and its sync_global hint) stays verbatim."""
+        for name, path in SKILLS.items():
+            installed = (self.install / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+            with self.subTest(skill=name):
+                self.assertEqual(installed.count(self.prelude), path.read_text(encoding="utf-8").count(self.prelude))
+                self.assertGreater(installed.count(self.prelude), 0)
+        self.assertEqual(self.prelude, prelude_of(SKILLS["visualize"].read_text(encoding="utf-8")))
+
     def test_in_repo_tools_viz_import(self):
         code = ("from tools.viz import palette, style, artifact_page, export, recommend\n"
                 "assert style.palette is palette and artifact_page.palette is palette\n"
@@ -214,6 +246,17 @@ class SkillSnippets(unittest.TestCase):
                 if ALIAS in line:
                     with self.subTest(skill=name, c=line[:60]):
                         self.assertTrue(line.startswith(self.prelude), "-c line must open with the PRELUDE")
+
+    def test_demo_line1_is_prelude(self):
+        """continuum/research/dataviz-suite/demo.py quotes the PRELUDE on line 1."""
+        demo = REPO / "continuum" / "research" / "dataviz-suite" / "demo.py"
+        line1 = demo.read_text(encoding="utf-8").splitlines()[0]
+        self.assertTrue(line1.startswith(self.prelude + "  # noqa"), "demo.py line 1 must be the PRELUDE verbatim")
+
+    def test_prelude_walks_parents_and_names_fix(self):
+        self.assertIn(".parents", self.prelude)
+        self.assertIn("py -3.13 install/sync_global.py --apply", self.prelude)
+        self.assertNotIn('"', self.prelude, "PRELUDE must fit inside a py -3.13 -c \"...\" line")
 
     def test_analyze_data_chart_snippet_uses_prelude(self):
         blocks = [b for b in PYTHON_BLOCK.findall(self.text["analyze-data"]) if "savefig" in b]

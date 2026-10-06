@@ -62,7 +62,7 @@ prints new files as `artifacts:` lines with absolute host paths. Report that pat
 
 ```python
 out = run_python(r'''
-import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
+import sys, pathlib, importlib.util as _u; _c = pathlib.Path.cwd(); _d = next((p/'tools'/'viz' for p in (_c, *_c.parents, pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()), None) or (_ for _ in ()).throw(ModuleNotFoundError('ccv_viz: no tools/viz/palette.json in cwd, its parents or ~/.claude - run py -3.13 install/sync_global.py --apply from the ccv47 repo')); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 import pandas as pd, matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

@@ -9,7 +9,7 @@
       "Categorical slot order is the CVD-safety mechanism: assign in sequence, never cycle, never re-order.",
       "Adjacent pairlist (stacks/bars/lines) validates all eight slots in both modes; all-pairs forms (scatter/bubble/choropleth/small multiples) cap at the first three slots, fold the rest to Other or facet.",
       "Light mode slots 3, 4, 5 (aqua, yellow, magenta) sit below 3:1 on the light surface: relief rule - ship direct labels or the table view.",
-      "gray = the de-emphasis gray for emphasis charts (1 hue + gray). palette.md documents no separate value, so it is the Muted (axis/labels) ink in both modes: the only documented neutral clearing 3:1 on both surfaces (3.50 light, 4.85 dark) while staying the most recessive. Highlight in series-1: aqua, magenta and red fall under the CVD floor against it."
+      "gray = the de-emphasis gray for emphasis charts (1 hue + gray). palette.md documents no separate value, so it is the Muted (axis/labels) ink in both modes: the only documented neutral clearing 3:1 on both surfaces (3.50 light, 4.85 dark) while staying the most recessive. Highlight in series-1: aqua and magenta fall under the CVD floor against it in both modes, red only in dark (min protan/deutan dE vs gray: light red 8.7 >= 8.0 target, dark red 3.9)."
     ]
   },
   "categorical_hues": ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"],

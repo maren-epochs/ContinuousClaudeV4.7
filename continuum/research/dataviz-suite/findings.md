@@ -64,9 +64,9 @@ Hover verified live (Playwright pointer move from a scratch script, nothing adde
 
 Total out/ ~925 KB (the page HTML grew ~29 KB: chart A now inlines both columns per day instead of computing the mean in a window transform). The page loads only pinned CDNs: jsdelivr vega 6.4.0 / vega-lite 6.4.3 / vega-embed 7.3.0, cdnjs echarts 6.1.0. No absolute paths or user names inside out/ (grep clean).
 
-PUBLISH-PENDING (republish to the existing URL): continuum/research/dataviz-suite/out/weather-and-stocks.html
+PUBLISHED as v3 of the existing artifact (2026-10-06, downloads capability carried forward): continuum/research/dataviz-suite/out/weather-and-stocks.html
 
-Existing URL (first publish, orchestrator, private): https://claude.ai/artifact/BB3VuPmVxfjuyXqhFbrzGf. Republish with `capabilities` = `{"downloads": true}` (printed by demo.py from `artifact_page.capabilities_for(charts)`).
+Existing URL (first publish, orchestrator, private): https://claude.ai/artifact/BB3VuPmVxfjuyXqhFbrzGf. v3 keeps `capabilities` = `{"downloads": true}` (printed by demo.py from `artifact_page.capabilities_for(charts)`).
 
 Publish-time finding from the first run: the per-card "Download CSV" links were plain data: URLs, and the claude.ai viewer never lets a page download those. FIXED in 307b602: artifact_page.py asks for the `downloads` capability and saves through the viewer's downloads API, with the data: link as the fallback; `capabilities_for(charts)` tells the publisher what to declare.
 

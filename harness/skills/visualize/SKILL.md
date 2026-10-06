@@ -11,10 +11,12 @@ lives in `tools/viz/palette.json` - no hex literals in chart code, never hand-se
 **Where it runs.** CLI paths `tools/viz/...` are relative to the ccv47 repo; the global install
 (`install/sync_global.py --apply`) rewrites them to `~/.claude/tools/viz/...`. Every Python
 snippet and `py -3.13 -c` line below opens with this PRELUDE (verbatim), which loads
-`tools/viz` - cwd if it is the repo, else `~/.claude` - under its own import name `ccv_viz`:
+`tools/viz` - the first of cwd and its parents that holds the repo, else `~/.claude` - under its
+own import name `ccv_viz`; with neither it raises `ModuleNotFoundError` naming
+`py -3.13 install/sync_global.py --apply`:
 
 ```python
-import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
+import sys, pathlib, importlib.util as _u; _c = pathlib.Path.cwd(); _d = next((p/'tools'/'viz' for p in (_c, *_c.parents, pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()), None) or (_ for _ in ()).throw(ModuleNotFoundError('ccv_viz: no tools/viz/palette.json in cwd, its parents or ~/.claude - run py -3.13 install/sync_global.py --apply from the ccv47 repo')); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 ```
 
 Inside `/analyze-data` the same code goes through `run_python` (stateless, cwd = session work
@@ -65,7 +67,7 @@ or a table view - not dismissable. `--pairs all` (scatter/bubble/maps/facets) pa
 first 3 slots only: more series there -> small multiples.
 
 ```bash
-HEX=$(py -3.13 -c "import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m); from ccv_viz import palette; print(','.join(palette.categorical('light', 4)))")
+HEX=$(py -3.13 -c "import sys, pathlib, importlib.util as _u; _c = pathlib.Path.cwd(); _d = next((p/'tools'/'viz' for p in (_c, *_c.parents, pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()), None) or (_ for _ in ()).throw(ModuleNotFoundError('ccv_viz: no tools/viz/palette.json in cwd, its parents or ~/.claude - run py -3.13 install/sync_global.py --apply from the ccv47 repo')); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m); from ccv_viz import palette; print(','.join(palette.categorical('light', 4)))")
 py -3.13 tools/viz/validate_palette.py "$HEX" --mode light       # then dark slots, --mode dark
 py -3.13 tools/viz/validate_palette.py "$HEX" --mode light --pairs all
 ```
@@ -102,7 +104,7 @@ slots (step 3), rendered and looked at - not an automatic flip. Text wears `pale
 `run_python(r'''...''')`. Both modes when the chart will be shared.
 
 ```python
-import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
+import sys, pathlib, importlib.util as _u; _c = pathlib.Path.cwd(); _d = next((p/'tools'/'viz' for p in (_c, *_c.parents, pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()), None) or (_ for _ in ()).throw(ModuleNotFoundError('ccv_viz: no tools/viz/palette.json in cwd, its parents or ~/.claude - run py -3.13 install/sync_global.py --apply from the ccv47 repo')); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt, pandas as pd
 from ccv_viz import export, style
@@ -124,7 +126,7 @@ path ran (plotly PNG falls back from kaleido to Playwright); bokeh/great_tables 
 (b) Interactive page - claude.ai Artifact, from Vega-Lite (altair), Plotly or ECharts specs:
 
 ```python
-import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
+import sys, pathlib, importlib.util as _u; _c = pathlib.Path.cwd(); _d = next((p/'tools'/'viz' for p in (_c, *_c.parents, pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()), None) or (_ for _ in ()).throw(ModuleNotFoundError('ccv_viz: no tools/viz/palette.json in cwd, its parents or ~/.claude - run py -3.13 install/sync_global.py --apply from the ccv47 repo')); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 from ccv_viz import artifact_page
 charts = [artifact_page.from_altair(chart, title="Hours by team"),
           artifact_page.from_plotly(fig, title="Weekly trend")]

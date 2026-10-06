@@ -1,4 +1,4 @@
-import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)  # noqa: I001 - skill PRELUDE, verbatim
+import sys, pathlib, importlib.util as _u; _c = pathlib.Path.cwd(); _d = next((p/'tools'/'viz' for p in (_c, *_c.parents, pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()), None) or (_ for _ in ()).throw(ModuleNotFoundError('ccv_viz: no tools/viz/palette.json in cwd, its parents or ~/.claude - run py -3.13 install/sync_global.py --apply from the ccv47 repo')); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)  # noqa: I001 - skill PRELUDE, verbatim
 # End-to-end /visualize demo on vega_datasets (seattle_weather + stocks).
 #
 # Run from the repo root: `py -3.13 continuum/research/dataviz-suite/demo.py`.
@@ -126,7 +126,7 @@ def main():
         emit(res["png"], res["svg"])
 
     # Table: seattle weather by calendar month (2012-2015), house style via style.gt_style.
-    w =weather.assign(year=weather["date"].dt.year, month=weather["date"].dt.month)
+    w = weather.assign(year=weather["date"].dt.year, month=weather["date"].dt.month)
     monthly_total = w.groupby(["year", "month"])["precipitation"].sum().groupby("month").mean()
     summary = pd.DataFrame({
         "month": pd.to_datetime(sorted(w["month"].unique()), format="%m").strftime("%b"),
