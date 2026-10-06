@@ -6,6 +6,11 @@ model: inherit
 effort: high
 maxTurns: 60
 hooks:
+  PostToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: node .claude/hooks/worker-report-check.mjs
   Stop:
     - hooks:
         - type: command

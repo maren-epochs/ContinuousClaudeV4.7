@@ -103,6 +103,26 @@ echo "$B1" | grep -q '"decision":"block"' && echo "$B2" | grep -q '"decision":"b
 OUT=$(printf 'not json' | node "$HOOK" 2>/dev/null); RC=$?
 [ "$OUT" = "{}" ] && [ $RC -eq 0 ]; check "unparseable input allows" $?
 
+# --- PostToolUse on the worker's own report write: feedback while it is still running ---
+post() { printf '{"hook_event_name":"PostToolUse","tool_name":"Write","cwd":"%s","tool_input":{"file_path":"%s"}}' "$WORK" "$1"; }
+printf '{"task":"x","assertion":"VAL-1","result":"pass"}' > "$REPORT"
+run_hook "$(post "$REPORT")"
+case "$OUT" in *'"decision":"block"'*"'pass' not in"*) r=0;; *) r=1;; esac
+check "post-write: invalid report -> block with ERROR lines (got: ${OUT:0:80})" $r
+run_hook "$(post "$REL")"
+case "$OUT" in *'"decision":"block"'*) r=0;; *) r=1;; esac
+check "post-write: relative report path resolved against cwd" $r
+cp "$WORK/valid.json" "$REPORT" 2>/dev/null || printf '%s' '{"task":"t","assertion":"VAL-1","result":"success","implemented":"x","remaining":"","tests":{"added":[],"command":"","exit_code":null},"checks":[],"bloks_used":[],"corrections":[],"discoveries":[],"issues":[],"conventions":[]}' > "$REPORT"
+run_hook "$(post "$REPORT")"
+[ "$OUT" = "{}" ]; check "post-write: valid report -> {} (got: ${OUT:0:80})" $?
+run_hook "$(post "$WORK/src/app.py")"
+[ "$OUT" = "{}" ]; check "post-write: non-report file ignored" $?
+printf '{"result":"pass"}' > "$REPORT"
+run_hook "$(post "$REPORT")" WORKER_REPORT_PYTHON="$WORK/no-such-python"
+[ "$OUT" = "{}" ] && [ $RC -eq 0 ]; check "post-write: validator unavailable -> fail open" $?
+OUT=$(printf 'null' | node "$HOOK" 2>/dev/null); RC=$?
+[ "$OUT" = "{}" ] && [ $RC -eq 0 ]; check "null input allows" $?
+
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

@@ -73,9 +73,39 @@ function bumpBlocks(agentId) {
   return n + 1;
 }
 
+// ERROR lines from validate_report.py, [] when valid, null when the validator can't run.
+function validate(report) {
+  const validator = findValidator();
+  if (!validator) return null;
+  const [cmd, args] = WIN ? ['py', ['-3.13', validator, report]] : ['python3', [validator, report]];
+  const proc = spawnSync(process.env.WORKER_REPORT_PYTHON || cmd,
+    process.env.WORKER_REPORT_PYTHON ? [validator, report] : args,
+    { encoding: 'utf-8', timeout: 20000, windowsHide: true });
+  if (proc.error || proc.status === null || (proc.status !== 0 && proc.status !== 1)) return null;
+  return `${proc.stdout || ''}\n${proc.stderr || ''}`.split('\n').filter((l) => /\bERROR\b/.test(l));
+}
+
+const REPORT_PATH = /continuum[\\/]autonomous[\\/][^\\/]+[\\/]reports[\\/][^\\/]+\.json$/;
+
+// PostToolUse on the worker's own Write/Edit: the worker is still running, so a block
+// here reaches it — unlike Stop, which a background worker may already have passed.
+function onReportWrite(data) {
+  const fp = (data.tool_input || {}).file_path;
+  if (typeof fp !== 'string' || !REPORT_PATH.test(fp)) return console.log('{}');
+  const errors = validate(isAbsolute(fp) ? fp : resolve(data.cwd || process.cwd(), fp));
+  if (!errors || !errors.length) return console.log('{}');
+  console.log(JSON.stringify({
+    decision: 'block',
+    reason: `Report ${fp} fails schema validation. Fix every ERROR in the report now:\n`
+      + errors.slice(0, 20).join('\n') + (errors.length > 20 ? `\n... and ${errors.length - 20} more` : ''),
+  }));
+}
+
 function main() {
   let data;
   try { data = JSON.parse(readFileSync(0, 'utf-8')); } catch { return allow('unparseable hook input'); }
+  if (!data || typeof data !== 'object') return allow('unparseable hook input');
+  if (data.hook_event_name === 'PostToolUse') return onReportWrite(data);
   if (data.stop_hook_active) return allow();
 
   const transcript = data.agent_transcript_path || data.transcript_path;
