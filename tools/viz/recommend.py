@@ -1,0 +1,719 @@
+#!/usr/bin/env python3
+"""Chart-form recommender: the dataviz skill's choosing-a-form heuristic as code.
+
+    recommend(frame_or_profile, job=None) -> {form, reason, encoding, warnings}
+
+The data's job picks the form, and sometimes the right form is not a chart
+(stat tile, KPI row, meter, table).  Jobs:
+
+    magnitude, identity, polarity, headline, change-over-time, distribution,
+    relationship, part-to-whole, ranking, flow, spatial
+
+When ``job`` is None it is inferred from the column profile (row count, column
+kinds, cardinality, presence of a time or geo column).
+
+Refusals (each names its anti-patterns.md entry in ``warnings``):
+
+  * never a dual axis: several measures of different scale over time ->
+    small multiples (or index to a common base) on ONE axis
+  * part-to-whole past 5 slices -> bar, never a pie/donut
+  * 2 slices -> meter; a one-bar chart -> stat tile
+  * categorical series past 8 -> fold into Other / small multiples
+  * more than ~7 color classes carrying meaning -> table
+
+The core is pure stdlib and works on a plain-dict profile::
+
+    {"n_rows": int,
+     "columns": [{"name", "kind": numeric|categorical|temporal|boolean|text|geo,
+                  "cardinality", "is_sorted_time"?, "scale"?}],
+     "measures": [names], "dimensions": [names]}
+
+``profile_frame(df)`` builds that profile from a pandas DataFrame (pandas is
+imported lazily there and in the CLI only).
+
+CLI:
+    py -3.13 tools/viz/recommend.py data.csv [--job JOB] [--json]
+    py -3.13 tools/viz/recommend.py data.parquet --json
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import math
+import sys
+from pathlib import Path
+
+JOBS = (
+    "magnitude",
+    "identity",
+    "polarity",
+    "headline",
+    "change-over-time",
+    "distribution",
+    "relationship",
+    "part-to-whole",
+    "ranking",
+    "flow",
+    "spatial",
+)
+
+# Every form this module can return, named as choosing-a-form.md names them.
+FORMS = frozenset({
+    "stat tile", "KPI row", "hero figure", "meter", "table",
+    "bar", "heatmap", "line", "area", "multi-line", "grouped bar", "stacked bar",
+    "emphasis", "diverging bar", "line vs baseline", "diverging stacked bar",
+    "dumbbell", "small multiples", "scatter", "bubble", "histogram", "dot plot",
+    "slope", "sankey", "choropleth",
+})
+
+SERIES_CEILING = 8          # token ceiling for categorical hues
+ALL_PAIRS_CAP = 3           # scatter / bubble / choropleth / small multiples
+COLOR_CLASS_CAP = 7         # past ~7 meaningful classes -> table
+PIE_SLICE_CAP = 5           # part-to-whole past this is a bar, never a pie
+
+# anti-patterns.md entry names, cited verbatim in warnings
+AP_DUAL_AXIS = "Dual-axis charts (two y-scales on one plot)"
+AP_PAST_8 = "Cycling / generating hues past 8"
+AP_PIE = "A donut/pie for comparing close values"
+AP_ONE_BAR = "A one-bar bar chart, or a 2-slice pie"
+AP_7_CLASSES = "More than ~7 color classes carrying meaning"
+AP_ONE_NUMBER = "Eight categorical hues when the story is one number"
+LADDER_ALL_PAIRS = "series-count ladder: all-pairs forms cap at three"
+FOLD = "fold into Other / small multiples"
+
+FLOW_NAMES = {"source", "target", "from", "to", "origin", "destination", "src", "dst"}
+GEO_NAMES = {
+    "lat", "latitude", "lon", "lng", "long", "longitude", "geometry", "geom", "wkt",
+    "fips", "iso", "iso2", "iso3", "iso_code", "iso_a2", "iso_a3", "country_code",
+    "postcode", "postal_code", "zip", "zipcode", "zip_code", "geoid", "h3",
+}
+TIME_NAMES = {"year", "month", "quarter", "week", "period", "date", "fy", "fiscal_year",
+              "yr", "day", "time", "timestamp", "datetime", "ds"}
+TEXT_NAMES = {"note", "notes", "comment", "comments", "description", "message", "text",
+              "title", "body", "url", "summary", "remarks"}
+
+
+# --------------------------------------------------------------------------
+# profile helpers
+# --------------------------------------------------------------------------
+class _Ctx:
+    """Derived view of a profile: column lists by kind, in profile order."""
+
+    def __init__(self, profile):
+        self.profile = profile
+        self.n_rows = int(profile.get("n_rows") or 0)
+        cols = list(profile.get("columns") or [])
+        self.by_name = {c["name"]: c for c in cols}
+        kinds = {c["name"]: c.get("kind", "categorical") for c in cols}
+        measures = profile.get("measures")
+        if measures is None:
+            measures = [c["name"] for c in cols if kinds[c["name"]] == "numeric"]
+        self.measures = [m for m in measures if m in kinds]
+        self.temporal = [c["name"] for c in cols if kinds[c["name"]] == "temporal"]
+        self.cats = [c["name"] for c in cols
+                     if kinds[c["name"]] in ("categorical", "boolean")]
+        self.geo = [c["name"] for c in cols if kinds[c["name"]] == "geo"]
+        self.text = [c["name"] for c in cols if kinds[c["name"]] == "text"]
+
+    def card(self, name, default=None):
+        c = self.by_name.get(name) or {}
+        v = c.get("cardinality")
+        if v is None:
+            return default if default is not None else self.n_rows
+        return int(v)
+
+    def scale(self, name):
+        c = self.by_name.get(name) or {}
+        return c.get("scale")
+
+    def names(self, measures):
+        return ", ".join(f"{m} (1e{self.scale(m)})" if self.scale(m) is not None else m
+                         for m in measures)
+
+
+def _out(form, reason, encoding, warnings=None):
+    assert form in FORMS, form
+    enc = {"x": None, "y": None}
+    enc.update(encoding)
+    return {"form": form, "reason": reason, "encoding": enc, "warnings": list(warnings or [])}
+
+
+def _single_value(ctx):
+    """True when the data is one number: one row, or one category with one measure."""
+    if not ctx.measures:
+        return False
+    if ctx.n_rows == 1:
+        return True
+    x = (ctx.cats or ctx.temporal or ctx.geo or [None])[0]
+    return x is not None and ctx.card(x) == 1 and len(ctx.measures) == 1
+
+
+def _stat_tile(ctx, warnings=None):
+    m = ctx.measures[0]
+    enc = {"x": ctx.temporal[0] if ctx.temporal else None, "y": m}
+    return _out("stat tile",
+                "choosing-a-form 'Is it even a chart?': a single current value "
+                "(+ maybe a trend) is a stat tile, not a one-bar bar chart.",
+                enc, warnings)
+
+
+def _series_fold(ctx, form, series_dim, encoding, reason, warnings, over_time):
+    """Apply the categorical series-count ladder; past 8 -> small multiples."""
+    n = ctx.card(series_dim)
+    warnings = list(warnings)
+    if n > SERIES_CEILING:
+        warnings.append(f"{AP_PAST_8}: '{series_dim}' has {n} series - "
+                        f"{FOLD} (never generate a 9th hue)")
+        enc = dict(encoding)
+        enc.pop("color", None)
+        enc["facet"] = series_dim
+        return _out("small multiples",
+                    f"series-count ladder: {n} series exceed the token ceiling of "
+                    f"{SERIES_CEILING}, so facet into small multiples (one per "
+                    f"'{series_dim}') or fold the tail into Other.",
+                    enc, warnings)
+    enc = dict(encoding)
+    if n >= 4:
+        enc["label"] = "direct"
+    return _out(form, reason, enc, warnings)
+
+
+# --------------------------------------------------------------------------
+# job rules (one function per row of the table)
+# --------------------------------------------------------------------------
+def _magnitude(ctx, warnings=()):
+    warnings = list(warnings)
+    if _single_value(ctx):
+        warnings.append(f"{AP_ONE_BAR}: the number is the chart - use a stat tile")
+        return _stat_tile(ctx, warnings)
+    if not ctx.measures:
+        xs = ctx.cats or ctx.temporal or ctx.geo
+        if not xs:
+            return _out("table", "no measures or dimensions to chart; show the table.",
+                        {}, warnings)
+        return _out("bar",
+                    "choosing-a-form 'Compare magnitude, low -> high' -> bar / column "
+                    "of row counts per category (sequential, one hue).",
+                    {"x": xs[0], "y": "count", "color": "sequential", "sort": "-y"},
+                    warnings)
+    m = ctx.measures[0]
+    if len(ctx.cats) >= 2:
+        return _out("heatmap",
+                    "choosing-a-form 'Compare magnitude, low -> high': a grid of two "
+                    "dimensions takes a heatmap with a sequential ramp.",
+                    {"x": ctx.cats[1], "y": ctx.cats[0], "color": m}, warnings)
+    xs = ctx.cats or ctx.temporal or ctx.geo
+    if not xs:
+        return _out("table",
+                    "magnitude needs a dimension to compare across; with measures only, "
+                    "show the table (or ask for 'distribution').",
+                    {"y": m}, warnings)
+    return _out("bar",
+                "choosing-a-form 'Compare magnitude, low -> high' -> bar / column with "
+                "a sequential (one hue) color job.",
+                {"x": xs[0], "y": m, "color": "sequential", "sort": "-y"}, warnings)
+
+
+def _identity(ctx):
+    if _single_value(ctx):
+        return _stat_tile(ctx, [f"{AP_ONE_NUMBER}: one value is a stat tile, not a series"])
+    reason = ("choosing-a-form 'Tell distinct series apart' -> grouped/stacked bar or "
+              "multi-line with a categorical color job.")
+    if ctx.temporal:
+        x = ctx.temporal[0]
+        if ctx.cats and ctx.measures:
+            series = ctx.cats[0]
+            enc = {"x": x, "y": ctx.measures[0], "color": series}
+            return _series_fold(ctx, "multi-line", series, enc, reason, [], True)
+        if len(ctx.measures) >= 2:
+            return _out("multi-line", reason,
+                        {"x": x, "y": list(ctx.measures), "color": "measure"})
+        if ctx.measures:
+            return _out("emphasis",
+                        "choosing-a-form 'One series is the point, rest are context' -> "
+                        "emphasis: one series in the accent hue, nothing else to tell apart.",
+                        {"x": x, "y": ctx.measures[0], "color": "1 hue + gray"})
+    xs = ctx.cats or ctx.geo
+    if len(xs) >= 2 and ctx.measures:
+        # the lower-cardinality dimension is the series (fewest hues); ties -> second
+        x, series = xs[0], xs[1]
+        if ctx.card(series) > ctx.card(x):
+            x, series = series, x
+        enc = {"x": x, "y": ctx.measures[0], "color": series}
+        return _series_fold(ctx, "grouped bar", series, enc, reason, [], False)
+    if xs and len(ctx.measures) >= 2:
+        return _out("grouped bar", reason,
+                    {"x": xs[0], "y": list(ctx.measures), "color": "measure"})
+    if xs and ctx.measures:
+        return _out("emphasis",
+                    "choosing-a-form 'One series is the point, rest are context' -> "
+                    "emphasis (highlight one, gray the rest); categorical color would "
+                    "bury the one bar that matters.",
+                    {"x": xs[0], "y": ctx.measures[0], "color": "1 hue + gray"})
+    if xs:
+        return _out("bar", "no measure: row counts per category, one hue.",
+                    {"x": xs[0], "y": "count", "color": "sequential", "sort": "-y"})
+    return _out("table", "no dimension carries identity; show the table.", {})
+
+
+def _polarity(ctx):
+    if _single_value(ctx):
+        return _stat_tile(ctx)
+    reason = ("choosing-a-form 'Above/below a baseline; delta to target' -> diverging "
+              "bar, or line vs baseline over time, with a diverging color job.")
+    if not ctx.measures:
+        return _magnitude(ctx, ["polarity needs a signed measure; none found"])
+    m = ctx.measures[0]
+    if ctx.temporal:
+        enc = {"x": ctx.temporal[0], "y": m, "color": "diverging"}
+        if ctx.cats:
+            enc["color"] = ctx.cats[0]
+            return _series_fold(ctx, "line vs baseline", ctx.cats[0], enc, reason, [], True)
+        return _out("line vs baseline", reason, enc)
+    xs = ctx.cats or ctx.geo
+    if len(xs) >= 2:
+        warnings = []
+        if ctx.card(xs[1]) > COLOR_CLASS_CAP:
+            warnings.append(f"{AP_7_CLASSES}: '{xs[1]}' has {ctx.card(xs[1])} levels - "
+                            "collapse the scale or show a table")
+        return _out("diverging stacked bar",
+                    "choosing-a-form 'Ordered-scale share (Likert, sentiment, "
+                    "agree<->disagree)' -> diverging stacked bar centered on neutral.",
+                    {"x": m, "y": xs[0], "color": xs[1], "orientation": "horizontal"},
+                    warnings)
+    if xs:
+        return _out("diverging bar", reason,
+                    {"x": xs[0], "y": m, "color": "diverging", "sort": "-y"})
+    return _out("table", "polarity needs a dimension to compare against a baseline.",
+                {"y": m})
+
+
+def _headline(ctx):
+    n = len(ctx.measures)
+    if n == 0:
+        return _out("table", "no measure to headline; show the table.", {})
+    if n == 1:
+        return _stat_tile(ctx)
+    if n <= COLOR_CLASS_CAP:
+        return _out("KPI row",
+                    "choosing-a-form 'Is it even a chart?': a handful of headline "
+                    "numbers is a KPI row of stat tiles, not a grouped bar chart.",
+                    {"x": ctx.temporal[0] if ctx.temporal else None,
+                     "y": list(ctx.measures)})
+    return _out("table",
+                f"{n} headline numbers is past a handful; show a table "
+                "(choosing-a-form 'More than ~7 classes').", {"y": list(ctx.measures)})
+
+
+def _change_over_time(ctx):
+    if not ctx.temporal:
+        return _magnitude(ctx, [("no temporal column in profile; falling back to "
+                                 "magnitude (choosing-a-form 'Trend over time' needs time)")])
+    if _single_value(ctx):
+        return _stat_tile(ctx)
+    t = ctx.temporal[0]
+    reason = "choosing-a-form 'Trend over time' -> line (area for a single series)."
+    if not ctx.measures:
+        return _out("line", reason + " No measure: row counts per period.",
+                    {"x": t, "y": "count", "color": "sequential"})
+    if ctx.card(t) == 2 and ctx.cats and len(ctx.measures) == 1:
+        return _out("dumbbell",
+                    "choosing-a-form 'Before -> after per item' -> dumbbell "
+                    "(1 hue, 2 shades).",
+                    {"x": ctx.measures[0], "y": ctx.cats[0], "color": t,
+                     "orientation": "horizontal", "sort": "-x"})
+    if len(ctx.measures) >= 2:
+        scales = [ctx.scale(m) for m in ctx.measures]
+        known = all(s is not None for s in scales)
+        same = known and (max(scales) - min(scales)) < 1
+        if same and not ctx.cats:
+            return _out("multi-line",
+                        "choosing-a-form 'Trend over time': several measures on one "
+                        "shared axis, same scale, categorical color per measure.",
+                        {"x": t, "y": list(ctx.measures), "color": "measure"})
+        why = ("differ in scale" if known else "have unknown scales")
+        warnings = [(f"{AP_DUAL_AXIS}: measures {ctx.names(ctx.measures)} {why} - "
+                     "small multiples, or index both to a common base (=100 at t0) on "
+                     "ONE axis; never a second y-axis")]
+        enc = {"x": t, "y": "value", "facet": "measure"}
+        if ctx.cats:
+            enc["color"] = ctx.cats[0]
+            if ctx.card(ctx.cats[0]) > SERIES_CEILING:
+                warnings.append(f"{AP_PAST_8}: '{ctx.cats[0]}' has "
+                                f"{ctx.card(ctx.cats[0])} series - {FOLD}")
+                enc.pop("color")
+        return _out("small multiples",
+                    "choosing-a-form 'Trend over time' with measures of different scale: "
+                    "one line per panel, never a dual axis.", enc, warnings)
+    m = ctx.measures[0]
+    if ctx.cats:
+        series = ctx.cats[0]
+        enc = {"x": t, "y": m, "color": series}
+        return _series_fold(ctx, "multi-line", series, enc, reason, [], True)
+    return _out("line", reason, {"x": t, "y": m, "color": "sequential"})
+
+
+def _distribution(ctx):
+    if not ctx.measures:
+        return _magnitude(ctx, [("distribution needs a numeric measure; none found - "
+                                 "showing counts per category")])
+    if _single_value(ctx):
+        return _stat_tile(ctx)
+    m = ctx.measures[0]
+    if ctx.cats:
+        y = ctx.cats[0]
+        warnings = []
+        if ctx.card(y) > SERIES_CEILING:
+            warnings.append(f"'{y}' has {ctx.card(y)} groups - sort by median and "
+                            "direct-label the extremes; no categorical hues")
+        return _out("dot plot",
+                    "distribution per category: a dot plot (one row per category, "
+                    "one hue) shows spread without a hue per group.",
+                    {"x": m, "y": y, "color": "sequential", "sort": "-x"}, warnings)
+    return _out("histogram",
+                "distribution of a single measure: histogram (one hue, bins carry "
+                "magnitude).",
+                {"x": m, "y": "count", "color": "sequential"})
+
+
+def _relationship(ctx):
+    if len(ctx.measures) < 2:
+        if len(ctx.cats) >= 2 and ctx.measures:
+            return _out("heatmap",
+                        "relationship between two dimensions: a heatmap grid with a "
+                        "sequential ramp.",
+                        {"x": ctx.cats[1], "y": ctx.cats[0], "color": ctx.measures[0]})
+        return _out("table",
+                    "relationship needs two numeric measures; fewer found - show the "
+                    "table or ask for 'magnitude'.",
+                    {"y": ctx.measures[0] if ctx.measures else None})
+    x, y = ctx.measures[0], ctx.measures[1]
+    form = "bubble" if len(ctx.measures) >= 3 else "scatter"
+    enc = {"x": x, "y": y}
+    if form == "bubble":
+        enc["size"] = ctx.measures[2]
+    reason = (f"relationship between two measures -> {form}; one hue unless a "
+              "series dimension is the subject.")
+    warnings = []
+    if ctx.cats:
+        c = ctx.cats[0]
+        n = ctx.card(c)
+        if n > ALL_PAIRS_CAP:
+            warnings.append(f"{LADDER_ALL_PAIRS}: '{c}' has {n} series on an all-pairs "
+                            f"form ({form}) - {FOLD}")
+            enc["facet"] = c
+            return _out("small multiples",
+                        f"{form} faceted by '{c}': all-pairs forms seat at most "
+                        f"{ALL_PAIRS_CAP} hues.", enc, warnings)
+        enc["color"] = c
+    return _out(form, reason, enc, warnings)
+
+
+def _part_to_whole(ctx):
+    if _single_value(ctx):
+        return _stat_tile(ctx, [f"{AP_ONE_BAR}: a single part is a stat tile"])
+    reason = ("choosing-a-form 'Part-to-whole' -> stacked bar (horizontal for many / "
+              "long-named categories); never a pie.")
+    if not ctx.cats:
+        if len(ctx.measures) >= 2 and ctx.n_rows == 1:
+            return _out("stacked bar", reason + " Parts are the measures.",
+                        {"x": "share", "y": None, "color": "measure",
+                         "orientation": "horizontal"})
+        return _out("table", "part-to-whole needs a category of parts; show the table.",
+                    {"y": ctx.measures[0] if ctx.measures else None})
+    parts = ctx.cats[0]
+    value = ctx.measures[0] if ctx.measures else "count"
+    n = ctx.card(parts)
+    if len(ctx.cats) >= 2 or ctx.temporal:
+        x = ctx.temporal[0] if ctx.temporal else ctx.cats[1]
+        if ctx.temporal and len(ctx.cats) >= 1:
+            parts = ctx.cats[0]
+        elif len(ctx.cats) >= 2:
+            x, parts = ctx.cats[0], ctx.cats[1]
+        n = ctx.card(parts)
+        if n > COLOR_CLASS_CAP:
+            return _out("table",
+                        f"part-to-whole with {n} parts per '{x}': past ~7 classes the "
+                        "segments blur - a table (or table + chart).",
+                        {"x": x, "y": value, "color": parts},
+                        [(f"{AP_7_CLASSES}: '{parts}' has {n} classes - a table, or "
+                          "table + chart")])
+        return _out("stacked bar", reason,
+                    {"x": x, "y": value, "color": parts, "sort": "-y"})
+    if n == 2:
+        return _out("meter",
+                    "choosing-a-form 'A single ratio against a limit' -> meter "
+                    "(same-ramp track), not a pie of 2 slices.",
+                    {"x": parts, "y": value},
+                    [f"{AP_ONE_BAR}: 2 slices is one ratio - a meter or the number"])
+    if n > PIE_SLICE_CAP:
+        return _out("bar",
+                    f"part-to-whole with {n} parts: a sorted bar with share labels; "
+                    f"past {PIE_SLICE_CAP} slices a pie cannot be read.",
+                    {"x": parts, "y": value, "color": "sequential",
+                     "orientation": "horizontal", "sort": "-y"},
+                    [(f"{AP_PIE}: {n} slices - a bar, or the numbers "
+                      f"(part-to-whole at a glance only, <= {PIE_SLICE_CAP} segments)")])
+    return _out("stacked bar", reason,
+                {"x": "share", "y": None, "color": parts, "orientation": "horizontal",
+                 "sort": "-y"})
+
+
+def _ranking(ctx):
+    if _single_value(ctx):
+        return _stat_tile(ctx, [f"{AP_ONE_BAR}: nothing to rank"])
+    reason = ("choosing-a-form 'Compare magnitude, low -> high' sorted: a horizontal "
+              "bar ordered by value, one hue.")
+    if not ctx.measures:
+        return _magnitude(ctx, ["ranking needs a measure; ranking by row count"])
+    m = ctx.measures[0]
+    if ctx.temporal and ctx.card(ctx.temporal[0]) == 2 and ctx.cats:
+        return _out("dumbbell",
+                    "choosing-a-form 'Before -> after per item' -> dumbbell, rows "
+                    "sorted by the after value.",
+                    {"x": m, "y": ctx.cats[0], "color": ctx.temporal[0],
+                     "orientation": "horizontal", "sort": "-x"})
+    xs = ctx.cats or ctx.geo
+    if not xs:
+        return _out("table", "ranking needs an item dimension; show the sorted table.",
+                    {"y": m, "sort": "-y"})
+    return _out("bar", reason,
+                {"x": xs[0], "y": m, "color": "sequential", "orientation": "horizontal",
+                 "sort": "-y"})
+
+
+def _flow(ctx):
+    dims = ctx.cats + ctx.geo
+    if len(dims) < 2:
+        return _out("table",
+                    "flow needs a source and a target dimension; fewer found - show "
+                    "the table.", {"y": ctx.measures[0] if ctx.measures else None})
+    hinted = [d for d in dims if d.lower() in FLOW_NAMES]
+    src, dst = (hinted + [d for d in dims if d not in hinted])[:2]
+    value = ctx.measures[0] if ctx.measures else "count"
+    warnings = []
+    for d in (src, dst):
+        if ctx.card(d) > SERIES_CEILING:
+            warnings.append(f"'{d}' has {ctx.card(d)} nodes - color by stage, not by "
+                            f"node ({AP_PAST_8})")
+    return _out("sankey", "flow between stages -> sankey; link width carries the value.",
+                {"x": src, "y": dst, "size": value, "color": src}, warnings)
+
+
+def _spatial(ctx):
+    if not ctx.geo:
+        return _magnitude(ctx, ["no geo column in profile; falling back to magnitude"])
+    g = ctx.geo[0]
+    enc = {"x": g, "y": None, "geo": g}
+    warnings = []
+    if ctx.measures:
+        enc["color"] = ctx.measures[0]
+        return _out("choropleth",
+                    "spatial magnitude -> choropleth with a sequential ramp (all-pairs "
+                    "form: one hue, more-is-darker).", enc, warnings)
+    if ctx.cats:
+        c = ctx.cats[0]
+        n = ctx.card(c)
+        if n > ALL_PAIRS_CAP:
+            warnings.append(f"{LADDER_ALL_PAIRS}: '{c}' has {n} classes on a choropleth "
+                            f"- {FOLD}")
+            enc["facet"] = c
+            return _out("small multiples",
+                        "categorical map with too many classes: one map per class.",
+                        enc, warnings)
+        enc["color"] = c
+        return _out("choropleth", "spatial identity -> categorical choropleth, <= 3 hues.",
+                    enc, warnings)
+    enc["color"] = "count"
+    return _out("choropleth", "spatial counts -> choropleth of row counts per region.",
+                enc, warnings)
+
+
+_RULES = {
+    "magnitude": _magnitude,
+    "identity": _identity,
+    "polarity": _polarity,
+    "headline": _headline,
+    "change-over-time": _change_over_time,
+    "distribution": _distribution,
+    "relationship": _relationship,
+    "part-to-whole": _part_to_whole,
+    "ranking": _ranking,
+    "flow": _flow,
+    "spatial": _spatial,
+}
+
+
+# --------------------------------------------------------------------------
+# public API
+# --------------------------------------------------------------------------
+def infer_job(profile):
+    """Pick the job from the profile shape (deterministic, first match wins)."""
+    ctx = _Ctx(_as_profile(profile))
+    if ctx.n_rows <= 1 and ctx.measures:
+        return "headline"
+    if ctx.geo:
+        return "spatial"
+    dims = ctx.cats + ctx.geo
+    if len(dims) >= 2 and sum(d.lower() in FLOW_NAMES for d in dims) >= 2:
+        return "flow"
+    if ctx.temporal:
+        return "change-over-time"
+    if not ctx.cats and len(ctx.measures) >= 2:
+        return "relationship"
+    if not ctx.cats and len(ctx.measures) == 1:
+        return "distribution"
+    return "magnitude"
+
+
+def _as_profile(frame_or_profile):
+    if isinstance(frame_or_profile, dict):
+        return frame_or_profile
+    if hasattr(frame_or_profile, "dtypes") and hasattr(frame_or_profile, "columns"):
+        return profile_frame(frame_or_profile)
+    raise TypeError("recommend() takes a profile dict or a pandas DataFrame")
+
+
+def recommend(frame_or_profile, job=None):
+    """Return {form, reason, encoding, warnings} for the data and its job."""
+    profile = copy.deepcopy(_as_profile(frame_or_profile))
+    if job is None:
+        job = infer_job(profile)
+    if job not in _RULES:
+        raise ValueError(f"unknown job {job!r}; expected one of {', '.join(JOBS)}")
+    return _RULES[job](_Ctx(profile))
+
+
+# --------------------------------------------------------------------------
+# pandas bridge (lazy import)
+# --------------------------------------------------------------------------
+def _scale_of(series):
+    import pandas as pd
+
+    vals = pd.to_numeric(series, errors="coerce").abs()
+    mx = vals.max(skipna=True)
+    if mx is None or (isinstance(mx, float) and math.isnan(mx)) or mx <= 0:
+        return 0
+    return math.floor(math.log10(float(mx)))
+
+
+def _kind_of(name, series):
+    import pandas as pd
+    from pandas.api import types as pt
+
+    lname = str(name).lower()
+    if lname in GEO_NAMES or getattr(series.dtype, "name", "") == "geometry":
+        return "geo", None
+    if pt.is_bool_dtype(series):
+        return "boolean", None
+    if pt.is_datetime64_any_dtype(series) or isinstance(series.dtype, pd.PeriodDtype):
+        return "temporal", series
+    if pt.is_numeric_dtype(series):
+        if lname in TIME_NAMES:
+            return "temporal", series
+        return "numeric", None
+    non_null = series.dropna()
+    if len(non_null) == 0:
+        return "categorical", None
+    if lname in TIME_NAMES:
+        parsed = pd.to_datetime(non_null.astype(str), errors="coerce", format="ISO8601")
+        if parsed.notna().mean() >= 0.9:
+            return "temporal", parsed
+    if lname in TEXT_NAMES:
+        return "text", None
+    if pt.is_object_dtype(series) or pt.is_string_dtype(series):
+        sample = non_null.astype(str).head(200)
+        parsed = pd.to_datetime(sample, errors="coerce", format="ISO8601")
+        if parsed.notna().mean() >= 0.9:
+            return "temporal", pd.to_datetime(non_null.astype(str), errors="coerce",
+                                              format="ISO8601")
+        ratio = non_null.nunique() / max(len(non_null), 1)
+        avg_len = sample.str.len().mean()
+        if ratio > 0.5 and avg_len > 12:
+            return "text", None
+    return "categorical", None
+
+
+def profile_frame(df):
+    """Build the plain-dict profile recommend() consumes from a pandas DataFrame."""
+    columns = []
+    measures, dimensions = [], []
+    for name in df.columns:
+        series = df[name]
+        kind, parsed = _kind_of(name, series)
+        col = {"name": str(name), "kind": kind,
+               "cardinality": int(series.dropna().nunique())}
+        if kind == "numeric":
+            col["scale"] = _scale_of(series)
+            measures.append(str(name))
+        else:
+            if kind == "temporal":
+                t = parsed if parsed is not None else series
+                t = t.dropna()
+                col["is_sorted_time"] = bool(t.is_monotonic_increasing)
+            if kind != "text":
+                dimensions.append(str(name))
+        columns.append(col)
+    return {"n_rows": len(df), "columns": columns,
+            "measures": measures, "dimensions": dimensions}
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+def _load(path):
+    import pandas as pd
+
+    suffix = path.suffix.lower()
+    if suffix in (".parquet", ".pq"):
+        return pd.read_parquet(path)
+    return pd.read_csv(path)
+
+
+def _format_text(job, inferred, out, profile):
+    enc = " ".join(f"{k}={v}" for k, v in out["encoding"].items() if v is not None)
+    lines = [
+        f"job: {job}{' (inferred)' if inferred else ''}",
+        f"form: {out['form']}",
+        f"reason: {out['reason']}",
+        f"encoding: {enc or '-'}",
+        "warnings: " + ("; ".join(out["warnings"]) if out["warnings"] else "none"),
+        (f"profile: {profile['n_rows']} rows, measures={profile['measures']}, "
+         f"dimensions={profile['dimensions']}"),
+    ]
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ap = argparse.ArgumentParser(description="Recommend a chart form for a csv/parquet file.")
+    ap.add_argument("path", help="csv or parquet file")
+    ap.add_argument("--job", choices=JOBS, default=None,
+                    help="reader's job; inferred from the profile when omitted")
+    ap.add_argument("--json", action="store_true", help="print JSON instead of text")
+    args = ap.parse_args(argv)
+    path = Path(args.path)
+    if not path.is_file():
+        print(f"error: no such file: {path}", file=sys.stderr)
+        return 2
+    try:
+        df = _load(path)
+    except Exception as exc:  # noqa: BLE001 - surface loader errors as exit 2
+        print(f"error: could not load {path}: {exc}", file=sys.stderr)
+        return 2
+    profile = profile_frame(df)
+    job = args.job or infer_job(profile)
+    out = recommend(profile, job)
+    if args.json:
+        payload = {"job": job, "job_inferred": args.job is None, **out, "profile": profile}
+        print(json.dumps(payload, indent=2))
+    else:
+        print(_format_text(job, args.job is None, out, profile))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
