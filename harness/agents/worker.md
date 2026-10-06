@@ -39,7 +39,7 @@ Your prompt is a structured JSON object. Fields:
 
 ## Output
 
-Write exactly one report to the `output` path — every field filled, shapes exact. Then run `py -3.13 tools/validate_report.py {output}` and fix every ERROR (a Stop hook enforces this).
+Write exactly one report to the `output` path — every field filled, shapes exact. Then run `py -3.13 tools/validate_report.py {output}` and fix every ERROR before finishing — the orchestrator rejects invalid reports.
 
 ```json
 {

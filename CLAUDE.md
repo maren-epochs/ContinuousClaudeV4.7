@@ -33,7 +33,7 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 7 hooks (session-
 | `post-edit-diagnostics.mjs` | PostToolUse:Edit\|Write\|MultiEdit\|Update | Lint after edits; Python via ruff direct (E9/F63/F7/F82/syntax = error), others via tldr |
 | `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction |
 | `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff; falls back to transcript usage when no statusline ran (headless) |
-| `worker-report-check.mjs` | SubagentStop (worker frontmatter) | Runs `tools/validate_report.py` on the worker's report; blocks ≤2× on ERRORs |
+| `worker-report-check.mjs` | SubagentStop (worker frontmatter) | Runs `tools/validate_report.py` on the worker's report and blocks on ERRORs. Best-effort: background workers end at handback, so the block is recorded but does not resume them — the VALIDATE schema gate is the binding check |
 | `session-start.mjs` | SessionStart (not registered by default) | startup/clear: `bloks context` (capped 6000 chars); compact: newest handoff from the handoff root |
 
 Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. Tests: `.claude/hooks/test_*.sh`.
