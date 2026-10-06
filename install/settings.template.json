@@ -225,7 +225,6 @@
           },
           {
             "type": "command",
-            "if": "Edit(**/continuum/autonomous/*/reports/*.json)",
             "command": "node .claude/hooks/worker-report-check.mjs",
             "timeout": 25
           }
