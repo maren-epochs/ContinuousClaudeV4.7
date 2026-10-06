@@ -222,6 +222,12 @@
             "if": "Edit(*.rs)",
             "command": "node .claude/hooks/post-edit-diagnostics.mjs",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/continuum/autonomous/*/reports/*.json)",
+            "command": "node .claude/hooks/worker-report-check.mjs",
+            "timeout": 25
           }
         ]
       }
@@ -233,6 +239,17 @@
           {
             "type": "command",
             "command": "node .claude/hooks/auto-handoff-stop.mjs"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/session-start.mjs"
           }
         ]
       }
