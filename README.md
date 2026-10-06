@@ -9,7 +9,7 @@ harness/
   skills/          9 workflow skills
   agents/          worker + oracle
 .claude/
-  hooks/           5 hooks (.mjs — cross-platform)
+  hooks/           7 hooks + tldr-shim helper (.mjs — cross-platform), test_*.sh per hook
   settings.json    hook wiring + env config
 scripts/
   readiness.sh     assess project health (27 criteria, 5 levels)
@@ -42,9 +42,11 @@ All hooks are plain `.mjs` (ES modules). No build step, no dependencies — Node
 |------|-------|---------|
 | `status.mjs` | statusLine | Shows context %, git branch, staged/unstaged counts, goal from handoffs |
 | `tldr-read.mjs` | PreToolUse:Read | Injects structural nav map for large code files, truncates to save tokens |
-| `post-edit-diagnostics.mjs` | PostToolUse | Runs type checker + linter after edits for immediate feedback |
-| `pre-compact.mjs` | PreCompact | Writes auto-handoff YAML before context compaction |
-| `auto-handoff-stop.mjs` | Stop | Blocks at 85% context usage to force handoff before data loss |
+| `post-edit-diagnostics.mjs` | PostToolUse | Lint after edits (Python: ruff direct, broken-code codes as errors; others: tldr diagnostics) |
+| `pre-compact.mjs` | PreCompact | Writes an auto-handoff (markdown) before compaction to the handoff root: project `thoughts/shared/handoffs/` if present, else `~/.claude/handoffs/<project>/` |
+| `auto-handoff-stop.mjs` | Stop | Blocks at 85% context usage to force handoff; uses transcript usage when no statusline ran (headless) |
+| `worker-report-check.mjs` | SubagentStop (worker frontmatter) | Validates the worker's report JSON; advisory — the VALIDATE schema gate is binding |
+| `session-start.mjs` | SessionStart (opt-in) | bloks context on startup/clear; newest handoff after compaction |
 
 Hooks that use `tldr` (tldr-read, post-edit-diagnostics) fall through silently if tldr is not installed.
 
