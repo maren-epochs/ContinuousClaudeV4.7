@@ -1,0 +1,7 @@
+# Reviewed allowlist for tools/privacy_guard.py (pre-commit privacy-guard hook).
+# One Python regex per line; a hit is allowed when its matched text FULLY matches.
+# Keep entries narrow, add a reason above each, and never list a private term here.
+
+# tools/test_context_ledger.py: synthetic transcript file names (not real session ids).
+1{8}-aaaa-bbbb-cccc-2{12}
+3{8}-aaaa-bbbb-cccc-4{12}
