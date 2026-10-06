@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 5 hooks.
+Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 6 hooks (+ tldr-shim helper).
 
 ## Skills
 
@@ -21,18 +21,23 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 5 hooks.
 
 | Agent | Role |
 |-------|------|
-| `worker` | Executes atomic tasks — full autonomy over implementation |
+| `worker` | Executes atomic tasks — full autonomy over implementation. `model: inherit`, `effort: high`, `maxTurns: 60`; frontmatter Stop hook validates its report |
 | `oracle` | External research — docs, APIs, best practices |
 
 ## Hooks (all .mjs — cross-platform)
 
 | Hook | Event | What it does |
 |------|-------|-------------|
-| `status.mjs` | statusLine | Context %, git info, goal from handoffs |
-| `tldr-read.mjs` | PreToolUse:Read | Injects structural nav map for large code files, truncates |
-| `post-edit-diagnostics.mjs` | PostToolUse:Edit\|Write\|MultiEdit\|Update | Type errors + lint after edits |
+| `status.mjs` | statusLine | Context % (Claude Code's `used_percentage`, no added overhead), git info, goal from handoffs |
+| `tldr-read.mjs` | PreToolUse:Read | Injects structural nav map for large code files, truncates (mtime cache; `tldr-shim.mjs` serves cold reads, autostart via `TLDR_READ_SHIM_AUTOSTART=1`) |
+| `post-edit-diagnostics.mjs` | PostToolUse:Edit\|Write\|MultiEdit\|Update | Lint after edits; Python via ruff direct (E9/F63/F7/F82/syntax = error), others via tldr |
 | `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction |
-| `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff |
+| `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff; falls back to transcript usage when no statusline ran (headless) |
+| `worker-report-check.mjs` | SubagentStop (worker frontmatter) | Runs `tools/validate_report.py` on the worker's report; blocks ≤2× on ERRORs |
+
+Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. Tests: `.claude/hooks/test_*.sh`.
+
+**Handoff root (all handoff readers/writers):** project `thoughts/shared/handoffs/` if it exists, else `~/.claude/handoffs/<project-dir-basename>/` — user repos never get a `thoughts/` dir.
 
 ## External Tools (optional, on PATH)
 
@@ -41,16 +46,17 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 5 hooks.
 | [bloks](https://github.com/maren-epochs/bloks) (fork; upstream archived) | Library knowledge cards — API docs, taste, corrections |
 | [tldr](https://github.com/parcadei/tldr-code) | Token-efficient code analysis (AST, call graphs, diagnostics) |
 | [ouros](https://github.com/parcadei/ouros) | Sandboxed Python REPL with fork/save/resume |
-| [fastedit](https://github.com/parcadei/fastedit) | Fast code editing via merge model (`pip install fastedits`) |
+| [fastedit](https://github.com/parcadei/fastedit) | Fast code editing via merge model (`pip install fastedits`). Not registered: its hook denies Edit in favor of a `fast_edit` MCP server, and it targets Apple-Silicon MLX |
 
 ## Scripts
 
-- `scripts/readiness.sh` — assess project health (27 criteria, 5 levels)
+- `scripts/readiness.sh` — assess project health (27 criteria, 5 levels); a failed tldr sub-analysis is SKIP with a reason, never a fabricated pass
 - `scripts/readiness-fix.sh` — auto-remediate readiness gaps
 
 ## Tool Bridges (in tools/)
 
-- `ouros_harness.py` — Ouros REPL bridge with exa_search, nia_search, llm_call, agent_call
+- `ouros_harness.py` — Ouros REPL bridge with exa_search, nia_search, llm_call, agent_call (`--max-turns` default 25)
+- `validate_report.py` — worker report + contract.json schema check (stdlib); VALIDATE gates on it
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
 
