@@ -21,7 +21,7 @@ Refusals (each names its anti-patterns.md entry in ``warnings``):
   * categorical series past 8 -> fold into Other / small multiples
   * more than ~7 color classes carrying meaning -> table
 
-Color jobs (``encoding["color"]``; color-formula.md 'The four jobs'):
+Color jobs (``encoding["color"]``; color-formula.md 'The four jobs' + Ordinal):
 
   * ``"single"``      one color, categorical slot 1, for every mark.  Used when
                       position/length already carries the value: a one-measure
@@ -29,13 +29,16 @@ Color jobs (``encoding["color"]``; color-formula.md 'The four jobs'):
                       a dot plot.  Never a value-ramp on nominal categories
                       (anti-patterns.md "A value-ramp on nominal categories":
                       it double-encodes bar length as hue).
-  * ``"sequential"``  a one-hue light->dark ramp across ORDINAL categories
-                      (profile column ``"ordered": true`` - tiers, funnel
-                      stages, age bands); those bars keep their natural order
-                      (no value sort, which would scramble the ramp).  Validate
-                      the picks with validate_palette ``--ordinal``.
-  * a measure name    the color channel itself carries magnitude (heatmap
-                      cells, choropleth regions) - a sequential ramp of it.
+  * ``"ordinal"``     a one-hue ramp in monotone lightness steps across
+                      ORDERED categories (profile column ``"ordered": true`` -
+                      tiers, funnel stages, age bands); those bars keep their
+                      natural order (no value sort, which would scramble the
+                      ramp).  Light end >= 2:1 on the surface; validate the
+                      picks with validate_palette ``--ordinal``.
+  * a measure name    the color channel itself carries a continuous measure
+                      (heatmap cells, choropleth regions) - a sequential ramp
+                      of it.  ``"sequential"`` is never returned literally:
+                      only a continuous measure earns the sequential job.
   * a dimension name / ``"measure"``  categorical identity, slots 1..N.
   * ``"diverging"``, ``"1 hue + gray"``  polarity / emphasis.
 
@@ -178,12 +181,12 @@ def _bar_color(ctx, x, encoding):
 
     Nominal categories get ONE color - bar length carries magnitude, and a
     value-ramp would re-encode it (anti-patterns.md "A value-ramp on nominal
-    categories").  Ordinal categories take the sequential ramp in their natural
-    order, so any value sort is dropped.
+    categories").  Ordinal categories take the "ordinal" job (one-hue ramp) in
+    their natural order, so any value sort is dropped.
     """
     enc = dict(encoding)
     if ctx.ordered(x):
-        enc["color"] = "sequential"
+        enc["color"] = "ordinal"
         enc.pop("sort", None)
     else:
         enc["color"] = "single"

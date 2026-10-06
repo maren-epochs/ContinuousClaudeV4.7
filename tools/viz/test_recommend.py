@@ -6,7 +6,8 @@ Covers:
   (c) refusals: dual-axis, pie past 5 slices, 2-slice pie, one-bar chart,
       categorical series past 8 (fold into Other / small multiples)
   (c2) color jobs: no value-ramp on nominal categories (one color, slot 1);
-      sequential only where color carries magnitude or categories are ordinal
+      ordered categories take the "ordinal" job (one-hue ramp, natural order);
+      sequential only where the color channel carries a continuous measure
   (d) determinism: same profile -> same output
   (e) profile_frame(df) builds the plain-dict profile (needs pandas)
   (f) CLI: csv/parquet path, --job, --json, exit codes
@@ -432,8 +433,9 @@ P_COUNTS = profile([col("status", "categorical", 4)], n_rows=40)
 class ColorJobTests(unittest.TestCase):
     """anti-patterns.md 'A value-ramp on nominal categories': a single-measure bar
     over nominal categories takes ONE color (slot 1); bar length carries magnitude.
-    'sequential' only where the color channel itself carries magnitude (heatmap,
-    choropleth - encoded as the measure name) or the categories are ordinal."""
+    Ordered categories take the 'ordinal' job (color-formula.md 'Ordinal').  A
+    sequential ramp only where the color channel itself carries a continuous
+    measure (heatmap, choropleth - encoded as the measure name)."""
 
     def test_nominal_magnitude_bar_is_single_color(self):
         out = recommend(P_CAT_MEASURE, "magnitude")
@@ -450,7 +452,7 @@ class ColorJobTests(unittest.TestCase):
     def test_ordinal_magnitude_bar_takes_the_ramp_in_natural_order(self):
         out = recommend(P_ORDINAL, "magnitude")
         self.assertEqual(out["form"], "bar")
-        self.assertEqual(out["encoding"]["color"], "sequential")
+        self.assertEqual(out["encoding"]["color"], "ordinal")
         # a value sort would scramble the ramp; ordinal bars keep category order
         self.assertNotIn("sort", out["encoding"])
 
@@ -494,12 +496,22 @@ class ColorJobTests(unittest.TestCase):
         for prof in nominal:
             for job in JOBS:
                 out = recommend(prof, job)
+                self.assertNotIn(out["encoding"].get("color"), ("sequential", "ordinal"),
+                                 f"{job}: {out}")
+
+    def test_sequential_is_never_a_category_color_job(self):
+        # 'sequential' is reserved for a continuous measure on the color channel,
+        # which recommend() encodes by the measure's name - never the literal job
+        for prof in (P_ORDINAL, P_COUNTS, P_CAT_MEASURE, P_GRID, P_GEO):
+            for job in JOBS:
+                out = recommend(prof, job)
                 self.assertNotEqual(out["encoding"].get("color"), "sequential",
                                     f"{job}: {out}")
 
     def test_color_job_names_documented(self):
         doc = recommend_mod.__doc__
         self.assertIn("single", doc)
+        self.assertIn('``"ordinal"``', doc)
         self.assertIn("value-ramp on nominal categories", doc)
 
 
@@ -549,7 +561,7 @@ class ProfileFrameTests(unittest.TestCase):
         self.assertTrue(by["tier"]["ordered"])
         self.assertNotIn("ordered", by["team"])
         out = recommend(df[["tier", "sales"]], "magnitude")
-        self.assertEqual(out["encoding"]["color"], "sequential")
+        self.assertEqual(out["encoding"]["color"], "ordinal")
         out = recommend(df[["team", "sales"]], "magnitude")
         self.assertEqual(out["encoding"]["color"], "single")
 
