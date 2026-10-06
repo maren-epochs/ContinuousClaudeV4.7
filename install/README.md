@@ -85,6 +85,22 @@ Environment knobs on the hook side:
 
 No `settings.json` changes are required. Requires `tldr-mcp` on PATH or in `~/.cargo/bin`.
 
+## SessionStart hook (optional)
+
+`hooks/session-start.mjs` is installed but not registered. On `compact` it injects the newest
+handoff from the handoff root (so work resumes from the auto-handoff pre-compact just wrote);
+on `startup`/`clear` it injects `bloks context` (capped at 6000 chars, about 2K tokens per
+session). Register compact-only for zero per-session cost, or `startup|clear|compact` for both:
+
+```json
+"SessionStart": [
+  {"matcher": "compact",
+   "hooks": [{"type": "command", "command": "node \"<home>/.claude/hooks/session-start.mjs\""}]}
+]
+```
+
+`SESSION_START_CAP` changes the cap. Tests: `bash .claude/hooks/test_session_start.sh`.
+
 ## Keeping up with upstream
 
 ```bash
