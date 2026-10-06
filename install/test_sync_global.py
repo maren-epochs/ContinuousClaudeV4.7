@@ -10,11 +10,16 @@ Runs the sync script against a temporary --target directory (never the real
   4. dry-run drift checks (VAL-104): stale .ccv47-installed SHA notes/warnings
      and read-only hook-registration warnings against settings.json, none of
      which change the exit-code contract.
+  5. tools/ data files (.json, e.g. tools/viz/palette.json) are installed, and
+     `py -3.13 tools/viz/<x>.py` commands in skills are rewritten to absolute
+     paths exactly like the existing `py -3.13 tools/validate_report.py` rule
+     (VAL-301).
 
 Stdlib only. Run as: py -3.13 install/test_sync_global.py
 """
 from __future__ import annotations
 
+import importlib
 import json
 import subprocess
 import sys
@@ -24,7 +29,9 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "sync_global.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from sync_global import NOT_EVENT_HOOKS  # noqa: E402
+# importlib (not a late `import`) keeps ruff quiet under both default (E402) and RUF100 configs
+_sync = importlib.import_module("sync_global")
+NOT_EVENT_HOOKS, render, rewrites = _sync.NOT_EVENT_HOOKS, _sync.render, _sync.rewrites
 
 TIMEOUT = 120
 HOOKS = sorted(
@@ -38,7 +45,7 @@ FAKE_SHA = "0" * 40
 def run_sync(target: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--target", str(target), *extra],
-        capture_output=True, text=True, timeout=TIMEOUT,
+        capture_output=True, text=True, timeout=TIMEOUT, check=False,
     )
 
 
@@ -180,6 +187,43 @@ class DriftChecks(unittest.TestCase):
             self.assertEqual(len(sha_warns), 1,
                              f"expected one SHA-mismatch warning, got: {dry.stdout}")
             self.assertIn("HEAD", sha_warns[0])
+
+
+class ToolsInstall(unittest.TestCase):
+    """VAL-301: the globally installed tools.viz package must be complete and reachable."""
+
+    def test_tools_json_installed(self) -> None:
+        src = SCRIPT.parent.parent / "tools" / "viz" / "palette.json"
+        self.assertTrue(src.is_file(), f"fixture missing: {src}")
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, f"stdout:\n{applied.stdout}\nstderr:\n{applied.stderr}")
+            dst = target / "tools" / "viz" / "palette.json"
+            self.assertTrue(dst.is_file(), "tools/viz/palette.json must be installed")
+            self.assertEqual(json.loads(dst.read_text(encoding="utf-8")),
+                             json.loads(src.read_text(encoding="utf-8")))
+            # installed skill no longer carries repo-relative viz commands
+            skill = (target / "skills" / "visualize" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertNotIn("py -3.13 tools/viz/", skill)
+            self.assertIn(f"{target.as_posix()}/tools/viz/recommend.py", skill)
+
+    def test_viz_command_rewritten_like_other_tools(self) -> None:
+        dest, python = "C:/Users/x/.claude", "py -3.13"
+        rules = rewrites(dest, python)
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            md = Path(td) / "SKILL.md"
+            md.write_text(
+                "py -3.13 tools/validate_report.py r.json\n"
+                "py -3.13 tools/viz/recommend.py agg.parquet --json\n"
+                "python3 tools/viz/export.py render out.html out.png\n",
+                encoding="utf-8")
+            out = render(md, rules, "\n").decode("utf-8").splitlines()
+        self.assertEqual(out, [
+            f"{python} {dest}/tools/validate_report.py r.json",
+            f"{python} {dest}/tools/viz/recommend.py agg.parquet --json",
+            f"{python} {dest}/tools/viz/export.py render out.html out.png",
+        ])
 
 
 if __name__ == "__main__":

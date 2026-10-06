@@ -38,7 +38,9 @@ MAPPINGS = [
     ("scripts", "scripts"),
     ("tools", "tools"),
 ]
-INCLUDE_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".py", ".txt"}
+# .json: data files tools load at runtime (tools/viz/palette.json). Global, not tools/-only:
+# no other .json exists in the mapped trees; settings.json lives outside them.
+INCLUDE_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".py", ".txt", ".json"}
 # installed .mjs not registered in settings.json: skip registration check
 # (tldr-shim is spawned by tldr-read; worker-report-check is a worker.md frontmatter hook)
 NOT_EVENT_HOOKS = {"tldr-shim.mjs", "worker-report-check.mjs"}
@@ -50,7 +52,7 @@ def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
         (re.compile(r"\b(?:py -3\.13|python3?) tools/ouros_harness\.py"), f"{python} {harness}"),
         (re.compile(r"(?m)^tools/ouros_harness\.py"), f"{python} {harness}"),
         (re.compile(r"`tools/ouros_harness\.py`"), f"`{harness}`"),
-        (re.compile(r"\b(?:py -3\.13|python3?) tools/(validate_report\.py)"), rf"{python} {dest}/tools/\1"),
+        (re.compile(r"\b(?:py -3\.13|python3?) tools/(validate_report\.py|viz/[\w-]+\.py)"), rf"{python} {dest}/tools/\1"),
         (re.compile(r"\bbash scripts/(readiness(?:-fix)?\.sh)"), rf"bash {dest}/scripts/\1"),
         (re.compile(r"\bnode \.claude/hooks/([\w-]+\.mjs)"), rf'node "{dest}/hooks/\1"'),
         (re.compile(r"/tmp/ouros/\.venv/bin/pip install"), f"{python} -m pip install"),
