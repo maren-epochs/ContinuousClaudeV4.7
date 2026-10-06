@@ -9,6 +9,7 @@ Matplotlib output is read back with PIL to prove dark and light differ.
 """
 import contextlib
 import io
+import itertools
 import os
 import re
 import subprocess
@@ -392,12 +393,43 @@ class AltairStyle(unittest.TestCase):
             self.assertEqual(c["range"]["category"], palette.categorical(mode))
             self.assertEqual(c["range"]["diverging"], list(palette.diverging(mode)))
             self.assertEqual(c["range"]["heatmap"], palette.sequential())
+            self.assertEqual(c["range"]["ramp"], palette.sequential())
             self.assertEqual(c["legend"]["orient"], "top")
             self.assertEqual(c["title"]["color"], palette.text(mode)["primary"])
             self.assertEqual(c["bar"]["stroke"], sf["surface"])
             self.assertEqual(c["line"]["strokeWidth"], 2)
             self.assertIn("font", c)
         self.assertEqual(alt.theme.active, before)
+
+    def test_ordinal_range_is_bounded_and_validates(self):
+        # VAL-501: range.ordinal stays inside palette.json ordinal_bounds for the
+        # mode, adjacent steps >= 100 apart, passes validate_palette --ordinal.
+        from tools.viz import validate_palette
+        data = palette.load()
+        full = palette.ramp()
+        names = list(full)
+        by_hex = {v: k for k, v in full.items()}
+        validator = os.path.join(REPO_ROOT, "tools", "viz", "validate_palette.py")
+        for mode in MODES:
+            b = data["ordinal_bounds"][mode]
+            lo = int(b.get("min_step", names[0]))
+            hi = int(b.get("max_step", names[-1]))
+            ordinal = style.altair_config(mode)["config"]["range"]["ordinal"]
+            self.assertGreaterEqual(len(ordinal), 5, (mode, ordinal))
+            steps = [int(by_hex[c]) for c in ordinal]
+            self.assertTrue(all(lo <= s <= hi for s in steps), (mode, steps, lo, hi))
+            gaps = [b2 - a for a, b2 in itertools.pairwise(steps)]
+            self.assertTrue(all(g >= 100 for g in gaps), (mode, steps))
+            rep = validate_palette.validate(ordinal, mode=mode, ordinal=True)
+            self.assertTrue(rep["ok"], (mode, rep["checks"]))
+            proc = subprocess.run(
+                [sys.executable, validator, ",".join(ordinal), "--mode", mode, "--ordinal"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                check=False)
+            self.assertEqual(proc.returncode, 0, (mode, proc.stdout, proc.stderr))
+        light = style.altair_config("light")["config"]["range"]["ordinal"]
+        dark = style.altair_config("dark")["config"]["range"]["ordinal"]
+        self.assertNotEqual(light, dark)
 
     def test_renders(self):
         import altair as alt

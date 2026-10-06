@@ -370,7 +370,7 @@ def altair_config(mode: str = "light") -> dict:
             "text": {"color": tx["primary"], "font": family},
             "range": {
                 "category": palette.categorical(mode),
-                "ordinal": palette.sequential(),
+                "ordinal": palette.ordinal(mode),
                 "heatmap": palette.sequential(),
                 "ramp": palette.sequential(),
                 "diverging": list(palette.diverging(mode)),

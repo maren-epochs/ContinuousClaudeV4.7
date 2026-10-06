@@ -3,6 +3,7 @@
 
 Run from the repo root:  py -3.13 tools/viz/test_palette.py
 """
+import itertools
 import json
 import os
 import subprocess
@@ -126,6 +127,58 @@ class RampsAreLightnessMonotonic(unittest.TestCase):
         rep = validate_palette.validate(picks, mode="light", ordinal=True)
         self.assertTrue(rep["ok"], statuses(rep))
         self.assertEqual(rep["checks"]["Single hue"]["status"], "PASS")
+
+
+class OrdinalIsBounded(unittest.TestCase):
+    """palette.ordinal(mode): ramp steps inside ordinal_bounds, >= 100 apart, validator-clean."""
+
+    def bounds_for(self, mode, data=None):
+        data = data or raw_json()
+        b = data["ordinal_bounds"][mode]
+        names = sorted(data["ramps"][data["sequential_default"]], key=int)
+        lo = int(b.get("min_step", names[0]))
+        hi = int(b.get("max_step", names[-1]))
+        return lo, hi
+
+    def test_steps_inside_bounds_and_spaced(self):
+        for mode in MODES:
+            lo, hi = self.bounds_for(mode)
+            steps = palette.ordinal_steps(mode)
+            self.assertGreaterEqual(len(steps), 5, (mode, steps))
+            self.assertEqual(int(steps[0]), lo, (mode, steps))
+            for s in steps:
+                self.assertTrue(lo <= int(s) <= hi, (mode, s, lo, hi))
+            for a, b in itertools.pairwise(steps):
+                self.assertGreaterEqual(int(b) - int(a), palette.ORDINAL_MIN_GAP, (mode, steps))
+            self.assertEqual(palette.ordinal(mode), palette.sequential(steps=steps))
+
+    def test_expected_steps_from_current_json(self):
+        self.assertEqual(palette.ordinal_steps("light"), ["250", "350", "450", "550", "650"])
+        self.assertEqual(palette.ordinal_steps("dark"), ["100", "200", "300", "400", "500", "600"])
+
+    def test_passes_validator_ordinal_both_modes(self):
+        for mode in MODES:
+            colors = palette.ordinal(mode)
+            rep = validate_palette.validate(colors, mode=mode, ordinal=True)
+            self.assertTrue(rep["ok"], (mode, statuses(rep)))
+            proc = subprocess.run(
+                [sys.executable, VENDORED, ",".join(colors), "--mode", mode, "--ordinal"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                check=False)
+            self.assertEqual(proc.returncode, 0, (mode, proc.stdout, proc.stderr))
+
+    def test_bounds_are_read_from_json(self):
+        from unittest import mock
+        data = raw_json()
+        data["ordinal_bounds"]["light"]["min_step"] = "300"
+        data["ordinal_bounds"]["dark"]["max_step"] = "500"
+        with mock.patch.object(palette, "_load_cached", lambda: data):
+            self.assertEqual(palette.ordinal_steps("light"), ["300", "400", "500", "600", "700"])
+            self.assertEqual(palette.ordinal_steps("dark"), ["100", "200", "300", "400", "500"])
+
+    def test_bad_mode_raises(self):
+        with self.assertRaises(ValueError):
+            palette.ordinal("sepia")
 
 
 class JsonAndPythonStayInSync(unittest.TestCase):

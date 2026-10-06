@@ -8,6 +8,7 @@ skill's references/palette.md); this module never carries a hex literal.
     palette.categorical("light")        # 8 hex, slot order (never re-order)
     palette.categorical("dark", 3)      # first three slots (all-pairs cap)
     palette.sequential()                # default hue ramp, light -> dark
+    palette.ordinal("dark")             # ramp steps inside ordinal_bounds, >= 100 apart
     palette.diverging("light")          # (low, mid, high)
     palette.css_tokens("dark")          # "--surface-1: #1a1a19;" lines
 """
@@ -19,6 +20,7 @@ from pathlib import Path
 PALETTE_PATH = Path(__file__).with_name("palette.json")
 MODES = ("light", "dark")
 MAX_SERIES = 8
+ORDINAL_MIN_GAP = 100  # min ramp-step distance between adjacent ordinal colors
 
 
 @functools.lru_cache(maxsize=1)
@@ -85,6 +87,38 @@ def sequential(hue=None, steps=None):
             raise ValueError(f"step {s!r} not in ramp; available: {list(full)}")
         out.append(full[key])
     return out
+
+
+def ordinal_steps(mode="light", hue=None, min_gap=None):
+    """Ramp step names for an ordinal scale in one mode, light -> dark.
+
+    Bounds come from palette.json ``ordinal_bounds[mode]``: ``min_step`` caps the
+    light end, ``max_step`` the dark end; a missing end is the ramp end. Inside
+    the bounds, steps are taken from the light bound onward, each at least
+    ``min_gap`` (default ORDINAL_MIN_GAP = 100) past the previous one.
+    """
+    _mode(mode)
+    gap = ORDINAL_MIN_GAP if min_gap is None else min_gap
+    bounds = _load_cached()["ordinal_bounds"][mode]
+    names = list(ramp(hue))
+    lo = int(bounds.get("min_step", names[0]))
+    hi = int(bounds.get("max_step", names[-1]))
+    picked = []
+    for name in names:
+        step = int(name)
+        if lo <= step <= hi and (not picked or step - int(picked[-1]) >= gap):
+            picked.append(name)
+    return picked
+
+
+def ordinal(mode="light", hue=None):
+    """Hex list for an ordinal scale: ordinal_steps(mode) of the hue ramp, light -> dark.
+
+    The list is short (light 5, dark 6 with the current palette.json). Vega-Lite
+    ``range.ordinal`` repeats colors when a field has more levels than the list
+    has entries - bin or fold above that count instead of relying on the cycle.
+    """
+    return sequential(hue, steps=ordinal_steps(mode, hue))
 
 
 def diverging(mode="light"):
