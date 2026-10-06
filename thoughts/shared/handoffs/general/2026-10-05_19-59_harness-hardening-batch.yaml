@@ -7,7 +7,7 @@ outcome: PARTIAL_PLUS
 
 # ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
 goal: Hardened harness - sandbox, guards, validator, bloks fork, handoff root; E2E /autonomous passed
-now: Answer decision queue D1-D8 (continuum/research/harness-review-2026-10-05/decision-queue.md)
+now: All decisions D1-D8 applied (D3 D4 D5 deferred by choice, D7 not needed). Next - measure context fork (D5) on one long session
 test: for t in .claude/hooks/test_*.sh; do bash $t | tail -1; done; py -3.13 tools/test_ouros_policy.py; py -3.13 tools/test_validate_report.py; py -3.13 install/test_sync_global.py; py -3.13 tools/test_ouros_harness_ds.py
 
 # ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
