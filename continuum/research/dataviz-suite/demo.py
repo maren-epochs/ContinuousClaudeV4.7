@@ -1,12 +1,12 @@
-"""End-to-end /visualize demo on vega_datasets (seattle_weather + stocks).
-
-Run from the repo root: `py -3.13 continuum/research/dataviz-suite/demo.py`.
-Follows harness/skills/visualize/SKILL.md step by step (FORM, COLOR, VALIDATE,
-MARKS, HOVER, ACCESSIBILITY, OUTPUT); LOOK is done by a human/agent reading the
-PNGs. Writes every artifact into ./out (overwritten on re-run) and prints only
-absolute paths, one per line.
-"""
-import sys, pathlib; sys.path.insert(0, str(next(p for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists())))  # noqa: I001 - skill PRELUDE, verbatim
+import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)  # noqa: I001 - skill PRELUDE, verbatim
+# End-to-end /visualize demo on vega_datasets (seattle_weather + stocks).
+#
+# Run from the repo root: `py -3.13 continuum/research/dataviz-suite/demo.py`.
+# Follows harness/skills/visualize/SKILL.md step by step (FORM, COLOR, VALIDATE,
+# MARKS, HOVER, ACCESSIBILITY, OUTPUT); LOOK is done by a human/agent reading the
+# PNGs. Writes every artifact into ./out (overwritten on re-run) and prints only
+# absolute paths (one per line) plus one `capabilities_for:` line.
+# Line 1 is the skill PRELUDE, verbatim: it registers tools/viz as `ccv_viz`.
 
 import json
 import os
@@ -18,11 +18,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
-from great_tables import GT, loc
-from great_tables import style as gt_style
+from ccv_viz import artifact_page, export, palette, recommend, style
+from great_tables import GT
 from vega_datasets import data
-
-from tools.viz import artifact_page, export, palette, recommend, style
 
 VIZ = Path(palette.PALETTE_PATH).parent          # tools/viz the prelude resolved
 OUT = Path(__file__).resolve().parent / "out"
@@ -127,9 +125,8 @@ def main():
         plt.close(fig)
         emit(res["png"], res["svg"])
 
-    # Table: seattle weather by calendar month (2012-2015). great_tables has no style.py
-    # helper (skill step 4 lists none), so the palette tokens are mapped by hand here.
-    w = weather.assign(year=weather["date"].dt.year, month=weather["date"].dt.month)
+    # Table: seattle weather by calendar month (2012-2015), house style via style.gt_style.
+    w =weather.assign(year=weather["date"].dt.year, month=weather["date"].dt.month)
     monthly_total = w.groupby(["year", "month"])["precipitation"].sum().groupby("month").mean()
     summary = pd.DataFrame({
         "month": pd.to_datetime(sorted(w["month"].unique()), format="%m").strftime("%b"),
@@ -138,74 +135,44 @@ def main():
         "weather": w.groupby("month")["weather"].agg(lambda s: s.value_counts().index[0])
                     .to_numpy(),
     })
-    surf, text = palette.surface("light"), palette.text("light")
     table = (
-        GT(summary, rowname_col="month")
+        GT(summary, rowname_col="month", id="weather-table")   # fixed id: stable output
         .tab_header(title="Seattle weather by month",
                     subtitle="2012-2015 averages; precipitation is the mean monthly total")
         .cols_label(temp_max="Mean daily max (C)", precip="Precipitation (mm)",
                     weather="Most common weather")
         .fmt_number(columns=["temp_max", "precip"], decimals=1)
         .tab_source_note("Source: vega_datasets seattle_weather")
-        .tab_style(gt_style.text(color=text["secondary"]),
-                   [loc.column_labels(), loc.subtitle(), loc.source_notes()])
-        .tab_options(
-            table_background_color=surf["surface"], table_font_color=text["primary"],
-            table_font_names=palette.font()["family_stack"], heading_align="left",
-            table_border_top_color=surf["surface"], table_border_bottom_color=surf["surface"],
-            heading_border_bottom_color=surf["surface"],
-            column_labels_border_top_color=surf["surface"],
-            column_labels_border_bottom_color=surf["axis"],
-            table_body_hlines_color=surf["grid"], table_body_border_bottom_color=surf["axis"],
-            table_body_border_top_color=surf["axis"], stub_border_width="0px",
-            # LOOK fix: GT default rules are 2px; hairlines per the house style.
-            column_labels_border_bottom_width="1px", table_body_border_bottom_width="1px",
-            table_body_border_top_width="0px",   # else it stacks under the label rule
-        )
     )
+    table = style.gt_style(table, "light")
     res = export.save(table, OUT / "weather-table", formats=("png",), mode="light")
     emit(res["png"])
 
     # 5 HOVER + 7b OUTPUT: two-chart Artifact page.
-    # Chart A (Vega-Lite): daily temp_max + 7-day rolling mean via a window transform.
-    # House rule (skill step 4): raw + smoothed pair -> raw in the muted text token at 1px
-    # (dense: 1461 points), only the smoothed mean in categorical slot 1 at 2px.
-    # Why not artifact_page's fold handling: fold gives every folded series a categorical
-    # slot (fold order), so the raw series would get slot 2, not the muted token, and one
-    # line mark cannot carry 1px + 2px. Why this minimal layer: the page has no way to name
-    # a CSS token inside a spec (a hex would not follow the light/dark toggle), but the
-    # bridge themes the `rule` mark with --text-muted. So the raw series is drawn as
-    # day-to-day rule segments (x/y -> x2/y2 via a `lead` window) and inherits the token
-    # in both modes. Layered spec -> no automatic crosshair (skill step 5): own nearest-x
-    # pointer param + rule + tooltip listing both values.
+    # Chart A (Vega-Lite): daily temp_max + 7-day rolling mean (pandas, rows = table view).
+    # House rule (skill step 4): raw + smoothed pair -> raw at 1px in the muted text token
+    # (dense: 1461 points), only the smoothed mean in categorical slot 1 at 2px. The raw
+    # line names the token (artifact_page.token), so it follows the light/dark toggle.
+    # Layered spec -> no automatic crosshair (skill step 5): one nearest-x pointer param on
+    # the rule, which carries the tooltip listing both values.
     temp_rows = temp.assign(temp_max_7d=temp["temp_max"].rolling(7, min_periods=1).mean().round(2),
                             date=temp["date"].dt.strftime("%Y-%m-%d")).to_dict("records")
     tu = "utcyearmonthdate"   # ISO days stay on their UTC date west of UTC
-    x = {"field": "date", "type": "temporal", "timeUnit": tu, "title": None,
-         "axis": {"format": "%Y", "tickCount": "year"}}
+    mean = {"y": {"field": "temp_max_7d", "type": "quantitative"},
+            "color": {"datum": "7-day mean", "legend": None}}
     vl = {
         "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
-        "data": {"values": [{"date": r["date"], "temp_max": r["temp_max"]} for r in temp_rows]},
-        "transform": [{"window": [{"op": "mean", "field": "temp_max", "as": "temp_max_7d"}],
-                       "frame": [-6, 0], "sort": [{"field": "date"}]}],
-        "encoding": {"x": x},
+        "data": {"values": temp_rows},
+        "encoding": {"x": {"field": "date", "type": "temporal", "timeUnit": tu, "title": None,
+                           "axis": {"format": "%Y", "tickCount": "year"}}},
         "layer": [
-            {"transform": [{"window": [{"op": "lead", "field": "date", "as": "next_date"},
-                                       {"op": "lead", "field": "temp_max", "as": "next_temp"}],
-                            "sort": [{"field": "date"}]},
-                           {"filter": "datum.next_date != null"}],
-             "mark": {"type": "rule", "strokeWidth": 1, "strokeCap": "round"},
+            {"mark": {"type": "line", "strokeWidth": 1,
+                      "color": artifact_page.token("text-muted")},
              "encoding": {"y": {"field": "temp_max", "type": "quantitative",
-                                "title": "Max temperature (C)"},
-                          "x2": {"field": "next_date", "timeUnit": tu},
-                          "y2": {"field": "next_temp"}}},
-            {"mark": {"type": "line", "strokeWidth": 2},
-             "encoding": {"y": {"field": "temp_max_7d", "type": "quantitative"},
-                          "color": {"datum": "7-day mean", "legend": None}}},
+                                "title": "Max temperature (C)"}}},
+            {"mark": {"type": "line", "strokeWidth": 2}, "encoding": mean},
             {"transform": [{"filter": {"param": "hover", "empty": False}}],
-             "mark": {"type": "point", "filled": True, "size": 64},
-             "encoding": {"y": {"field": "temp_max_7d", "type": "quantitative"},
-                          "color": {"datum": "7-day mean", "legend": None}}},
+             "mark": {"type": "point", "filled": True, "size": 64}, "encoding": mean},
             {"mark": {"type": "rule", "strokeWidth": 1},
              "params": [{"name": "hover", "select": {
                  "type": "point", "encodings": ["x"], "nearest": True,
@@ -228,7 +195,8 @@ def main():
         "xAxis": {"type": "time"},
         "yAxis": {"type": "value", "min": 0},   # unit lives in the card title
         # legend icon + grid.top come from artifact_page (stroke key, legend-sized grid);
-        # end_labels=True on the chart dict meets recommend's label: direct.
+        # end_labels on the chart dict meets recommend's label: direct; the list keeps the
+        # skill's <= 4 cap with the static chart's 4 (AMZN: legend only, see step 4 above).
         "series": [{"name": sym, "type": "line", "showSymbol": False,
                     "data": [[d.strftime("%Y-%m-%d"), v] for d, v in wide[sym].dropna().items()]}
                    for sym in SYMBOLS],
@@ -242,7 +210,7 @@ def main():
          "rows": temp_rows},
         {"kind": "echarts", "spec": echarts, "title": "Monthly stock price (USD)",
          "caption": "2000-2010, five symbols on one axis", "rows": stock_rows,
-         "end_labels": True},
+         "end_labels": list(labeled)},
     ]
     # Publisher input for the orchestrator's Artifact call (skill 7b).
     print("capabilities_for:", json.dumps(artifact_page.capabilities_for(charts)))
