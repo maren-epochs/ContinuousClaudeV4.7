@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "source": "continuum/autonomous/dataviz-suite/context/dataviz-skill/references/palette.md",
+    "version": "2026-07 ordering (same eight hues/steps as predecessor, re-ordered)",
+    "validated_on": "2026-10-05",
+    "validator": "tools/viz/validate_palette.py (vendored from the skill's scripts/validate_palette.py)",
+    "notes": [
+      "Every hex comes from palette.md. null = palette.md gives no value; never invent one.",
+      "Categorical slot order is the CVD-safety mechanism: assign in sequence, never cycle, never re-order.",
+      "Adjacent pairlist (stacks/bars/lines) validates all eight slots in both modes; all-pairs forms (scatter/bubble/choropleth/small multiples) cap at the first three slots, fold the rest to Other or facet.",
+      "Light mode slots 3, 4, 5 (aqua, yellow, magenta) sit below 3:1 on the light surface: relief rule - ship direct labels or the table view."
+    ]
+  },
+  "categorical_hues": ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"],
+  "categorical_all_pairs_cap": 3,
+  "modes": {
+    "light": {
+      "surface": "#fcfcfb",
+      "surface_alt": "#f9f9f7",
+      "text": {
+        "primary": "#0b0b0b",
+        "secondary": "#52514e",
+        "muted": "#898781",
+        "success": "#006300"
+      },
+      "grid": "#e1e0d9",
+      "axis": "#c3c2b7",
+      "border": "rgba(11,11,11,0.10)",
+      "categorical": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
+      "status": {
+        "good": "#0ca30c",
+        "warning": "#fab219",
+        "serious": "#ec835a",
+        "critical": "#d03b3b"
+      }
+    },
+    "dark": {
+      "surface": "#1a1a19",
+      "surface_alt": "#0d0d0d",
+      "text": {
+        "primary": "#ffffff",
+        "secondary": "#c3c2b7",
+        "muted": "#898781",
+        "success": "#0ca30c"
+      },
+      "grid": "#2c2c2a",
+      "axis": "#383835",
+      "border": "rgba(255,255,255,0.10)",
+      "categorical": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
+      "status": {
+        "good": "#0ca30c",
+        "warning": "#fab219",
+        "serious": "#ec835a",
+        "critical": "#d03b3b"
+      }
+    }
+  },
+  "ramps": {
+    "blue": {
+      "100": "#cde2fb",
+      "150": "#b7d3f6",
+      "200": "#9ec5f4",
+      "250": "#86b6ef",
+      "300": "#6da7ec",
+      "350": "#5598e7",
+      "400": "#3987e5",
+      "450": "#2a78d6",
+      "500": "#256abf",
+      "550": "#1c5cab",
+      "600": "#184f95",
+      "650": "#104281",
+      "700": "#0d366b"
+    }
+  },
+  "sequential_default": "blue",
+  "sequential_second_hue": "orange",
+  "ordinal_bounds": {
+    "light": {"min_step": "250", "contrast": 2.06},
+    "dark": {"max_step": "600", "contrast": 2.15}
+  },
+  "diverging": {
+    "low_hue": "blue",
+    "high_hue": "red",
+    "light": {"low": "#2a78d6", "mid": "#f0efec", "high": "#e34948"},
+    "dark": {"low": "#3987e5", "mid": "#383835", "high": "#e66767"}
+  },
+  "texture": {
+    "kind": "lines",
+    "angles": [45, 135],
+    "ink": "tone-on-tone (a darker step of the fill's own ramp)",
+    "stroke_px": null,
+    "trigger": ["accessibility setting", "print", "forced-colors"]
+  },
+  "font": {
+    "family_stack": ["system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+    "tabular_nums": "columns that must align only (table rows, axis ticks); hero figures use proportional"
+  }
+}
