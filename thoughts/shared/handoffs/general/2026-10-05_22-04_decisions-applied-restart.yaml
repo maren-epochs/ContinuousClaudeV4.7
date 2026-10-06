@@ -36,7 +36,7 @@ mental_model: |
   through the read policy (secrets denylist incl. .env, keys, ~/.ssh, .claude.json, ADS
   .env:x), recursive grep/rg get secret exclusions, agent_call --max-turns 25. uv run / npm run
   still execute code by design - the denylist is a guard against mistakes, not a boundary.
-  bloks = fork maren-epochs/bloks (~\Documents\bloks; CI green Win+Linux):
+  bloks = fork maren-epochs/bloks (~/Documents/bloks; CI green Win+Linux):
   scores in [-1,1], rules/tastes sorted by score, hidden below -0.5 (one nack hides).
 
 # ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
@@ -134,7 +134,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-05_22-04_decisions-applied-restart.yaml
-  in ~\Documents\ccv47-readme-fix.
+  in ~/Documents/ccv47-readme-fix.
   This is the first session after a restart: confirm the new hook registrations loaded
   (SessionStart matcher "compact" -> session-start.mjs; PostToolUse report check with
   if Edit(**/continuum/autonomous/*/reports/*.json)) and run the statusline `test:` command -

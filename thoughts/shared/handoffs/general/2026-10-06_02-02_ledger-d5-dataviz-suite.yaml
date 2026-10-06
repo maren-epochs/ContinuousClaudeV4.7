@@ -144,7 +144,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-06_02-02_ledger-d5-dataviz-suite.yaml in
-  ~\Documents\ccv47-readme-fix. Both prior tasks are done and pushed
+  ~/Documents/ccv47-readme-fix. Both prior tasks are done and pushed
   (context ledger + D5 verdict; visualization suite tools/viz + /visualize, style approved).
   Run the statusline test: command first. Then do the follow-ups in `next:` as one feature-class
   /autonomous run (contract in continuum/autonomous/dataviz-suite/ already lists them under

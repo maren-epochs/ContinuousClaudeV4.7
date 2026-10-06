@@ -28,7 +28,7 @@ mental_model: |
   once >200K, CLAUDE_CONTEXT_WINDOW overrides).
   Handoff root rule (pre-compact, status, create/resume-handoff): project
   thoughts/shared/handoffs if it exists, else ~/.claude/handoffs/<basename>/.
-  bloks is now the fork maren-epochs/bloks (~\Documents\bloks), installed
+  bloks is now the fork maren-epochs/bloks (~/Documents/bloks), installed
   at ~/.cargo/bin/bloks.exe (upstream backup bloks.exe.0.1.0-upstream.bak). Score in [-1,1];
   bloks context sorts rules/tastes/project cards by score and hides < -0.5; one nack hides.
   Worker agent: frontmatter Stop hook (-> SubagentStop) worker-report-check.mjs validates its
@@ -52,7 +52,7 @@ done_this_session:
   - task: Verified harness after restart; backported windowsHide patch found only in ~/.claude
     files: "[.claude/hooks/{post-edit-diagnostics,status,tldr-read,tldr-shim}.mjs]"
   - task: /analyze-data smoke test on project-A research data (user - test only, models irrelevant); fixed 3 skill-doc defects
-    files: [harness/skills/analyze-data/SKILL.md, continuum/research/project-A-topic/findings.md]
+    files: [harness/skills/analyze-data/SKILL.md, continuum/research/<project-A research topic>/findings.md]
   - task: post-edit timing test median-of-5; shim excluded from registration warn; shim autostart on; continuum/research tracked; .tldrignore ignored
     files: [.claude/hooks/test_post_edit_diagnostics.sh, install/sync_global.py, .gitignore, .claude/hooks/test_tldr_read.sh, ~/.claude/settings.json]
   - task: bloks fork - fixed ack/nack (nack never counted, NULL-library feedback excluded, rules unscored); hide < -0.5; docs point at fork
@@ -147,7 +147,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-05_19-59_harness-hardening-batch.yaml
-  in ~\Documents\ccv47-readme-fix.
+  in ~/Documents/ccv47-readme-fix.
   First: `git status -sb` - if still ahead of origin, `git push origin main` (GitHub 500'd).
   Confirm .claude/settings.json was removed (it held only fastedit-hook, which denies Edit).
   Run the statusline `test:` command - all suites should pass.

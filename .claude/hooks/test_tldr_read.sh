@@ -12,8 +12,12 @@ unset TLDR_READ_SHIM_AUTOSTART
 node "$(cd "$(dirname "$0")" && pwd)/tldr-shim.mjs" stop > /dev/null 2>&1
 
 HOOK="$(cd "$(dirname "$0")" && pwd)/tldr-read.mjs"
-FIXTURE="~/.claude/tools/ouros_harness.py"
-BS_FIXTURE='~\\.claude\\hooks\\status.mjs'  # real, >1500B, backslashes
+# Home dir derived at runtime (no username in the repo): forward-slash form, and
+# the JSON-escaped backslash form for the real ~/.claude/hooks/status.mjs.
+HOME_FWD="$(node -e "console.log(require('os').homedir().replace(/\\\\/g,'/'))")"
+HOME_LC_BS="$(node -e "console.log(require('os').homedir().replace(/\//g,'\\\\').toLowerCase())")"
+FIXTURE="$HOME_FWD/.claude/tools/ouros_harness.py"
+BS_FIXTURE="$(node -e "console.log(JSON.stringify(require('path').win32.join(require('os').homedir(),'.claude','hooks','status.mjs')).slice(1,-1))")"  # real, >1500B, backslashes
 CACHE_DIR="$(node -e "console.log(require('os').tmpdir().replace(/\\\\/g,'/'))")/tldr-read-cache"
 
 PASS=0
@@ -62,7 +66,7 @@ run_hook "$(payload 'C:\\Users\\x\\.claude\\hooks\\fake.mjs')" 500
 [ "$MS" -lt 500 ]; check "VAL-002b fast (<500ms, got ${MS}ms)" $?
 
 # --- VAL-002c: forward-slash equivalent still bypasses ---
-run_hook "$(payload '~/.claude/hooks/status.mjs')"
+run_hook "$(payload "$HOME_FWD/.claude/hooks/status.mjs")"
 [ "$OUT" = "{}" ]; check "VAL-002c forward-slash .claude/hooks path returns {}" $?
 
 # --- VAL-002d: test-file pattern still bypasses (backslash path) ---
@@ -184,13 +188,13 @@ rm -f "$NB_FIXTURE" "$NB_SMALL"
 # including a sibling dir whose name is a prefix of the file's dir.
 DP="{\"tool_name\":\"Read\",\"cwd\":\"C:/nowhere\",\"tool_input\":{\"file_path\":\"$FIXTURE\"}}"
 decision() { printf '%s' "$DP" | env -u CLAUDE_PROJECT_DIR "$@" node "$HOOK" 2>/dev/null | grep -o '"permissionDecision":"[a-z]*"'; }
-[ "$(decision CLAUDE_PROJECT_DIR='~/.claude')" = '"permissionDecision":"allow"' ]
+[ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/.claude")" = '"permissionDecision":"allow"' ]
 check "VAL-501a inside launch dir -> allow" $?
-[ "$(decision CLAUDE_PROJECT_DIR='c:\users\jamescrowell\.CLAUDE\')" = '"permissionDecision":"allow"' ]
+[ "$(decision CLAUDE_PROJECT_DIR="$HOME_LC_BS\\.CLAUDE\\")" = '"permissionDecision":"allow"' ]
 check "VAL-501b case/backslash variant of launch dir -> allow" $?
-[ "$(decision CLAUDE_PROJECT_DIR='~/Documents')" = '"permissionDecision":"ask"' ]
+[ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/Documents")" = '"permissionDecision":"ask"' ]
 check "VAL-501c outside launch dir -> ask" $?
-[ "$(decision CLAUDE_PROJECT_DIR='~/.cl')" = '"permissionDecision":"ask"' ]
+[ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/.cl")" = '"permissionDecision":"ask"' ]
 check "VAL-501d prefix-named sibling dir -> ask" $?
 [ "$(decision)" = '"permissionDecision":"ask"' ]
 check "VAL-501e no CLAUDE_PROJECT_DIR, cwd elsewhere -> ask" $?
