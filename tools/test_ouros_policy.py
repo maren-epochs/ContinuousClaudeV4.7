@@ -154,6 +154,43 @@ class ReadPolicyTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(_denied(oh._call_read_file(name)))
 
+    def test_run_command_cannot_read_secrets_via_arguments(self):
+        # Review 2026-10-05: allowed commands read any path they are handed.
+        for cmd in (["git", "diff", "--no-index", "NUL", ".env"],
+                    "git diff --no-index NUL .env",
+                    "git blame --contents .env x",
+                    "git show HEAD:.env",
+                    "grep -r SECRET .env",
+                    "wc -c .env.local",
+                    "wc -c server.pem",
+                    "wc -c .env:stream",
+                    ["git", "diff", "--no-index", "NUL", str(Path.home() / ".claude.json")],
+                    f"wc -c {Path.home() / '.ssh' / 'config'}"):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(_denied(oh._call_run_command(cmd)), cmd)
+
+    def test_run_command_outside_paths_denied_but_project_ok(self):
+        outside = Path(tempfile.mkdtemp(prefix="ouros-out-")).resolve()
+        try:
+            (outside / "x.txt").write_text("x")
+            self.assertTrue(_denied(oh._call_run_command(["wc", "-c", str(outside / "x.txt")])))
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+        r = oh._call_run_command("wc -c sub/ok.txt")
+        self.assertFalse(_denied(r), r)
+
+    def test_recursive_grep_excludes_secrets(self):
+        ok, _, argv = oh._check_command_allowed("grep -rn API_KEY .")
+        self.assertTrue(ok)
+        self.assertIn("--exclude=.env", argv)
+        ok, _, argv = oh._check_command_allowed("grep -n API_KEY sub/ok.txt")
+        self.assertFalse(any(a.startswith("--exclude") for a in argv))
+        ok, _, argv = oh._check_command_allowed("rg API_KEY")
+        self.assertTrue(any(a.startswith("--glob=!") for a in argv))
+
+    def test_ads_stream_of_secret_denied(self):
+        self.assertTrue(_denied(oh._call_read_file(".env:x")))
+
     def test_case_variant_of_allowed_path(self):
         if os.name != "nt":
             self.skipTest("case-insensitive paths are a Windows property")

@@ -480,7 +480,7 @@ SECURITY_POLICY = {
     # Arguments that turn an allowed command into an exec or arbitrary write:
     # rg --pre runs a program per file; git --output writes anywhere;
     # --ext-diff/--textconv run configured external programs.
-    "command_deny_args": ["--pre", "--output", "--ext-diff", "--textconv", "--open-in-pager"],
+    "command_deny_args": ["--pre", "--output", "--ext-diff", "--textconv", "--open-in-pager", "--no-index", "--contents"],
     # Patterns that are always blocked
     "command_deny": [
         "rm ", "rm\t", "rmdir",
@@ -574,7 +574,8 @@ def _is_secret(path):
     """True if the resolved path is a credential file or under a credential dir."""
     import fnmatch
     resolved = Path(path).resolve()
-    name = resolved.name.lower()
+    # NTFS alternate data streams: '.env:x' reads a stream of .env — match the base name
+    name = resolved.name.lower().split(":", 1)[0]
     if name in (".env.example", ".env.sample", ".env.template"):
         return False
     if any(fnmatch.fnmatchcase(name, pat) for pat in SECURITY_POLICY["read_deny_names"]):
@@ -647,7 +648,38 @@ def _check_command_allowed(cmd):
     for arg in argv[1:]:
         if arg.split("=", 1)[0] in SECURITY_POLICY["command_deny_args"]:
             return False, f"argument '{arg}' not allowed", None
+        # Allowed commands read whatever paths they are given (git diff --no-index,
+        # grep, git show rev:path): apply the read policy to path-like arguments.
+        for cand in _path_candidates(arg):
+            if _is_secret(cand):
+                return False, f"argument '{arg}' names a credential/secret file", None
+            if os.path.exists(cand) and not _check_path_allowed(cand, SECURITY_POLICY["read_allow"]):
+                return False, f"argument '{arg}' is outside allowed directories", None
+    # Recursive search reads every file under a directory: keep secrets out of it.
+    if exe == "rg":
+        argv = argv[:1] + [f"--glob=!{p}" for p in SECURITY_POLICY["read_deny_names"]] + argv[1:]
+    elif exe == "grep" and any(a in ("-r", "-R", "--recursive", "--dereference-recursive")
+                               or (a.startswith("-") and not a.startswith("--") and set(a[1:]) & {"r", "R"})
+                               for a in argv[1:]):
+        argv = argv[:1] + [f"--exclude={p}" for p in SECURITY_POLICY["read_deny_names"]] \
+            + [f"--exclude-dir={d.split('/')[-1]}" for d in SECURITY_POLICY["read_deny_dirs"]] + argv[1:]
     return True, "", argv
+
+
+def _path_candidates(arg):
+    """Path-like readings of an argv token: the token itself (non-options), an
+    option's '=value', and 'rev:path' / 'path:stream' segments (not drive letters)."""
+    out = []
+    if arg.startswith("-"):
+        if "=" in arg:
+            out.append(arg.split("=", 1)[1])
+    else:
+        out.append(arg)
+    for c in list(out):
+        body = c[2:] if len(c) > 1 and c[1] == ":" else c  # keep 'C:' drive prefix intact
+        if ":" in body:
+            out.extend(s for s in body.split(":") if s)
+    return [c for c in out if c]
 
 
 def _call_read_file(path):
