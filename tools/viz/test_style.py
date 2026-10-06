@@ -8,6 +8,7 @@ tempfile directory under warnings-as-errors; files must exist and be nonzero.
 Matplotlib output is read back with PIL to prove dark and light differ.
 """
 import contextlib
+import io
 import os
 import re
 import subprocess
@@ -45,6 +46,43 @@ def strict():
             warnings.filterwarnings("ignore", category=category, module=module,
                                     message=message)
         yield
+
+
+GLYPH_MISSING = re.compile(r"Glyph .* missing")
+GENERIC_FAMILIES = {"sans-serif", "serif", "monospace", "cursive", "fantasy",
+                    "system-ui", "-apple-system"}
+# Independent of style.py's detector so a broken detector cannot skip the test.
+CJK_FAMILIES = ("Microsoft YaHei", "Yu Gothic", "Malgun Gothic", "MS Gothic",
+                "Noto Sans CJK SC", "Noto Sans CJK JP", "Source Han Sans SC",
+                "PingFang SC", "Hiragino Sans", "WenQuanYi Zen Hei")
+
+
+def installed_families():
+    from matplotlib import font_manager
+    return {f.name for f in font_manager.fontManager.ttflist}
+
+
+# One probe code point per CJK script: Han, Japanese hiragana, Korean Hangul.
+CJK_SCRIPTS = {"han": 0x4E2D, "kana": 0x3042, "hangul": 0xD55C}
+
+
+def cjk_coverage():
+    """{installed CJK_FAMILIES name: set of CJK_SCRIPTS its regular face maps}."""
+    from matplotlib import font_manager
+    installed = installed_families()
+    coverage = {}
+    for name in CJK_FAMILIES:
+        if name not in installed:
+            continue
+        path = font_manager.findfont(font_manager.FontProperties(family=name))
+        charmap = font_manager.get_font(path).get_charmap()
+        coverage[name] = {s for s, cp in CJK_SCRIPTS.items() if cp in charmap}
+    return coverage
+
+
+def installed_cjk_families():
+    """Installed CJK_FAMILIES covering at least one CJK script, in order."""
+    return [name for name, scripts in cjk_coverage().items() if scripts]
 
 
 def hex_to_rgb(value):
@@ -125,16 +163,64 @@ class MatplotlibStyle(unittest.TestCase):
                 self.assertEqual(matplotlib.rcParams["savefig.dpi"], 144)
 
     def test_font_resolves_to_installed_family(self):
-        from matplotlib import font_manager
-        installed = {f.name for f in font_manager.fontManager.ttflist}
+        # matplotlib 3.11 falls back per glyph only across concrete families
+        # listed in font.family; a ['sans-serif'] + font.sans-serif list
+        # resolves one font and warns 'Glyph ... missing' for the rest.
+        installed = installed_families()
         family = style.resolve_font()
         self.assertIn(family, installed)
         with matplotlib.rc_context():
             rc = style.apply_matplotlib("light")
-            self.assertEqual(rc["font.family"], ["sans-serif"])
-            self.assertEqual(rc["font.sans-serif"][0], family)
-            self.assertIn("DejaVu Sans", rc["font.sans-serif"])
+            families = rc["font.family"]
+            self.assertEqual(families[0], family)
+            self.assertEqual(families[-1], "DejaVu Sans")
+            self.assertEqual(len(families), len(set(families)))
+            for name in families:
+                self.assertIn(name, installed, name)
+                self.assertNotIn(name, GENERIC_FAMILIES, name)
+            self.assertEqual(matplotlib.rcParams["font.family"], families)
+            # every installed CJK-capable candidate, in order, between the
+            # palette font and DejaVu Sans
+            cjk = installed_cjk_families()
+            self.assertEqual(families,
+                             list(dict.fromkeys([family, *cjk, "DejaVu Sans"])))
+            self.assertEqual(list(style.cjk_fonts()), cjk)
+            self.assertTrue(hasattr(style.cjk_fonts, "cache_info"))  # lru_cache
         self.assertEqual(style.resolve_font(["No Such Face 123"]), "DejaVu Sans")
+
+    def test_mixed_script_labels_have_no_missing_glyphs(self):
+        import matplotlib.pyplot as plt
+        labels = {
+            "latin": "Revenue by region",
+            "greek": "Δ growth αβγ σ μ",
+            "em-dash": "Q1 — Q4",
+            "han": "销售额 年度",
+            "kana": "ひらがな データ",
+            "hangul": "한국 매출",
+        }
+        covered = set().union(*cjk_coverage().values())
+        for script, text in labels.items():
+            with self.subTest(script=script):
+                if script in CJK_SCRIPTS and script not in covered:
+                    self.skipTest(f"no installed font covers {script} "
+                                  f"(checked {', '.join(CJK_FAMILIES)})")
+                for mode in MODES:
+                    with matplotlib.rc_context(), strict():
+                        style.apply_matplotlib(mode)
+                        fig, ax = plt.subplots(figsize=(4, 3))
+                        try:
+                            ax.bar([text, "b"], [1, 2])
+                            ax.set_title(text)
+                            ax.set_xlabel(text)
+                            ax.set_ylabel(text)
+                            for fmt in ("png", "svg"):
+                                fig.savefig(io.BytesIO(), format=fmt)
+                        except UserWarning as w:
+                            if GLYPH_MISSING.search(str(w)):
+                                self.fail(f"{script} ({mode}): {w}")
+                            raise
+                        finally:
+                            plt.close(fig)
 
     def test_bar_kwargs(self):
         for mode in MODES:
@@ -202,6 +288,35 @@ class MatplotlibStyle(unittest.TestCase):
                              palette.surface("dark")["surface"])
             self.assertEqual(matplotlib.rcParams["lines.linewidth"], rc["lines.linewidth"])
             self.assertEqual(matplotlib.rcParams["savefig.dpi"], 144)
+
+
+class StyleCli(unittest.TestCase):
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, STYLE_PY, *args], capture_output=True,
+                              text=True, encoding="utf-8", check=False, cwd=REPO_ROOT)
+
+    def test_help_prints_usage_and_exits_0(self):
+        for flag in ("--help", "-h"):
+            proc = self.run_cli(flag)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("usage:", proc.stdout)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_unknown_args_exit_2(self):
+        for args in (("--bogus",), ("blue",), ("light", "extra")):
+            proc = self.run_cli(*args)
+            self.assertEqual(proc.returncode, 2, (args, proc.stderr))
+            self.assertIn("usage:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_mode_dumps_json(self):
+        import json
+        for args in ((), ("dark",)):
+            proc = self.run_cli(*args)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            dump = json.loads(proc.stdout)
+            self.assertEqual(set(dump), {"matplotlib", "altair", "bokeh"})
+            self.assertEqual(dump["matplotlib"]["font.family"], style.font_families())
 
 
 class PlotlyStyle(unittest.TestCase):

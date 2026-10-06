@@ -19,6 +19,7 @@ lives here - tools/viz/test_style.py greps for one.
 """
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 
@@ -50,6 +51,17 @@ BAR_MAX_PX = 24
 BAR_CORNER_PX = 4   # rounded data-end (altair only; see bar_kwargs)
 AREA_OPACITY = 0.1
 FALLBACK_FONT = "DejaVu Sans"   # bundled with matplotlib, always present
+# CJK-capable families in fallback order (Windows, then Noto/Source Han,
+# macOS, Linux). Every one font_manager sees whose cmap holds any CJK_PROBES
+# code point joins font.family, so Han, kana and Hangul each find a face.
+CJK_FONTS = ("Microsoft YaHei", "Yu Gothic", "Malgun Gothic", "MS Gothic",
+             "Noto Sans CJK SC", "Noto Sans CJK JP", "Source Han Sans SC",
+             "PingFang SC", "Hiragino Sans", "WenQuanYi Zen Hei")
+CJK_PROBES = {
+    "han": 0x4E2D,     # CJK UNIFIED IDEOGRAPH-4E2D
+    "kana": 0x3042,    # HIRAGANA LETTER A
+    "hangul": 0xD55C,  # HANGUL SYLLABLE HAN
+}
 
 LINE_PT = 1.5       # >= px_to_pt(LINE_PX) == 1.44
 MARKER_PT = 6.0     # >= px_to_pt(MARKER_PX) == 5.76
@@ -98,6 +110,39 @@ def resolve_font(stack: list[str] | None = None) -> str:
     return FALLBACK_FONT
 
 
+@functools.lru_cache(maxsize=8)
+def cjk_fonts(candidates: tuple[str, ...] = CJK_FONTS) -> tuple[str, ...]:
+    """Installed candidates whose regular face maps Han, kana or Hangul, in order.
+
+    Cached per process: fonts added via font_manager after the first call are
+    not seen until cjk_fonts.cache_clear().
+    """
+    installed = {f.name for f in font_manager.fontManager.ttflist}
+    found = []
+    for name in candidates:
+        if name not in installed:
+            continue
+        try:
+            path = font_manager.findfont(font_manager.FontProperties(family=name),
+                                         fallback_to_default=False)
+            charmap = font_manager.get_font(path).get_charmap()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if any(cp in charmap for cp in CJK_PROBES.values()):
+            found.append(name)
+    return tuple(found)
+
+
+def font_families() -> list[str]:
+    """Concrete families for rcParams font.family: palette font, CJK, DejaVu.
+
+    matplotlib 3.11 falls back per glyph only across the concrete families
+    listed in font.family; font.family=['sans-serif'] with a font.sans-serif
+    list resolves ONE font and warns 'Glyph ... missing' for the rest.
+    """
+    return list(dict.fromkeys([resolve_font(), *cjk_fonts(), FALLBACK_FONT]))
+
+
 def _register_colormaps() -> None:
     """Register house-seq(_r) and house-div-{mode} once (force= still warns)."""
     seq = LinearSegmentedColormap.from_list(SEQ_CMAP, palette.sequential())
@@ -115,8 +160,7 @@ def matplotlib_rc(mode: str = "light") -> dict:
     template_name(mode)
     sf = palette.surface(mode)
     tx = palette.text(mode)
-    family = resolve_font()
-    families = [family] if family == FALLBACK_FONT else [family, FALLBACK_FONT]
+    families = font_families()
     return {
         # series identity: fixed slot order, never cycled past 8
         "axes.prop_cycle": matplotlib.cycler(color=palette.categorical(mode)),
@@ -171,9 +215,9 @@ def matplotlib_rc(mode: str = "light") -> dict:
         "ytick.labelcolor": tx["secondary"],
         "legend.labelcolor": tx["primary"],
         "legend.frameon": False,
-        # fonts: palette stack resolved per machine, DejaVu Sans floor;
-        # matplotlib 3.11 falls back per glyph across font.sans-serif
-        "font.family": ["sans-serif"],
+        # fonts: palette font, installed CJK fonts, DejaVu Sans floor - listed
+        # as concrete families so matplotlib 3.11 falls back per glyph
+        "font.family": families,
         "font.sans-serif": families,
         "axes.formatter.use_mathtext": False,
         # ramps
@@ -444,11 +488,18 @@ def bokeh_palette(mode: str = "light") -> tuple[str, ...]:
 
 
 if __name__ == "__main__":
+    import argparse
     import json
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    mode = sys.argv[1] if len(sys.argv) > 1 else "light"
+    parser = argparse.ArgumentParser(
+        prog="style.py",
+        description="Dump the house style (matplotlib rcParams, altair config, "
+                    "bokeh theme attrs) for one mode as JSON.")
+    parser.add_argument("mode", nargs="?", default="light", choices=MODES,
+                        help="color mode (default: light)")
+    mode = parser.parse_args().mode
     rc = {k: (str(v) if k == "axes.prop_cycle" else v)
           for k, v in matplotlib_rc(mode).items()}
     print(json.dumps({"matplotlib": rc, "altair": altair_config(mode),
