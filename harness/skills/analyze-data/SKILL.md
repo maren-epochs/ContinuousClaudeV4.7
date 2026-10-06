@@ -62,9 +62,12 @@ prints new files as `artifacts:` lines with absolute host paths. Report that pat
 
 ```python
 out = run_python(r'''
+import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 import pandas as pd, matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from ccv_viz import style
+style.apply_matplotlib("light")
 df = pd.read_parquet("raw.parquet")
 fig, ax = plt.subplots(figsize=(7, 5))
 ax.scatter(df["x"], df["y"], s=10, alpha=0.6)

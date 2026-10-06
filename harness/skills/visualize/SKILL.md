@@ -10,16 +10,16 @@ lives in `tools/viz/palette.json` - no hex literals in chart code, never hand-se
 
 **Where it runs.** CLI paths `tools/viz/...` are relative to the ccv47 repo; the global install
 (`install/sync_global.py --apply`) rewrites them to `~/.claude/tools/viz/...`. Every Python
-snippet and `py -3.13 -c` line below opens with this PRELUDE (verbatim), which puts the parent
-of `tools/` on `sys.path` - cwd if it is the repo, else `~/.claude`:
+snippet and `py -3.13 -c` line below opens with this PRELUDE (verbatim), which loads
+`tools/viz` - cwd if it is the repo, else `~/.claude` - under its own import name `ccv_viz`:
 
 ```python
-import sys, pathlib; sys.path.insert(0, str(next(p for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists())))
+import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 ```
 
 Inside `/analyze-data` the same code goes through `run_python` (stateless, cwd = session work
-dir, so the PRELUDE resolves to `~/.claude`). A `tools/__init__.py` in the cwd (`-c`) or the
-script's folder shadows `tools.viz` (ModuleNotFoundError): run from another directory.
+dir, so the PRELUDE resolves to `~/.claude`). Import as `from ccv_viz import ...`, never
+`tools.viz`: a project's own `tools/` package shadows `~/.claude/tools`; `ccv_viz` leaves it alone.
 
 **0 HAND-OFF.** Data not clean or not aggregated -> `/analyze-data` steps 1-4 first; return with
 a parquet. Aggregate with duckdb/polars; send <= 5000 rows to any chart. Exceptions: millions of
@@ -43,7 +43,7 @@ categorical with one row per time value is a per-row attribute, not a series (th
 it): facet, filter or aggregate by it, never color a line by it. The answer may be a stat tile.
 
 **2 COLOR BY JOB.** `recommend`'s `encoding["color"]` names the job; one rule per job, all from
-`tools.viz.palette`:
+`ccv_viz.palette`:
 
 | `color` | Call | Rule |
 |---------|------|------|
@@ -64,7 +64,7 @@ or a table view - not dismissable. `--pairs all` (scatter/bubble/maps/facets) pa
 first 3 slots only: more series there -> small multiples.
 
 ```bash
-HEX=$(py -3.13 -c "import sys, pathlib; sys.path.insert(0, str(next(p for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()))); from tools.viz import palette; print(','.join(palette.categorical('light', 4)))")
+HEX=$(py -3.13 -c "import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m); from ccv_viz import palette; print(','.join(palette.categorical('light', 4)))")
 py -3.13 tools/viz/validate_palette.py "$HEX" --mode light       # then dark slots, --mode dark
 py -3.13 tools/viz/validate_palette.py "$HEX" --mode light --pairs all
 ```
@@ -98,10 +98,10 @@ slots (step 3), rendered and looked at - not an automatic flip. Text wears `pale
 `run_python(r'''...''')`. Both modes when the chart will be shared.
 
 ```python
-import sys, pathlib; sys.path.insert(0, str(next(p for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists())))
+import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt, pandas as pd
-from tools.viz import export, style
+from ccv_viz import export, style
 df = pd.read_parquet("agg.parquet").sort_values("hours")
 for mode in ("light", "dark"):
     style.apply_matplotlib(mode)
@@ -120,8 +120,8 @@ path ran (plotly PNG falls back from kaleido to Playwright); bokeh/great_tables 
 (b) Interactive page - claude.ai Artifact, from Vega-Lite (altair), Plotly or ECharts specs:
 
 ```python
-import sys, pathlib; sys.path.insert(0, str(next(p for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists())))
-from tools.viz import artifact_page
+import sys, pathlib, importlib.util as _u; _d = next(p/'tools'/'viz' for p in (pathlib.Path.cwd(), pathlib.Path.home()/'.claude') if (p/'tools'/'viz'/'palette.json').exists()); _s = _u.spec_from_file_location('ccv_viz', _d/'__init__.py', submodule_search_locations=[str(_d)]); sys.modules['ccv_viz'] = _m = _u.module_from_spec(_s); _s.loader.exec_module(_m)
+from ccv_viz import artifact_page
 charts = [artifact_page.from_altair(chart, title="Hours by team"),
           artifact_page.from_plotly(fig, title="Weekly trend")]
 # any color value may be a palette token, resolved in light and dark at render time:

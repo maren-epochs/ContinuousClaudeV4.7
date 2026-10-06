@@ -30,11 +30,13 @@ import matplotlib
 from matplotlib import font_manager
 from matplotlib.colors import LinearSegmentedColormap
 
-try:
-    from tools.viz import palette
-except ModuleNotFoundError:  # run as a script: py tools/viz/style.py [mode]
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from tools.viz import palette
+if __package__:  # tools.viz or the ccv_viz alias - relative keeps both working
+    from . import palette
+else:  # run as a script (py tools/viz/style.py [mode]) or with tools/viz on sys.path
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    import palette
 
 MODES = palette.MODES
 TEMPLATE_NAMES = {"light": "house-light", "dark": "house-dark"}
