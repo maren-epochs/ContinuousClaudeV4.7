@@ -287,6 +287,43 @@ class GreatTablesBranch(ExportCase):
         self.assert_png(res["png"])
         self.assert_file(res["html"], "<table")
 
+    @needs_browser
+    def test_house_styled_png_has_surface_margin(self):
+        """gt_style + save: a surface band of TABLE_MARGIN_PX frames the rules."""
+        from PIL import Image
+
+        from tools.viz import palette, style
+        band = style.TABLE_MARGIN_PX * export.FIGURE_SCALE
+        for mode in ("light", "dark"):
+            sf = palette.surface(mode)
+            table = (self.table().tab_header(title="Styled", subtitle="sub")
+                     .tab_source_note("Source: test"))
+            res = self.save_quiet(style.gt_style(table, mode), f"gt-{mode}",
+                                  formats=("png",), mode=mode)
+            self.assert_png(res["png"])
+            self.assertGreater(os.path.getsize(res["png"]), 0)
+            with Image.open(res["png"]) as im:
+                im = im.convert("RGB")
+                w, h = im.size
+                self.assertGreater(w, 2 * band)
+                self.assertGreater(h, 2 * band)
+                px = im.load()
+                edge = [px[x, y] for y in range(h) for x in range(w)
+                        if x < band - 1 or y < band - 1 or x >= w - band + 1
+                        or y >= h - band + 1]
+                colors = {c for _, c in im.getcolors(maxcolors=1 << 24)}
+            self.assertEqual(set(edge), {rgb(sf["surface"])},
+                             f"{mode}: margin band is not pure surface")
+            self.assertIn(rgb(sf["axis"]), colors, f"{mode}: no hairline rule drawn")
+            # the column-label rule is axis ink: two axis rules (label + body bottom),
+            # not one - the first body row's grid hline must not win the collapse tie
+            with Image.open(res["png"]) as im:
+                im = im.convert("RGB")
+                column = [im.getpixel((w // 2, y)) for y in range(h)]
+            runs = [y for y in range(1, h)
+                    if column[y] == rgb(sf["axis"]) and column[y - 1] != rgb(sf["axis"])]
+            self.assertEqual(len(runs), 2, f"{mode}: axis rules at {runs}")
+
 
 HV, HV_SKIP = try_import("holoviews")
 

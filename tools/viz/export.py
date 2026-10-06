@@ -8,8 +8,10 @@ save(fig, path, formats=("png", "svg", "html")) dispatches on the object type:
                        render_html when kaleido raises (no Chrome, ...)
     altair Chart       chart.save via vl-convert (png/svg/html, no browser)
     bokeh model        bokeh.embed.file_html (INLINE); png via render_html
-    great_tables GT    as_raw_html(make_page=True); png via render_html
-                       (gtsave is never called - it wants its own Chrome)
+    great_tables GT    as_raw_html(make_page=True); png via render_html of the
+                       table's container, shrink-wrapped (its padding = the
+                       style.gt_style margin; gtsave is never called - it
+                       wants its own Chrome)
     holoviews object   holoviews.render (bokeh, then matplotlib) and recurse
 
 and returns {"png": path|None, "svg": path|None, "html": path|None,
@@ -75,6 +77,22 @@ _SETTLE_JS = """() => document.fonts.ready.then(() => new Promise(
   (resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))"""
 _THEME_JS = "(mode) => { document.documentElement.dataset.theme = mode; }"
 _RESET_CSS = "<style>html,body{margin:0;padding:0}</style>"
+# great_tables PNG: screenshot the table's container (its padding is the margin),
+# shrink-wrapped to the table and never scrolling. The page background takes the
+# container's (else the table's) background so the sub-pixel sliver a fractional
+# container width leaves at the screenshot edge is not the white/dark canvas.
+_GT_CONTAINER = "div:has(> table.gt_table)"
+_GT_PNG_CSS = (
+    "<style>" + _GT_CONTAINER
+    + "{width:max-content !important;overflow:visible !important}</style>"
+    "<script>addEventListener('DOMContentLoaded', () => {"
+    " const box = document.querySelector('" + _GT_CONTAINER + "');"
+    " if (!box) return;"
+    " const clear = (c) => !c || c === 'transparent' || c === 'rgba(0, 0, 0, 0)';"
+    " let bg = getComputedStyle(box).backgroundColor;"
+    " if (clear(bg)) bg = getComputedStyle(box.querySelector('table')).backgroundColor;"
+    " if (!clear(bg)) document.documentElement.style.background = bg;"
+    "});</script>")
 
 
 class ExportError(RuntimeError):
@@ -346,15 +364,23 @@ def _save_bokeh(model, stem, fmts, result, opts):
                                "selenium export_svgs; not supported")
 
 
+def _gt_png_page(html):
+    """GT page for rasterizing: the container shrink-wraps the table so its padding
+    (style.gt_style's margin) frames the screenshot instead of the viewport width."""
+    if "</head>" in html:
+        return html.replace("</head>", _GT_PNG_CSS + "</head>", 1)
+    return _GT_PNG_CSS + html
+
+
 def _save_great_tables(table, stem, fmts, result, opts):
     html = table.as_raw_html(make_page=True)
     if "html" in fmts:
         result["html"] = f"{stem}.html"
         _write_text(result["html"], html)
     if "png" in fmts:
-        result["png"] = render_html(html, f"{stem}.png", width=800, height=600,
-                                    mode=opts["mode"], scale=opts["scale"],
-                                    timeout_ms=opts["timeout_ms"], selector="table")
+        result["png"] = render_html(_gt_png_page(html), f"{stem}.png", width=800,
+                                    height=600, mode=opts["mode"], scale=opts["scale"],
+                                    timeout_ms=opts["timeout_ms"], selector=_GT_CONTAINER)
         result["notes"].append("great_tables png via render_html (gtsave not used)")
     if "svg" in fmts:
         result["notes"].append("great_tables svg skipped: no svg export")

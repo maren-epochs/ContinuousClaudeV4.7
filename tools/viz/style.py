@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One house style, four backends - every value comes from tools/viz/palette.json.
+"""One house style, five backends - every value comes from tools/viz/palette.json.
 
 The numbers encode references/marks-and-anatomy.md: 2px lines with round
 join/cap, markers >= 8px, bars capped at 24px with a 2px surface gap, a 2px
@@ -12,14 +12,17 @@ text tokens (never series colors), categorical slots in fixed order.
     fig.update_layout(template=style.plotly_template("light"))   # 'house-light'
     with alt.theme.enable(style.altair_theme("dark")): ...
     file_html(fig, INLINE, theme=style.bokeh_theme("light"))
+    table = style.gt_style(GT(df), "dark")    # great_tables; returns a new GT
 
 Importing this module costs only matplotlib; plotly, altair, bokeh and
-seaborn are imported inside the functions that need them. No hex literal
-lives here - tools/viz/test_style.py greps for one.
+seaborn are imported inside the functions that need them (gt_style only
+calls methods on the GT it is given). No hex literal lives here -
+tools/viz/test_style.py greps for one.
 """
 from __future__ import annotations
 
 import functools
+import secrets
 import sys
 from pathlib import Path
 
@@ -50,6 +53,7 @@ HAIRLINE_PX = 1
 BAR_MAX_PX = 24
 BAR_CORNER_PX = 4   # rounded data-end (altair only; see bar_kwargs)
 AREA_OPACITY = 0.1
+TABLE_MARGIN_PX = 16  # great_tables container padding: the PNG is never cropped flush
 FALLBACK_FONT = "DejaVu Sans"   # bundled with matplotlib, always present
 # CJK-capable families in fallback order (Windows, then Noto/Source Han,
 # macOS, Linux). Every one font_manager sees whose cmap holds any CJK_PROBES
@@ -485,6 +489,92 @@ def bokeh_theme(mode: str = "light"):
 def bokeh_palette(mode: str = "light") -> tuple[str, ...]:
     """Categorical slots as a tuple, bokeh's palette shape."""
     return tuple(palette.categorical(mode))
+
+
+def gt_options(mode: str = "light") -> dict:
+    """kwargs for great_tables GT.tab_options (pure; gt_style applies them).
+
+    Structure rules (column-label bottom, body bottom, summaries) are axis-ink
+    hairlines; rules between rows/groups are grid-ink hairlines; the outer
+    frame, heading rule and column-label top rule are off (GT draws them 2px
+    gray). The body top border is zeroed: border-collapse would otherwise
+    stack it under the column-label rule. Every GT default color is replaced
+    so no GT gray survives in dark mode; container padding is the margin.
+    """
+    template_name(mode)
+    sf = palette.surface(mode)
+    tx = palette.text(mode)
+    hair = f"{HAIRLINE_PX}px"
+    margin = f"{TABLE_MARGIN_PX}px"
+    off = {"style": "none", "width": hair, "color": sf["grid"]}
+    rule = {"style": "solid", "width": hair, "color": sf["axis"]}
+    fine = {"style": "solid", "width": hair, "color": sf["grid"]}
+    borders = {
+        "table_border_top": off, "table_border_bottom": off,
+        "table_border_left": off, "table_border_right": off,
+        "heading_border_bottom": off, "heading_border_lr": off,
+        "column_labels_border_top": off, "column_labels_border_lr": off,
+        "column_labels_vlines": off,
+        "column_labels_border_bottom": rule,
+        "table_body_border_top": dict(rule, width="0px"),
+        "table_body_border_bottom": rule,
+        "table_body_hlines": fine, "table_body_vlines": off,
+        "row_group_border_top": fine, "row_group_border_bottom": fine,
+        "row_group_border_left": off, "row_group_border_right": off,
+        "stub_border": off, "stub_row_group_border": off,
+        "summary_row_border": rule, "grand_summary_row_border": rule,
+        "source_notes_border_bottom": off, "source_notes_border_lr": off,
+    }
+    options = {f"{name}_{part}": value
+               for name, spec in borders.items() for part, value in spec.items()}
+    options.update(
+        container_padding_x=margin,
+        container_padding_y=margin,
+        table_background_color=sf["surface"],
+        table_font_color=tx["primary"],
+        table_font_names=font_stack(),
+        heading_align="left",
+        row_striping_background_color=sf["surface_alt"],
+    )
+    return options
+
+
+def gt_css(table_id: str, mode: str = "light") -> str:
+    """Scoped CSS GT options cannot express: container surface (the margin
+    band), tabular nums on body cells, secondary ink on labels and notes."""
+    template_name(mode)
+    sf = palette.surface(mode)
+    tx = palette.text(mode)
+    scope = f"#{table_id}"
+    labels = ", ".join(f"{scope} .{cls}" for cls in (
+        "gt_col_heading", "gt_column_spanner", "gt_subtitle", "gt_sourcenote",
+        "gt_footnote"))
+    return "\n".join((
+        f"{scope} {{ background-color: {sf['surface']}; }}",
+        f"{scope} .gt_table_body {{ font-variant-numeric: tabular-nums; }}",
+        # border-collapse tie (same width/style): the first body row's grid
+        # hline beats the column-label rule, so it wears the axis ink itself
+        f"{scope} .gt_table_body > tr:first-child > * {{ border-top-color: {sf['axis']}; }}",
+        f"{labels} {{ color: {tx['secondary']}; }}",
+    ))
+
+
+def gt_style(gt, mode: str = "light"):
+    """Return a copy of a great_tables GT in the house style for ``mode``.
+
+    Named gt_style per the contract; do not confuse it with great_tables.style
+    (demo code imports that module as gt_style too - import this one as
+    ``from tools.viz import style`` and call ``style.gt_style``). The scoped
+    CSS needs a table id: an existing one is kept, else one is pinned here
+    (call with_id before gt_style, not after). The reference palette names no
+    table use for the de-emphasis gray, so tables do not use palette.gray.
+    """
+    template_name(mode)
+    table_id = gt._options.table_id.value
+    if not table_id:
+        table_id = f"house-{secrets.token_hex(4)}"
+        gt = gt.with_id(table_id)
+    return gt.tab_options(**gt_options(mode)).opt_css(gt_css(table_id, mode))
 
 
 if __name__ == "__main__":

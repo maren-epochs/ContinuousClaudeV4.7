@@ -8,6 +8,8 @@ tempfile directory under warnings-as-errors; files must exist and be nonzero.
 Matplotlib output is read back with PIL to prove dark and light differ.
 """
 import contextlib
+import dataclasses
+import functools
 import io
 import itertools
 import os
@@ -106,7 +108,8 @@ class StyleSource(unittest.TestCase):
     def test_import_is_lazy_and_costs_only_matplotlib(self):
         code = (
             f"import sys; sys.path.insert(0, {REPO_ROOT!r}); import tools.viz.style; "
-            "print(sorted(m for m in ('plotly', 'altair', 'bokeh', 'seaborn') "
+            "print(sorted(m for m in ('plotly', 'altair', 'bokeh', 'seaborn', "
+            "'great_tables') "
             "if m in sys.modules)); print('matplotlib' in sys.modules)")
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
                               text=True, check=False)
@@ -494,6 +497,102 @@ class BokehStyle(unittest.TestCase):
                             fh.write(html)
                         assert_file(self, path)
                         self.assertIn(palette.surface(mode)["surface"], html)
+
+
+def gt_table():
+    import great_tables as gt
+    import pandas as pd
+    frame = pd.DataFrame({"month": ["Jan", "Feb"], "temp": [8.25, 10.5],
+                          "precip": [142.0, 99.75]})
+    return (gt.GT(frame, rowname_col="month")
+            .tab_header(title="Weather", subtitle="by month")
+            .fmt_number(columns=["temp", "precip"], decimals=1)
+            .tab_source_note("Source: test"))
+
+
+def gt_option(table, name):
+    return getattr(table._options, name).value
+
+
+class GreatTablesStyle(unittest.TestCase):
+    def test_options_encode_house_style(self):
+        hairline = f"{style.HAIRLINE_PX}px"
+        margin = f"{style.TABLE_MARGIN_PX}px"
+        for mode in MODES:
+            sf, tx = palette.surface(mode), palette.text(mode)
+            with strict():
+                table = style.gt_style(gt_table(), mode)
+            opt = functools.partial(gt_option, table)
+            self.assertEqual(opt("table_font_names"), palette.font()["family_stack"])
+            self.assertEqual(opt("table_background_color"), sf["surface"])
+            self.assertEqual(opt("table_font_color"), tx["primary"])
+            self.assertEqual(opt("heading_align"), "left")
+            # rules: hairline structure, grid between rows, body top zeroed
+            self.assertEqual(opt("column_labels_border_bottom_width"), hairline)
+            self.assertEqual(opt("column_labels_border_bottom_color"), sf["axis"])
+            self.assertEqual(opt("table_body_border_bottom_width"), hairline)
+            self.assertEqual(opt("table_body_border_bottom_color"), sf["axis"])
+            self.assertEqual(opt("table_body_border_top_width"), "0px")
+            self.assertEqual(opt("table_body_hlines_width"), hairline)
+            self.assertEqual(opt("table_body_hlines_color"), sf["grid"])
+            for name in ("table_border_top", "table_border_bottom",
+                         "heading_border_bottom", "column_labels_border_top"):
+                self.assertEqual(opt(f"{name}_style"), "none", name)
+            # margin around the table (container padding)
+            self.assertEqual(opt("container_padding_x"), margin)
+            self.assertEqual(opt("container_padding_y"), margin)
+
+    def test_no_gt_default_rule_or_color_survives(self):
+        """Every visible border is a hairline (or zeroed); every color is a token."""
+        allowed_widths = {f"{style.HAIRLINE_PX}px", "0px"}
+        for mode in MODES:
+            table = style.gt_style(gt_table(), mode)
+            tokens = set(palette.surface(mode).values()) | set(palette.text(mode).values())
+            names = [f.name for f in dataclasses.fields(table._options)]
+            for name in names:
+                value = gt_option(table, name)
+                if name.endswith("_width") and ("border" in name or "lines" in name):
+                    style_name = name[:-len("_width")] + "_style"
+                    hidden = style_name in names and gt_option(table, style_name) == "none"
+                    if not hidden:
+                        self.assertIn(value, allowed_widths, f"{mode} {name}={value}")
+                if (name.endswith("_color") and name != "table_font_color_light"
+                        and isinstance(value, str) and value.startswith("#")):
+                    self.assertIn(value, tokens, f"{mode} {name}={value}")
+
+    def test_rendered_html_carries_tokens_font_and_tabular_nums(self):
+        for mode in MODES:
+            sf, tx = palette.surface(mode), palette.text(mode)
+            table = style.gt_style(gt_table(), mode)
+            html = table.as_raw_html()
+            table_id = gt_option(table, "table_id")
+            self.assertTrue(table_id, "gt_style must pin a table id for its scoped css")
+            css = "\n".join(gt_option(table, "table_additional_css"))
+            self.assertIn(f"#{table_id}", css)
+            self.assertRegex(css, rf"#{table_id}\s*\{{[^}}]*background-color:\s*{sf['surface']}")
+            self.assertRegex(css, r"\.gt_table_body[^{]*\{[^}]*font-variant-numeric:\s*"
+                                  r"tabular-nums")
+            for cls in ("gt_col_heading", "gt_subtitle", "gt_sourcenote"):
+                self.assertRegex(css, rf"\.{cls}[^{{]*\{{[^}}]*color:\s*{tx['secondary']}",
+                                 cls)
+            self.assertIn(css.splitlines()[0], html)
+            self.assertIn("Segoe UI", html)
+            tokens = set(sf.values()) | set(tx.values())
+            stray = re.sub(rf"#{re.escape(table_id)}\b", "", css)
+            for token in tokens:
+                stray = stray.replace(token, "")
+            self.assertNotIn("#", stray, "only token hexes and the id selector in the css")
+
+    def test_existing_id_kept_input_untouched_bad_mode(self):
+        base = gt_table().with_id("weather")
+        styled = style.gt_style(base, "dark")
+        self.assertEqual(gt_option(styled, "table_id"), "weather")
+        self.assertIn("#weather", "\n".join(gt_option(styled, "table_additional_css")))
+        self.assertIsNone(gt_option(base, "table_additional_css") or None)
+        self.assertNotEqual(gt_option(base, "table_background_color"),
+                            palette.surface("dark")["surface"])
+        with self.assertRaises(ValueError):
+            style.gt_style(base, "sepia")
 
 
 if __name__ == "__main__":
