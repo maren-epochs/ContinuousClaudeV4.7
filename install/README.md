@@ -122,7 +122,13 @@ py -3.13 -m pip install --no-deps plotly-resampler==0.11.1   # declares plotly<7
   holoviews/hvplot. Re-test before raising the pin.
 - **Skill sync**: `/visualize` lives in `harness/skills/visualize/`; run
   `py -3.13 install/sync_global.py --apply` to install it into `~/.claude/skills/` alongside
-  `tools/viz/`.
+  `tools/viz/`. Re-run it after every pull: outside this repo the skill loads the installed
+  `~/.claude/tools/viz`, so a stale install keeps the old code.
+- **Import name `ccv_viz`**: the skill's snippets open with a one-line PRELUDE that loads
+  `tools/viz` (cwd if it is this repo, else `~/.claude`) as the package `ccv_viz`, then
+  `from ccv_viz import palette, style, ...`. A user project's own `tools/` package would shadow
+  `tools.viz`; `ccv_viz` leaves it untouched. Inside this repo `from tools.viz import ...`
+  also works. Copy the PRELUDE verbatim from `harness/skills/visualize/SKILL.md`.
 
 ## Keeping up with upstream
 

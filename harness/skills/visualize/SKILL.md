@@ -48,14 +48,15 @@ it): facet, filter or aggregate by it, never color a line by it. The answer may 
 | `color` | Call | Rule |
 |---------|------|------|
 | `single` | `palette.categorical(mode, 1)[0]` | one series: slot 1 on every mark, no legend; never a value ramp on nominal categories |
-| `ordinal` | `palette.sequential(steps=...)` | ordered categories, natural order: one hue, steps >= 100 apart inside `palette.load()["ordinal_bounds"][mode]` (light 250-700, dark 100-600), e.g. light 4 = `(250, 400, 550, 700)`; validate `--ordinal` |
+| `ordinal` | `palette.ordinal(mode)` | ordered categories, natural order: one hue, steps >= 100 apart inside `ordinal_bounds` (light 5 = 250-650, dark 6 = 100-600); fewer levels -> spread picks, `palette.sequential(steps=...)` in bounds (light 250-700), e.g. light 4 = `(250, 400, 550, 700)`; validate `--ordinal`. More than 5 light / 6 dark levels repeat colors (Vega-Lite cycles the range) - bin or fold |
 | a measure name | `palette.sequential()` | sequential: a continuous measure on the color channel (heatmap, choropleth), one hue, light -> dark |
 | a dimension / `measure` | `palette.categorical(mode, n)` | identity: fixed slot order, never cycled; n > 8 raises - fold |
 | `diverging` | `palette.diverging(mode)` -> (low, mid, high) | polarity: warm/cool poles, neutral gray mid |
+| `1 hue + gray` | `palette.gray(mode)` + `palette.categorical(mode, 1)[0]` | emphasis: context in gray, the highlight in slot 1 (page: `token("gray")` / `token("series-1")`). Never aqua (3) or magenta (5) as the highlight, nor red (8) in dark: they collapse into the gray under CVD |
 | state | `palette.status(mode)` | status: good/warning/serious/critical only, with icon + label |
 
-The altair theme's `ordinal` range is the full ramp (its light end fails `--ordinal`): pass the
-picked steps as `alt.Scale(range=...)`. Color follows the entity, not its rank: map entity ->
+The altair theme's `ordinal` range is `palette.ordinal(mode)`; for spread picks pass them as
+`alt.Scale(range=...)`. Color follows the entity, not its rank: map entity ->
 slot once, so filters never repaint.
 
 **3 VALIDATE.** Run the validator on the exact hexes the chart uses, per mode. FAIL (exit 1)
@@ -73,7 +74,10 @@ py -3.13 tools/viz/validate_palette.py "$HEX" --mode light --pairs all
 `**style.bar_kwargs(mode)`, areas `alpha=style.AREA_OPACITY`); seaborn `style.set_seaborn(mode)`;
 plotly `fig.update_layout(template=style.plotly_template(mode))` (scatter: `hovermode="closest"`);
 altair `with alt.theme.enable(style.altair_theme(mode)):` around build + save; bokeh
-`export.save(p, stem, bokeh_theme=style.bokeh_theme(mode))`. The style carries 2px lines, 8px
+`export.save(p, stem, bokeh_theme=style.bokeh_theme(mode))`; great_tables
+`style.gt_style(GT(df, id="t1"), mode)` returns a styled copy (16px margin, hairline rules,
+secondary-ink labels); it scopes its CSS to the table id - set the id (or `with_id`) before
+`gt_style`, never after; no id -> a random `house-<hex>` one. The style carries 2px lines, 8px
 markers with a 2px surface ring, 2px surface gaps, solid hairline grid. Yours to enforce: bars
 <= `style.BAR_MAX_PX` (24px) thick (size the figure, see 7a), selective direct labels only.
 Dense series (> ~500 points per series) -> 1px lines. Raw + smoothed pair -> raw series in
@@ -126,6 +130,7 @@ charts = [artifact_page.from_altair(chart, title="Hours by team"),
           artifact_page.from_plotly(fig, title="Weekly trend")]
 # any color value may be a palette token, resolved in light and dark at render time:
 # {"mark": {"type": "line", "color": artifact_page.token("text-muted")}, ...}  (raw series)
+# emphasis: context series token("gray"), the highlighted one token("series-1")
 html = artifact_page.write_page(charts, "hours.html", title="Team Hours", description="...")
 ```
 
@@ -135,8 +140,11 @@ may be `"token:<name>"` = `artifact_page.token(name)`, unknown names raise). Tit
 words. The page carries tokens, dark mode, hover, the legend rule, a Table toggle + CSV link per
 card, and strips dual axes with a visible warning. Vega-Lite fold color fields get legend +
 every-series tooltip, slots in fold order; calculate-derived ones keep the author's legend.
-ECharts lines: `end_labels: True` -> themed end labels (meets `label: direct`); grid.top is
-sized to the legend. Preview light, dark, phone (waits on `window.__chartsReady`):
+ECharts lines: `end_labels: True` (every line series) or a list of series names (only those -
+pick the <= 4 direct-labeled series of step 6) -> themed end labels (meets `label: direct`); a
+series with its own `endLabel.show: False` stays off; False/None/[] = off; a name that is not a
+line series, or any other value, adds a page warning. grid.top is sized to the legend. Preview
+light, dark, phone (waits on `window.__chartsReady`):
 `py -3.13 tools/viz/export.py render out.html out.png --mode dark --width 390`. Monthly
 Vega-Lite data: `timeUnit: "utcyearmonth"` (else local time shows "Feb 28" for March).
 Known gaps - warn or work around: facet/concat/repeat Vega-Lite specs are not resized at phone
@@ -174,4 +182,5 @@ band, overflow. Then the hard rules - any match is wrong, fix before reporting:
 continuum/research is tracked and the repo may be public; never write other project names or
 full session ids. Reusable gotcha -> `bloks new rule "<text>" --tags viz,<lib>`.
 
-Install: `tools/requirements-viz.txt` header. Live copy: `py -3.13 install/sync_global.py --apply`.
+Install: `tools/requirements-viz.txt` header. Live copy:
+`py -3.13 install/sync_global.py --apply`, re-run after every pull (outside the repo the PRELUDE loads `~/.claude/tools/viz`).

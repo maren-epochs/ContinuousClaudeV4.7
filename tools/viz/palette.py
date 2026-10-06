@@ -4,14 +4,15 @@
 Pure stdlib. Every value comes from palette.json (itself transcribed from the
 skill's references/palette.md); this module never carries a hex literal.
 
-    from tools.viz import palette
+    from tools.viz import palette       # in the repo
+    from ccv_viz import palette         # elsewhere, after the /visualize PRELUDE
     palette.categorical("light")        # 8 hex, slot order (never re-order)
     palette.categorical("dark", 3)      # first three slots (all-pairs cap)
     palette.sequential()                # default hue ramp, light -> dark
     palette.ordinal("dark")             # ramp steps inside ordinal_bounds, >= 100 apart
     palette.diverging("light")          # (low, mid, high)
     palette.gray("dark")                # de-emphasis gray (1 hue + gray), --gray
-    palette.css_tokens("dark")          # "--surface-1: #1a1a19;" lines
+    palette.css_tokens("dark")          # "--name: value;" lines, one per token
 """
 import copy
 import functools

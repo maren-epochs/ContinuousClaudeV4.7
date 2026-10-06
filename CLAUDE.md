@@ -69,14 +69,16 @@ Host CPython only (`py -3.13`); install: `tools/requirements-viz.txt` + `py -3.1
 
 | Module | Role | Entry point |
 |--------|------|-------------|
-| `palette.json` + `palette.py` | Source of truth for every color/font token; no hex literals anywhere else | `categorical(mode, n)`, `sequential()`, `diverging(mode)`, `status(mode)`, `css_tokens(mode)`; `py -3.13 tools/viz/palette.py` prints CSS tokens |
+| `palette.json` + `palette.py` | Source of truth for every color/font token; no hex literals anywhere else | `categorical(mode, n)`, `sequential()`, `ordinal(mode)` (light 5 / dark 6 levels, more repeat), `diverging(mode)`, `status(mode)`, `gray(mode)` (emphasis context; highlight = slot 1), `css_tokens(mode)`; `py -3.13 tools/viz/palette.py` prints CSS tokens |
 | `validate_palette.py` | Six-check palette validator (vendored) + `validate()` adapter | `py -3.13 tools/viz/validate_palette.py "#hex,#hex,..." [--mode light\|dark] [--pairs adjacent\|all] [--ordinal]` |
 | `recommend.py` | Chart form from data job/profile; refuses dual axis, pies past 5, >8 hues | `py -3.13 tools/viz/recommend.py data.csv\|data.parquet [--job JOB] [--json]` |
-| `style.py` | One house style: matplotlib/seaborn rc, plotly template, altair theme, bokeh theme | `apply_matplotlib(mode)`, `plotly_template(mode)`, `altair_theme(mode)`, `bokeh_theme(mode)`; `py -3.13 tools/viz/style.py [mode]` |
+| `style.py` | One house style: matplotlib/seaborn rc, plotly template, altair theme, bokeh theme, great_tables | `apply_matplotlib(mode)`, `plotly_template(mode)`, `altair_theme(mode)`, `bokeh_theme(mode)`, `gt_style(gt, mode)` (set the table id before, not after); `py -3.13 tools/viz/style.py [mode]` |
 | `export.py` | `save(fig, path, formats)` for matplotlib/plotly/altair/bokeh/great_tables/holoviews; `render_html` via Playwright Chromium (waits on `window.__chartsReady`) | `py -3.13 tools/viz/export.py render page.html out.png [--mode dark] [--width 1200] [--height 800]` |
-| `artifact_page.py` | Self-contained Artifact HTML page from Plotly/Vega-Lite/ECharts specs (tokens on `:root`, dark mode, table view) | `build_page(charts, title, description='', mode_default='auto', table_rows=None)` -> HTML; `write_page(charts, path, **kw)` -> abs path; `from_altair(chart)`, `from_plotly(fig)`; `py -3.13 tools/viz/artifact_page.py charts.json out.html --title "Two Words"` |
+| `artifact_page.py` | Self-contained Artifact HTML page from Plotly/Vega-Lite/ECharts specs (tokens on `:root`, dark mode, table view) | `build_page(charts, title, description='', mode_default='auto', table_rows=None)` -> HTML; `write_page(charts, path, **kw)` -> abs path; `from_altair(chart)`, `from_plotly(fig)`; spec colors `token('<name>')` (any css token, e.g. `gray`, `series-1`); ECharts `end_labels: True\|[names]`; `py -3.13 tools/viz/artifact_page.py charts.json out.html --title "Two Words"` |
 
 Chrome: kaleido (plotly PNG/SVG) uses an installed Chrome or `kaleido.get_chrome_sync()`; on failure `export.py` falls back to Playwright Chromium. bokeh pinned 3.9.2 (panel 1.9.4 breaks on 3.10.0).
+
+Consumers import `from ccv_viz import ...` after the one-line PRELUDE in `/visualize` (a project's own `tools/` package would shadow `tools.viz`); in-repo `from tools.viz import ...` also works.
 
 ## Ouros Sandbox
 

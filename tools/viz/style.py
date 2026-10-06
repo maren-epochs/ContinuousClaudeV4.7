@@ -6,7 +6,8 @@ join/cap, markers >= 8px, bars capped at 24px with a 2px surface gap, a 2px
 surface ring on dots, hairline (1px) solid recessive gridlines/axes, text in
 text tokens (never series colors), categorical slots in fixed order.
 
-    from tools.viz import style
+    from tools.viz import style         # in the repo
+    from ccv_viz import style           # elsewhere, after the /visualize PRELUDE
     style.apply_matplotlib("dark")        # rcParams; returns the dict it set
     style.set_seaborn("light")            # seaborn + the same rcParams
     fig.update_layout(template=style.plotly_template("light"))   # 'house-light'
@@ -566,7 +567,8 @@ def gt_style(gt, mode: str = "light"):
 
     Named gt_style per the contract; do not confuse it with great_tables.style
     (demo code imports that module as gt_style too - import this one as
-    ``from tools.viz import style`` and call ``style.gt_style``). The scoped
+    ``from tools.viz import style`` / ``from ccv_viz import style`` and call
+    ``style.gt_style``). The scoped
     CSS needs a table id: an existing one is kept, else one is pinned here
     (call with_id before gt_style, not after). The reference palette names no
     table use for the de-emphasis gray, so tables do not use palette.gray.
