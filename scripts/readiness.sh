@@ -42,6 +42,29 @@ analysis_failed() {
   record "$1" "skip" "analysis failed: $2 produced no parseable JSON" "$CAT"
 }
 
+# Wait for a background tldr job without `wait`: on MSYS, `wait $pid` was seen
+# blocking >200s after every job had exited (no live children; not reproduced
+# in 55 runs — a missed SIGCHLD is the inferred cause). Poll with kill -0 and cap
+# it, so a stuck job becomes a partial/empty JSON -> "skip", never a hang.
+await_job() { # <pid> [cap_seconds]
+  local pid="$1" cap="${2:-120}" ticks=0
+  [[ -z "$pid" ]] && return 0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+    ticks=$((ticks + 1))
+    if (( ticks >= cap * 10 )); then
+      # Kill the whole tree: killing only the job subshell orphans tldr.
+      if [[ -r "/proc/$pid/winpid" ]] && command -v taskkill >/dev/null 2>&1; then
+        taskkill //F //T //PID "$(cat "/proc/$pid/winpid")" >/dev/null 2>&1
+      fi
+      kill "$pid" 2>/dev/null
+      echo "readiness: tldr job $pid exceeded ${cap}s, killed" >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
 # ── Helpers ─────────────────────────────────────────────────────
 has_file()  { [[ -f "$TARGET/$1" ]]; }
 has_dir()   { [[ -d "$TARGET/$1" ]]; }
@@ -86,28 +109,30 @@ SKIP_SECURE="${READINESS_SKIP_SECURE:-0}"
 # ── Launch tldr analyses in the background ──────────────────────
 # Started here so the ~9s `tldr secure` run overlaps the filesystem checks
 # below. VAR=$(cmd) & loses the assignment (subshell), so each job writes to
-# a temp file; on failure the job writes the same default JSON the old
-# sequential version fell back to. Results are read in Category 7.
+# a temp file (missing/unparseable output is recorded as "skip" in Category 7).
+# Each job group gets </dev/null >/dev/null 2>&1 so no tldr descendant (e.g. a
+# lingering daemon or killed-job grandchild) holds the caller's stdout/stderr
+# pipe open and stalls `readiness.sh | grep`.
 if [[ "$HAS_TLDR" == "1" ]]; then
   WORK_DIR=$(mktemp -d)
   trap 'rm -rf "$WORK_DIR"' EXIT
 
-  { (cd "$TARGET" && tldr dead "$SRC_DIR" --format json --quiet > "$WORK_DIR/dead.json" 2>/dev/null) || true; } &
+  { (cd "$TARGET" && tldr dead "$SRC_DIR" --format json --quiet > "$WORK_DIR/dead.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_DEAD=$!
-  { (cd "$TARGET" && tldr clones "$SRC_DIR" --format json --quiet > "$WORK_DIR/clones.json" 2>/dev/null) || true; } &
+  { (cd "$TARGET" && tldr clones "$SRC_DIR" --format json --quiet > "$WORK_DIR/clones.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_CLONES=$!
-  { (cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet > "$WORK_DIR/cognitive.json" 2>/dev/null) || true; } &
+  { (cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet > "$WORK_DIR/cognitive.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_COG=$!
-  { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || true; } &
+  { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_DEBT=$!
   PID_SEC=""
   if [[ "$SKIP_SECURE" != "1" ]]; then
-    { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || true; } &
+    { (cd "$TARGET" && tldr secure "$SRC_DIR" --format json --quiet > "$WORK_DIR/secure.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
     PID_SEC=$!
   fi
-  { (cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet > "$WORK_DIR/calls.json" 2>/dev/null) || true; } &
+  { (cd "$TARGET" && tldr calls "$SRC_DIR" --format json --quiet > "$WORK_DIR/calls.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_CG=$!
-  { (cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet > "$WORK_DIR/hotspots.json" 2>/dev/null) || true; } &
+  { (cd "$TARGET" && tldr hotspots "$SRC_DIR" --format json --quiet > "$WORK_DIR/hotspots.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_HOT=$!
 fi
 
@@ -360,7 +385,7 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   # parsing of the fast ones.
 
   # dead_code
-  wait "$PID_DEAD" || true
+  await_job "$PID_DEAD" || true
   DEAD_JSON=$(cat "$WORK_DIR/dead.json" 2>/dev/null || true)
   # One spawn for all three values: python3 startup is ~150ms on MSYS
   DEAD_STATS=$(echo "$DEAD_JSON" | python3 -c "
@@ -378,7 +403,7 @@ print(len(d.get('definitely_dead',[])), len(d.get('possibly_dead',[])), d.get('t
   fi
 
   # clones
-  wait "$PID_CLONES" || true
+  await_job "$PID_CLONES" || true
   CLONE_JSON=$(cat "$WORK_DIR/clones.json" 2>/dev/null || true)
   CLONE_N=$(echo "$CLONE_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('clone_pairs',[])))" 2>/dev/null || echo ERR)
   if [[ "$CLONE_N" == ERR ]]; then
@@ -390,7 +415,7 @@ print(len(d.get('definitely_dead',[])), len(d.get('possibly_dead',[])), d.get('t
   fi
 
   # cognitive complexity
-  wait "$PID_COG" || true
+  await_job "$PID_COG" || true
   COG_JSON=$(cat "$WORK_DIR/cognitive.json" 2>/dev/null || true)
   COG_SEVERE=$(echo "$COG_JSON" | python3 -c "
 import json,sys
@@ -406,7 +431,7 @@ print(d.get('summary',{}).get('severe_violations_count', len([f for f in d.get('
   fi
 
   # tech debt
-  wait "$PID_DEBT" || true
+  await_job "$PID_DEBT" || true
   DEBT_JSON=$(cat "$WORK_DIR/debt.json" 2>/dev/null || true)
   # Ratio and threshold verdict in one spawn (was two)
   DEBT_STATS=$(echo "$DEBT_JSON" | python3 -c "
@@ -429,7 +454,7 @@ print(pct, 1 if pct < 10 else 0)
   if [[ "$SKIP_SECURE" == "1" ]]; then
     record "security_scan" "skip" "Skipped (READINESS_SKIP_SECURE=1)" "$CAT"
   else
-    wait "$PID_SEC" || true
+    await_job "$PID_SEC" || true
     SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || true)
     SEC_N=$(echo "$SEC_JSON" | python3 -c "
 import json,sys
@@ -447,7 +472,7 @@ print(s.get('taint_count',0) + s.get('leak_count',0))
   fi
 
   # call graph (novel)
-  wait "$PID_CG" || true
+  await_job "$PID_CG" || true
   CG_JSON=$(cat "$WORK_DIR/calls.json" 2>/dev/null || true)
   CG_STATS=$(echo "$CG_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('edges',[])), d.get('files_analyzed',0))" 2>/dev/null || echo ERR)
   read -r CG_EDGES CG_FILES <<< "$CG_STATS"
@@ -460,7 +485,7 @@ print(s.get('taint_count',0) + s.get('leak_count',0))
   fi
 
   # hotspots (novel)
-  wait "$PID_HOT" || true
+  await_job "$PID_HOT" || true
   HOT_JSON=$(cat "$WORK_DIR/hotspots.json" 2>/dev/null || true)
   HOT_HIGH=$(echo "$HOT_JSON" | python3 -c "
 import json,sys
