@@ -6,11 +6,11 @@
   "encoding": {
     "x": "date",
     "y": "value",
-    "facet": "measure",
-    "color": "weather"
+    "facet": "measure"
   },
   "warnings": [
-    "Dual-axis charts (two y-scales on one plot): measures precipitation (1e1), temp_max (1e1), temp_min (1e1), wind (1e0) differ in scale - small multiples, or index both to a common base (=100 at t0) on ONE axis; never a second y-axis"
+    "Dual-axis charts (two y-scales on one plot): measures wind (1e0) differ in scale from precipitation (1e1), temp_max (1e1), temp_min (1e1) - small multiples, or index them to a common base (=100 at t0) on ONE axis; never a second y-axis",
+    "'weather' is a per-row attribute (one value per 'date'), not a series identity - a line cannot be colored by it, so it is left out of the encoding; facet or filter by it, or aggregate per 'date'"
   ],
   "profile": {
     "n_rows": 1461,
@@ -48,7 +48,8 @@
       {
         "name": "weather",
         "kind": "categorical",
-        "cardinality": 5
+        "cardinality": 5,
+        "is_series": false
       }
     ],
     "measures": [

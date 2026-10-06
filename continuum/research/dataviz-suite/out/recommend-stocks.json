@@ -16,7 +16,8 @@
       {
         "name": "symbol",
         "kind": "categorical",
-        "cardinality": 5
+        "cardinality": 5,
+        "is_series": true
       },
       {
         "name": "date",

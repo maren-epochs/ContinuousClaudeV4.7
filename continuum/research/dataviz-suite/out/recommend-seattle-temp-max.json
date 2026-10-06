@@ -1,4 +1,6 @@
 {
+  "job": "change-over-time",
+  "job_inferred": true,
   "form": "line",
   "reason": "choosing-a-form 'Trend over time' -> line (area for a single series).",
   "encoding": {
