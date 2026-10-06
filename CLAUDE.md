@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 7 hooks (+ tldr-shim helper).
+Autonomous SDLC pipeline for Claude Code. 11 skills, 2 agents, 7 hooks (+ tldr-shim helper).
 
 ## Skills
 
@@ -16,6 +16,7 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 7 hooks (+ tldr-s
 | `/create-handoff` | Session end | Serialize context for next session |
 | `/resume-handoff` | Session start | Resume from handoff document |
 | `/upgrade-harness` | Extend Ouros | Add new external functions to Ouros sandbox |
+| `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
 
 ## Agents
 
@@ -61,6 +62,21 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `context_ledger.py` — per-span / per-skill main-context token ledger from a session transcript (stdlib; `--json`, `--session <id>`, default = newest transcript for cwd); create-handoff writes its summary as `context:`
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
+
+## Visualization (tools/viz)
+
+Host CPython only (`py -3.13`); install: `tools/requirements-viz.txt` + `py -3.13 -m playwright install chromium` (see `install/README.md`). Driven by `/visualize`.
+
+| Module | Role | Entry point |
+|--------|------|-------------|
+| `palette.json` + `palette.py` | Source of truth for every color/font token; no hex literals anywhere else | `categorical(mode, n)`, `sequential()`, `diverging(mode)`, `status(mode)`, `css_tokens(mode)`; `py -3.13 tools/viz/palette.py` prints CSS tokens |
+| `validate_palette.py` | Six-check palette validator (vendored) + `validate()` adapter | `py -3.13 tools/viz/validate_palette.py "#hex,#hex,..." [--mode light\|dark] [--pairs adjacent\|all] [--ordinal]` |
+| `recommend.py` | Chart form from data job/profile; refuses dual axis, pies past 5, >8 hues | `py -3.13 tools/viz/recommend.py data.csv\|data.parquet [--job JOB] [--json]` |
+| `style.py` | One house style: matplotlib/seaborn rc, plotly template, altair theme, bokeh theme | `apply_matplotlib(mode)`, `plotly_template(mode)`, `altair_theme(mode)`, `bokeh_theme(mode)`; `py -3.13 tools/viz/style.py [mode]` |
+| `export.py` | `save(fig, path, formats)` for matplotlib/plotly/altair/bokeh/great_tables/holoviews; `render_html` via Playwright Chromium (waits on `window.__chartsReady`) | `py -3.13 tools/viz/export.py render page.html out.png [--mode dark] [--width 1200] [--height 800]` |
+| `artifact_page.py` | Self-contained Artifact HTML page from Plotly/Vega-Lite/ECharts specs (tokens on `:root`, dark mode, table view) | `build_page(charts, title, description='', mode_default='auto', table_rows=None)` -> HTML; `write_page(charts, path, **kw)` -> abs path; `from_altair(chart)`, `from_plotly(fig)`; `py -3.13 tools/viz/artifact_page.py charts.json out.html --title "Two Words"` |
+
+Chrome: kaleido (plotly PNG/SVG) uses an installed Chrome or `kaleido.get_chrome_sync()`; on failure `export.py` falls back to Playwright Chromium. bokeh pinned 3.9.2 (panel 1.9.4 breaks on 3.10.0).
 
 ## Ouros Sandbox
 

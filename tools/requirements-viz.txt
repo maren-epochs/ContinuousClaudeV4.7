@@ -1,0 +1,71 @@
+# Visualization suite (tools/viz + the /visualize skill). Host CPython only:
+#   py -3.13 -m pip install -r tools/requirements-viz.txt
+#   py -3.13 -m playwright install chromium
+# Exact pins = versions verified together on 2026-10-05 (py -3.13 -m pip list).
+# Direct dependencies only; transitive packages are left to the resolver.
+
+# --- core: arrays, frames, static charts ---
+numpy==2.5.3                    # arrays behind every chart library
+pandas==3.0.6                   # frames; recommend.profile_frame input (copy-on-write is always on in 3.x)
+polars==1.44.2                  # fast frames for aggregating before plotting
+duckdb==1.5.6                   # SQL aggregation of large files before plotting
+pyarrow==25.0.1                 # parquet IO and arrow interchange (altair/vegafusion, polars)
+pillow==12.3.0                  # PNG read-back and pixel checks in tests
+matplotlib==3.11.2              # static PNG/SVG; style.apply_matplotlib house rcParams
+seaborn==0.13.2                 # statistical helpers on matplotlib (stale upstream; thin use only)
+
+# --- declarative: Vega-Lite ---
+altair[all]==6.3.0              # Vega-Lite 6 charts; [all] brings vegafusion + vl-convert extras
+vl-convert-python==1.9.0.post1  # browser-free PNG/SVG export for altair; keep <2 (2.0 is still rc-only)
+vegafusion==2.0.3               # server-side transforms; lifts altair's 5000-row MaxRowsError
+
+# --- interactive: plotly ---
+plotly==7.1.0                   # interactive figures (plotly.js 4; mapbox traces removed, use *map traces)
+kaleido==1.4.0                  # plotly static export; needs a Chrome (installed or kaleido.get_chrome_sync())
+# plotly-resampler 0.11.1 declares plotly<7 but FigureResampler works on plotly 7.1.0 (verified
+# 2026-10-05). pip cannot co-install it from this file, so its runtime deps are pinned here and
+# the package itself is installed separately (see install/README.md):
+#   py -3.13 -m pip install --no-deps plotly-resampler==0.11.1
+dash==4.4.1                     # plotly-resampler runtime dep (interactive callbacks)
+orjson==3.12.0                  # plotly-resampler runtime dep (fast JSON)
+tsdownsample==0.1.5.1           # plotly-resampler runtime dep (MinMaxLTTB downsampling)
+
+# --- dashboards: bokeh / HoloViz ---
+# bokeh pinned below 3.10: panel 1.9.4 fails on import with bokeh 3.10.0, which breaks
+# holoviews/hvplot (verified 2026-10-05; re-test before raising).
+bokeh==3.9.2                    # interactive dashboards; style.bokeh_theme; PNG via export.render_html
+holoviews==1.23.2               # declarative bokeh/matplotlib plots; export.save renders via the bokeh backend
+hvplot==0.12.2                  # .hvplot() accessor on pandas/polars frames
+panel==1.9.4                    # dashboard layout/serving for HoloViz objects
+
+# --- tables ---
+great_tables[extra]==1.0.0      # publication tables; as_raw_html(); [extra] enables gtsave() PNG
+
+# --- grammar of graphics ---
+plotnine==0.15.8                # ggplot2-style grammar on matplotlib; ggplot.save()
+lets-plot==4.11.0               # ggplot2-style grammar with HTML/PNG/SVG ggsave()
+scienceplots==2.2.2             # journal style sheets for matplotlib
+adjustText==1.4.0               # label overlap removal for matplotlib annotations
+
+# --- big data ---
+datashader==0.19.1              # rasterized density for millions of points (numba-backed)
+
+# --- geo ---
+geopandas==1.2.0                # geometry frames, choropleths
+pyogrio==0.13.0                 # fast vector file IO for geopandas (wheels, no GDAL install)
+shapely==2.1.2                  # geometry operations
+pyproj==3.8.0                   # CRS transforms
+contextily==1.7.1               # basemap tiles for static maps
+folium==0.20.0                  # Leaflet HTML maps
+pydeck==0.9.3                   # deck.gl maps for large point sets
+lonboard==0.17.0                # GPU deck.gl layers from geoarrow for very large geodata
+mapclassify==2.11.0             # choropleth classification schemes (quantiles, natural breaks)
+
+# --- palettes and colour science ---
+colorcet==3.2.1                 # perceptually uniform continuous ramps
+cmcrameri==1.10                 # Crameri scientific colour maps (CVD-safe)
+colorspacious==1.1.2            # CVD simulation and CAM02-UCS distances
+qualpal==1.1.0                  # distinct categorical palette generation
+
+# --- render ---
+playwright==1.63.0              # headless Chromium for export.render_html (run `playwright install chromium`)

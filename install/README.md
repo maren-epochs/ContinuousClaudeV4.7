@@ -101,6 +101,29 @@ session). Register compact-only for zero per-session cost, or `startup|clear|com
 
 `SESSION_START_CAP` changes the cap. Tests: `bash .claude/hooks/test_session_start.sh`.
 
+## Visualization suite (optional)
+
+`tools/viz/` and the `/visualize` skill run on host CPython (`py -3.13`), never inside the
+ouros sandbox. Install the pinned stack and the headless browser once:
+
+```bash
+py -3.13 -m pip install -r tools/requirements-viz.txt
+py -3.13 -m playwright install chromium
+py -3.13 -m pip install --no-deps plotly-resampler==0.11.1   # declares plotly<7; works on 7.1.0
+```
+
+- **Chrome for kaleido** (plotly static export): kaleido 1.x bundles no browser. It uses an
+  installed Chrome, or fetch one with `py -3.13 -c "import kaleido; kaleido.get_chrome_sync()"`.
+  If kaleido fails, `tools/viz/export.py` falls back to Playwright Chromium for PNG.
+- **Playwright Chromium** renders every HTML output (bokeh, great_tables, artifact pages,
+  holoviews via its bokeh backend) in `export.render_html`; pages signal readiness through
+  `window.__chartsReady`.
+- **bokeh is pinned to 3.9.2**: panel 1.9.4 fails on import with bokeh 3.10.0, which breaks
+  holoviews/hvplot. Re-test before raising the pin.
+- **Skill sync**: `/visualize` lives in `harness/skills/visualize/`; run
+  `py -3.13 install/sync_global.py --apply` to install it into `~/.claude/skills/` alongside
+  `tools/viz/`.
+
 ## Keeping up with upstream
 
 ```bash
