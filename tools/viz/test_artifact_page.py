@@ -678,6 +678,64 @@ class EchartsLines(unittest.TestCase):
             self.assertTrue(s["endLabel"]["show"])
             self.assertEqual(s["endLabel"]["formatter"], "{a}")
             self.assertNotIn("color", s["endLabel"])     # theme token applied at render time
+        self.assertEqual(ap.prepare_chart(stock_lines(["A", "B"], end_labels=True))["warnings"],
+                         [])
+
+    def test_end_labels_list_selects_named_series(self):
+        out = ap.prepare_chart(stock_lines(["A", "B", "C"], end_labels=["B", "C"]))
+        by_name = {s["name"]: s for s in out["spec"]["series"]}
+        self.assertNotIn("endLabel", by_name["A"])
+        self.assertNotIn("labelLayout", by_name["A"])
+        for n in ("B", "C"):
+            self.assertTrue(by_name[n]["endLabel"]["show"])
+            self.assertEqual(by_name[n]["endLabel"]["formatter"], "{a}")
+        self.assertEqual(out["warnings"], [])
+
+    def test_end_labels_series_opt_out_kept_under_true(self):
+        chart = stock_lines(["A", "B"], end_labels=True)
+        chart["spec"]["series"][1]["endLabel"] = {"show": False}
+        out = ap.prepare_chart(chart)
+        a, b = out["spec"]["series"]
+        self.assertTrue(a["endLabel"]["show"])
+        self.assertIs(b["endLabel"]["show"], False)
+        self.assertEqual(out["warnings"], [])
+
+    def test_end_labels_off_values_add_nothing(self):
+        for value in (False, None, []):
+            out = ap.prepare_chart(stock_lines(["A", "B"], end_labels=value))
+            self.assertFalse(any("endLabel" in s for s in out["spec"]["series"]), value)
+            self.assertEqual(out["warnings"], [], value)
+
+    def test_end_labels_unknown_name_warns(self):
+        out = ap.prepare_chart(stock_lines(["A", "B"], end_labels=["A", "Zed"]))
+        a, b = out["spec"]["series"]
+        self.assertTrue(a["endLabel"]["show"])
+        self.assertNotIn("endLabel", b)
+        self.assertEqual(len(out["warnings"]), 1)
+        self.assertIn("'Zed'", out["warnings"][0])
+        html = ap.build_page([stock_lines(["A", "B"], end_labels=["Zed"])], "End Label Page")
+        self.assertIn('<p class="warning" role="note">Warning: end_labels', html)
+
+    def test_end_labels_non_line_series_name_warns(self):
+        chart = stock_lines(["A"], end_labels=["Bars"])
+        chart["spec"]["series"].append({"name": "Bars", "type": "bar", "data": [1]})
+        out = ap.prepare_chart(chart)
+        self.assertFalse(any("endLabel" in s for s in out["spec"]["series"]))
+        self.assertEqual(len(out["warnings"]), 1)
+        self.assertIn("'Bars'", out["warnings"][0])
+
+    def test_end_labels_invalid_type_warns(self):
+        for value in ("A", 1, {"A": True}, ["A", 2]):
+            out = ap.prepare_chart(stock_lines(["A", "B"], end_labels=value))
+            self.assertFalse(any("endLabel" in s for s in out["spec"]["series"]), value)
+            self.assertEqual(len(out["warnings"]), 1, value)
+            self.assertIn("end_labels", out["warnings"][0])
+
+    def test_end_labels_ignored_outside_echarts(self):
+        chart = {"kind": "plotly", "title": "t", "end_labels": True,
+                 "spec": {"data": [{"type": "scatter", "mode": "lines", "x": [1, 2],
+                                    "y": [1, 2]}]}}
+        self.assertEqual(ap.prepare_chart(chart)["warnings"], [])
 
 
 FAKE_CLAUDE = """

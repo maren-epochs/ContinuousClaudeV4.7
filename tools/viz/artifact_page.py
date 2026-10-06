@@ -33,7 +33,7 @@ page needs ({} when no card has rows) - pass it as the Artifact's
 
 A chart is a dict: {'kind': 'vega-lite'|'plotly'|'echarts', 'spec': dict,
 'title': str, 'caption': str|None, 'rows': list[dict]|None, 'height': int,
-'end_labels': bool (ECharts lines only)}.
+'end_labels': True | list[str] (ECharts lines only)}.
 Spec patching (prepare_chart): Vega-Lite line/area gets a crosshair+tooltip
 layer, other marks tooltip:true; ECharts tooltip axis/item; Plotly hovermode
 'x unified' for lines; legend shown for >= 2 series, hidden for one; a second
@@ -48,8 +48,11 @@ field (mark tooltip content 'data'). ECharts lines: markerless lines (showSymbol
 false / symbol 'none') get a 16x2 'rect' legend icon; with no author grid the
 bridge measures the legend at render/resize time and sets grid.top for one or
 two rows (more rows -> legend type 'scroll'), plus room for a y-axis name;
-end_labels=True adds series endLabel ('{a}') colored with --text-secondary at
-render time and widens grid.right to fit the longest name.
+end_labels=True adds series endLabel ('{a}') to every line series, a list of
+series names to only those (a series whose own endLabel.show is False stays
+off either way; a name that is not a line series, or any other value, adds a
+page warning); labels are colored with --text-secondary at render time and
+grid.right widens to fit the longest shown name.
 
 Token references. Any string value of the exact form "token:<name>" anywhere
 in a spec (Vega-Lite mark color or {"value": ...} encoding, ECharts lineStyle /
@@ -385,13 +388,41 @@ def _markerless(s):
                                         or s.get("symbol") == "none")
 
 
+def _end_label_names(value, series, warnings):
+    """Line-series names to end-label: None = every line series, set = only those.
+
+    value is chart['end_labels']: True, or a list/tuple of series names. Off
+    values (False, None, empty list) and invalid ones return an empty set; an
+    invalid value, or a name that is not a line series, adds a page warning.
+    """
+    if value is True:
+        return None
+    if value is False or value is None:
+        return set()
+    if not isinstance(value, (list, tuple)) or \
+            not all(isinstance(n, str) for n in value):
+        warnings.append(f"end_labels ignored: expected True or a list of series names, "
+                        f"got {value!r}.")
+        return set()
+    lines = {str(s["name"]) for s in series if s.get("type") == "line" and s.get("name")}
+    unknown = [n for n in value if n not in lines]
+    if unknown:
+        warnings.append("end_labels: no line series named "
+                        + ", ".join(repr(n) for n in unknown)
+                        + (f"; line series are {', '.join(repr(n) for n in sorted(lines))}."
+                           if lines else "; the chart has no named line series."))
+    return set(value) & lines
+
+
 def _prepare_echarts(opt, warnings, end_labels=False):
     """Patch an ECharts option; returns (option, rows, fit).
 
     fit is True when the grid is ours (author gave none): the bridge then sizes
     grid.top / grid.right to the measured legend and end labels at render time.
+    end_labels: True (every line series) or a list of line-series names.
     """
     series = [s for s in _as_list(opt.get("series")) if isinstance(s, dict)]
+    labelled = _end_label_names(end_labels, series, warnings)
     y_axes = _as_list(opt.get("yAxis"))
     if len(y_axes) > 1:
         opt["yAxis"] = y_axes[0]
@@ -429,7 +460,9 @@ def _prepare_echarts(opt, warnings, end_labels=False):
         elif s.get("type") == "line":
             s.setdefault("lineStyle", {}).setdefault("width", 2)
             s.setdefault("symbolSize", 8)
-            if end_labels:      # color comes from --text-secondary in the bridge
+            # endLabel.show False on the series is the author's opt-out: kept.
+            # Color comes from --text-secondary in the bridge.
+            if labelled is None or (s.get("name") and str(s["name"]) in labelled):
                 label = s.setdefault("endLabel", {})
                 label.setdefault("show", True)
                 label.setdefault("formatter", "{a}")
@@ -539,7 +572,7 @@ def prepare_chart(chart):
         spec, rows = _prepare_vega_lite(spec, warnings)
     elif kind == "echarts":
         spec, rows, fit = _prepare_echarts(spec, warnings,
-                                           end_labels=bool(chart.get("end_labels")))
+                                           end_labels=chart.get("end_labels"))
     else:
         spec, rows = _prepare_plotly(spec, warnings)
     given = chart.get("rows")
