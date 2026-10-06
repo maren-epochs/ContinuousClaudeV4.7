@@ -72,7 +72,9 @@ has_glob()  { compgen -G "$TARGET/$1" > /dev/null 2>&1; }
 # A "dir/" entry is checked as a directory: compgen -G returns 0 for any
 # trailing-slash pattern, so globbing one is a guaranteed false positive.
 has_any()   { for f in "$@"; do has_file "$f" && return 0; if [[ "$f" == */ ]]; then has_dir "${f%/}" && return 0; else has_glob "$f" && return 0; fi; done; return 1; }
-file_grep() { grep -q "$1" "$TARGET/$2" 2>/dev/null; }
+# file_grep [grep-flags...] <pattern> <file>: the last arg is the file (relative
+# to TARGET); every earlier arg goes to grep, so `file_grep -i pat f` works.
+file_grep() { local f="${!#}"; grep -q "${@:1:$#-1}" "$TARGET/$f" 2>/dev/null; }
 
 detect_lang() {
   has_file "package.json" && echo "typescript" && return
@@ -317,7 +319,7 @@ else
   record "agents_md" "fail" "No AGENTS.md or CLAUDE.md" "$CAT"
 fi
 
-if has_dir ".claude/skills" || has_dir ".factory/skills" || has_dir ".skills"; then
+if has_dir ".claude/skills" || has_dir ".factory/skills" || has_dir ".skills" || has_glob "harness/skills/*/SKILL.md"; then
   SKILL_COUNT=$(find "$TARGET" -path '*skills/*/SKILL.md' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/vendor/*' -not -path '*/.claude/worktrees/*' -not -path '*/.factory/worktrees/*' 2>/dev/null | wc -l | tr -d ' ')
   record "skills" "pass" "$SKILL_COUNT skills found" "$CAT"
 else
