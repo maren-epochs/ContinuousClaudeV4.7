@@ -46,9 +46,11 @@ Requires: EXA_API_KEY in environment or ~/.claude/.env
 
 import argparse
 import asyncio
+import io
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # Search results routinely contain emoji and zero-width characters. A Windows
 # console defaults to cp1252, so printing them raises UnicodeEncodeError and
@@ -56,7 +58,8 @@ from pathlib import Path
 # fail on a character we cannot represent.
 for _stream in (sys.stdout, sys.stderr):
     try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        if isinstance(_stream, io.TextIOWrapper):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
 
@@ -74,7 +77,9 @@ def load_api_key() -> str:
                     for line in f:
                         line = line.strip()
                         if line.startswith("EXA_API_KEY="):
-                            api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            api_key = (
+                                line.split("=", 1)[1].strip().strip('"').strip("'")
+                            )
                             break
             if api_key:
                 break
@@ -114,27 +119,53 @@ Examples:
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--search", metavar="QUERY", help="Search with text content extraction")
+    group.add_argument(
+        "--search", metavar="QUERY", help="Search with text content extraction"
+    )
     group.add_argument("--similar", metavar="URL", help="Find pages similar to URL")
     group.add_argument(
         "--extract", metavar="URLS", nargs="+", help="Extract clean text from URLs"
     )
 
-    parser.add_argument("--num", type=int, default=5, help="Number of results (default: 5)")
+    parser.add_argument(
+        "--num", type=int, default=5, help="Number of results (default: 5)"
+    )
     parser.add_argument(
         "--type",
         choices=["auto", "instant", "fast", "deep", "deep-reasoning"],
         default="auto",
         help="Search type (default: auto)",
     )
-    parser.add_argument("--category", help="Filter by category (e.g. 'research paper', 'github')")
+    parser.add_argument(
+        "--category", help="Filter by category (e.g. 'research paper', 'github')"
+    )
     parser.add_argument("--domains", nargs="+", help="Limit to specific domains")
-    parser.add_argument("--max-chars", type=int, default=1500, help="Max chars per result text (default: 1500)")
-    parser.add_argument("--highlight-chars", type=int, default=2000, help="Max chars for highlights (default: 2000)")
-    parser.add_argument("--no-contents", action="store_true", help="Skip content extraction (metadata only)")
-    parser.add_argument("--text", action="store_true", help="Include full page text (off by default)")
-    parser.add_argument("--no-highlights", action="store_true", help="Disable highlighted snippets")
-    parser.add_argument("--no-summary", action="store_true", help="Disable AI-generated summary")
+    parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=1500,
+        help="Max chars per result text (default: 1500)",
+    )
+    parser.add_argument(
+        "--highlight-chars",
+        type=int,
+        default=2000,
+        help="Max chars for highlights (default: 2000)",
+    )
+    parser.add_argument(
+        "--no-contents",
+        action="store_true",
+        help="Skip content extraction (metadata only)",
+    )
+    parser.add_argument(
+        "--text", action="store_true", help="Include full page text (off by default)"
+    )
+    parser.add_argument(
+        "--no-highlights", action="store_true", help="Disable highlighted snippets"
+    )
+    parser.add_argument(
+        "--no-summary", action="store_true", help="Disable AI-generated summary"
+    )
     parser.add_argument("--start-date", help="Filter: published after (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="Filter: published before (YYYY-MM-DD)")
 
@@ -146,15 +177,15 @@ async def exa_search(
     query: str,
     num_results: int = 5,
     search_type: str = "auto",
-    category: str = None,
-    domains: list = None,
+    category: str | None = None,
+    domains: list | None = None,
     max_chars: int = 1500,
     highlight_chars: int = 2000,
     with_text: bool = False,
     highlights: bool = True,
     summary: bool = True,
-    start_date: str = None,
-    end_date: str = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict:
     """Search via Exa API, optionally with content extraction."""
     import aiohttp
@@ -163,7 +194,7 @@ async def exa_search(
     if not api_key:
         return {"error": "EXA_API_KEY not found in environment or ~/.claude/.env"}
 
-    payload = {
+    payload: dict[str, Any] = {
         "query": query,
         "numResults": num_results,
         "type": search_type,
@@ -171,7 +202,7 @@ async def exa_search(
 
     has_contents = with_text or highlights or summary
     if has_contents:
-        contents = {}
+        contents: dict[str, Any] = {}
         if with_text:
             contents["text"] = {"maxCharacters": max_chars}
         else:
@@ -216,7 +247,7 @@ async def exa_find_similar(
     if not api_key:
         return {"error": "EXA_API_KEY not found in environment or ~/.claude/.env"}
 
-    payload = {
+    payload: dict[str, Any] = {
         "url": url,
         "numResults": num_results,
         "contents": {
@@ -250,7 +281,7 @@ async def exa_get_contents(
     if not api_key:
         return {"error": "EXA_API_KEY not found in environment or ~/.claude/.env"}
 
-    payload = {
+    payload: dict[str, Any] = {
         "ids": urls,
         "text": {"maxCharacters": max_chars},
         "summary": {},
@@ -363,7 +394,9 @@ async def main():
         url = args.similar
         print(f"Finding similar to: {url}")
 
-        result = await exa_find_similar(url, num_results=args.num, highlight_chars=args.highlight_chars)
+        result = await exa_find_similar(
+            url, num_results=args.num, highlight_chars=args.highlight_chars
+        )
 
         if "error" in result:
             print(f"\nError: {result['error']}")

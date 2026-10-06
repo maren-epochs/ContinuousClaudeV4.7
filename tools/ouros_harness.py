@@ -31,6 +31,7 @@ Usage:
 
 import argparse
 import asyncio
+import io
 import json
 import os
 import sys
@@ -43,7 +44,8 @@ from pathlib import Path
 # a character we cannot represent.
 for _stream in (sys.stdout, sys.stderr):
     try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        if isinstance(_stream, io.TextIOWrapper):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
 
@@ -51,6 +53,7 @@ for _stream in (sys.stdout, sys.stderr):
 # ---------------------------------------------------------------------------
 # External function registry
 # ---------------------------------------------------------------------------
+
 
 def _load_env():
     """Load API keys from ~/.claude/.env if present."""
@@ -63,8 +66,9 @@ def _load_env():
                 os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-async def _call_exa_search(query, num_results=5, category=None, domains=None,
-                           with_text=False, start_date=None):
+async def _call_exa_search(
+    query, num_results=5, category=None, domains=None, with_text=False, start_date=None
+):
     """Bridge to the real Exa API."""
     script_dir = Path(__file__).parent
     sys.path.insert(0, str(script_dir))
@@ -89,8 +93,14 @@ def _call_exa_search_sync(*args, **kwargs):
     """Sync wrapper — ouros external functions must be sync."""
     return asyncio.run(_call_exa_search(*args, **kwargs))
 
-async def _call_nia_search(query, repositories=None, data_sources=None,
-                          search_mode="unified", include_sources=True):
+
+async def _call_nia_search(
+    query,
+    repositories=None,
+    data_sources=None,
+    search_mode="unified",
+    include_sources=True,
+):
     """Bridge to the real Nia documentation search API.
 
     Args:
@@ -121,6 +131,7 @@ async def _call_nia_search(query, repositories=None, data_sources=None,
 def _call_nia_search_sync(*args, **kwargs):
     """Sync wrapper — ouros external functions must be sync."""
     return asyncio.run(_call_nia_search(*args, **kwargs))
+
 
 async def _call_nia_universal(query, limit=10):
     """Bridge to Nia universal search — searches all 10k+ public indexed sources."""
@@ -311,15 +322,24 @@ def _call_nia_help():
         },
         "write_file": {
             "description": "Write content to a file (subject to security policy). Binary-safe: content may be str (UTF-8) or bytes.",
-            "args": {"path": "File path (required)", "content": "str or bytes content (required)"},
+            "args": {
+                "path": "File path (required)",
+                "content": "str or bytes content (required)",
+            },
         },
         "glob_files": {
             "description": "Find files matching a glob pattern (root and results filtered by the read policy; secrets never returned).",
-            "args": {"pattern": "Glob pattern (required)", "path": "Base directory (default '.')"},
+            "args": {
+                "pattern": "Glob pattern (required)",
+                "path": "Base directory (default '.')",
+            },
         },
         "run_command": {
             "description": "Run an allowlisted command WITHOUT a shell: tldr, grep, rg, wc, echo, git log/diff/show/blame, cargo build/test/clippy, npm test/run, python -m pytest, uv run python. No pipes, chaining, redirection or substitution.",
-            "args": {"cmd": "Command string or argv list (required)", "timeout": "Timeout in seconds (default 30)"},
+            "args": {
+                "cmd": "Command string or argv list (required)",
+                "timeout": "Timeout in seconds (default 30)",
+            },
         },
         "run_python": {
             "description": "Execute Python on the HOST CPython (py -3.13, full DS stack: pandas, numpy, matplotlib, polars, duckdb, sklearn...). Use for numerics the sandbox cannot do (import pandas is impossible in-sandbox). cwd is the per-session work dir under the sandbox output root; relative savefig()/to_csv() outputs are surfaced as artifacts. print() inside the code to get data back.",
@@ -334,7 +354,10 @@ def _call_nia_help():
         },
     }
 
-def _call_research_package(package, version=None, registry="npm", max_results=3, max_chars=600):
+
+def _call_research_package(
+    package, version=None, registry="npm", max_results=3, max_chars=600
+):
     """All-in-one research function for building context blocks.
 
     Runs nia_search + nia_package + nia_package_grep + exa_search,
@@ -379,13 +402,19 @@ def _call_research_package(package, version=None, registry="npm", max_results=3,
         src = r.get("source", {})
         display = src.get("display_name", "").lower()
         # Skip obvious noise (other packages, unrelated sites)
-        if package.lower() not in display and display not in ["github.com", "npmjs.com", "pypi.org"]:
+        if package.lower() not in display and display not in [
+            "github.com",
+            "npmjs.com",
+            "pypi.org",
+        ]:
             continue
-        official_docs.append({
-            "source": src.get("display_name", ""),
-            "doc": src.get("document_name", ""),
-            "content": r.get("content", "")[:max_chars],
-        })
+        official_docs.append(
+            {
+                "source": src.get("display_name", ""),
+                "doc": src.get("document_name", ""),
+                "content": r.get("content", "")[:max_chars],
+            }
+        )
     if official_docs:
         output["sections"]["official_docs"] = official_docs
         output["sources_used"] += len(official_docs)
@@ -407,17 +436,19 @@ def _call_research_package(package, version=None, registry="npm", max_results=3,
     # 3. Deprecations via nia_package_grep
     grep = _call_nia_package_grep_sync(package, "deprecat", registry=registry)
     deprecations = []
-    for hit in grep.get("results", [])[:max_results * 2]:  # more hits for deprecations
+    for hit in grep.get("results", [])[: max_results * 2]:  # more hits for deprecations
         res = hit.get("result", hit)
         content = res.get("content", "")
         file_path = res.get("file_path", "")
         line = res.get("start_line", "")
         if content:
-            deprecations.append({
-                "file": file_path,
-                "line": line,
-                "content": content[:200],
-            })
+            deprecations.append(
+                {
+                    "file": file_path,
+                    "line": line,
+                    "content": content[:200],
+                }
+            )
     if deprecations:
         output["sections"]["deprecations"] = deprecations
         output["sources_used"] += len(deprecations)
@@ -429,15 +460,18 @@ def _call_research_package(package, version=None, registry="npm", max_results=3,
     )
     guides = []
     for r in exa.get("results", []):
-        guides.append({
-            "title": r.get("title", ""),
-            "summary": r.get("summary", "")[:300],
-        })
+        guides.append(
+            {
+                "title": r.get("title", ""),
+                "summary": r.get("summary", "")[:300],
+            }
+        )
     if guides:
         output["sections"]["guides"] = guides
         output["sources_used"] += len(guides)
 
     return output
+
 
 # ---------------------------------------------------------------------------
 # Security policy — controls what bridge functions can access
@@ -446,20 +480,39 @@ def _call_research_package(package, version=None, registry="npm", max_results=3,
 SECURITY_POLICY = {
     # Directories the sandbox can read from (resolved to absolute paths at runtime)
     "read_allow": [
-        ".",              # current project (cwd; ignored when cwd is home or a drive root)
-        "/tmp/ouros",     # ouros source
+        ".",  # current project (cwd; ignored when cwd is home or a drive root)
+        "/tmp/ouros",  # ouros source
     ],
     # Secrets are never readable, even under an allowed root (checked after
     # resolving symlinks and '..'). Names match case-insensitively.
     "read_deny_names": [
-        ".env", ".env.*",                    # .env.example/.sample/.template stay readable
-        "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore",
-        "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
-        ".credentials*", ".claude.json", ".netrc", "_netrc", ".git-credentials",
-        ".npmrc", ".pypirc",
+        ".env",
+        ".env.*",  # .env.example/.sample/.template stay readable
+        "*.pem",
+        "*.key",
+        "*.p12",
+        "*.pfx",
+        "*.keystore",
+        "id_rsa*",
+        "id_dsa*",
+        "id_ecdsa*",
+        "id_ed25519*",
+        ".credentials*",
+        ".claude.json",
+        ".netrc",
+        "_netrc",
+        ".git-credentials",
+        ".npmrc",
+        ".pypirc",
     ],
-    "read_deny_dirs": [                      # relative to home
-        ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gh",
+    "read_deny_dirs": [  # relative to home
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".azure",
+        ".kube",
+        ".docker",
+        ".config/gh",
     ],
     # Directories the sandbox can write to
     "write_allow": [
@@ -471,27 +524,56 @@ SECURITY_POLICY = {
     # agents through agent_call, which bounds turns and permission mode.
     # cargo/npm/pytest/uv run project code by design (same trust as run_python).
     "command_allow": [
-        ("tldr",), ("grep",), ("rg",), ("wc",), ("echo",),
-        ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "blame"),
-        ("cargo", "build"), ("cargo", "test"), ("cargo", "clippy"),
-        ("npm", "test"), ("npm", "run"),
-        ("python", "-m", "pytest"), ("uv", "run", "python"),
+        ("tldr",),
+        ("grep",),
+        ("rg",),
+        ("wc",),
+        ("echo",),
+        ("git", "log"),
+        ("git", "diff"),
+        ("git", "show"),
+        ("git", "blame"),
+        ("cargo", "build"),
+        ("cargo", "test"),
+        ("cargo", "clippy"),
+        ("npm", "test"),
+        ("npm", "run"),
+        ("python", "-m", "pytest"),
+        ("uv", "run", "python"),
     ],
     # Arguments that turn an allowed command into an exec or arbitrary write:
     # rg --pre runs a program per file; git --output writes anywhere;
     # --ext-diff/--textconv run configured external programs.
-    "command_deny_args": ["--pre", "--output", "--ext-diff", "--textconv", "--open-in-pager", "--no-index", "--contents"],
+    "command_deny_args": [
+        "--pre",
+        "--output",
+        "--ext-diff",
+        "--textconv",
+        "--open-in-pager",
+        "--no-index",
+        "--contents",
+    ],
     # Patterns that are always blocked
     "command_deny": [
-        "rm ", "rm\t", "rmdir",
-        "chmod", "chown",
-        "curl ", "wget ",
-        "ssh ", "scp ",
+        "rm ",
+        "rm\t",
+        "rmdir",
+        "chmod",
+        "chown",
+        "curl ",
+        "wget ",
+        "ssh ",
+        "scp ",
         "sudo ",
-        "kill ", "pkill",
-        "> /dev/", ">> /dev/",
-        "| sh", "| bash", "| zsh",
-        "eval ", "exec ",
+        "kill ",
+        "pkill",
+        "> /dev/",
+        ">> /dev/",
+        "| sh",
+        "| bash",
+        "| zsh",
+        "eval ",
+        "exec ",
     ],
     # agent_call turn bound when the caller passes none (claude -p --max-turns).
     "agent_default_max_turns": 25,
@@ -535,8 +617,10 @@ def _apply_data_roots():
         if not root:
             continue
         if not os.path.isabs(root):
-            print(f"Warning: OUROS_DATA_ROOTS entry ignored (not absolute): {root}",
-                  file=sys.stderr)
+            print(
+                f"Warning: OUROS_DATA_ROOTS entry ignored (not absolute): {root}",
+                file=sys.stderr,
+            )
             continue
         if root not in SECURITY_POLICY["read_allow"]:
             SECURITY_POLICY["read_allow"].append(root)
@@ -547,7 +631,7 @@ def _is_under(path, root):
     p, r = os.path.normcase(str(path)), os.path.normcase(str(root))
     try:
         return os.path.commonpath([p, r]) == r
-    except ValueError:          # different drives
+    except ValueError:  # different drives
         return False
 
 
@@ -573,12 +657,15 @@ def _check_path_allowed(path, allowlist):
 def _is_secret(path):
     """True if the resolved path is a credential file or under a credential dir."""
     import fnmatch
+
     resolved = Path(path).resolve()
     # NTFS alternate data streams: '.env:x' reads a stream of .env — match the base name
     name = resolved.name.lower().split(":", 1)[0]
     if name in (".env.example", ".env.sample", ".env.template"):
         return False
-    if any(fnmatch.fnmatchcase(name, pat) for pat in SECURITY_POLICY["read_deny_names"]):
+    if any(
+        fnmatch.fnmatchcase(name, pat) for pat in SECURITY_POLICY["read_deny_names"]
+    ):
         return True
     home = Path.home().resolve()
     return any(_is_under(resolved, home / d) for d in SECURITY_POLICY["read_deny_dirs"])
@@ -608,6 +695,7 @@ def _parse_command(cmd):
     \\bfoo\\b survive; quotes group as usual. Returns (argv, error).
     """
     import shlex
+
     if isinstance(cmd, (list, tuple)):
         argv = [str(a) for a in cmd]
     else:
@@ -622,7 +710,10 @@ def _parse_command(cmd):
             return None, f"unparseable command: {e}"
         for tok in argv:
             if tok and set(tok) <= _SHELL_OPERATOR_CHARS:
-                return None, f"shell operator '{tok}' not allowed (no chaining/redirection)"
+                return (
+                    None,
+                    f"shell operator '{tok}' not allowed (no chaining/redirection)",
+                )
     if not argv:
         return None, "empty command"
     return argv, ""
@@ -643,7 +734,9 @@ def _check_command_allowed(cmd):
         if exe.endswith(ext):
             exe = exe[: -len(ext)]
     argv = [exe] + argv[1:]
-    if not any(tuple(argv[: len(allow)]) == allow for allow in SECURITY_POLICY["command_allow"]):
+    if not any(
+        tuple(argv[: len(allow)]) == allow for allow in SECURITY_POLICY["command_allow"]
+    ):
         return False, "not in command allowlist", None
     for arg in argv[1:]:
         if arg.split("=", 1)[0] in SECURITY_POLICY["command_deny_args"]:
@@ -653,16 +746,31 @@ def _check_command_allowed(cmd):
         for cand in _path_candidates(arg):
             if _is_secret(cand):
                 return False, f"argument '{arg}' names a credential/secret file", None
-            if os.path.exists(cand) and not _check_path_allowed(cand, SECURITY_POLICY["read_allow"]):
+            if os.path.exists(cand) and not _check_path_allowed(
+                cand, SECURITY_POLICY["read_allow"]
+            ):
                 return False, f"argument '{arg}' is outside allowed directories", None
     # Recursive search reads every file under a directory: keep secrets out of it.
     if exe == "rg":
-        argv = argv[:1] + [f"--glob=!{p}" for p in SECURITY_POLICY["read_deny_names"]] + argv[1:]
-    elif exe == "grep" and any(a in ("-r", "-R", "--recursive", "--dereference-recursive")
-                               or (a.startswith("-") and not a.startswith("--") and set(a[1:]) & {"r", "R"})
-                               for a in argv[1:]):
-        argv = argv[:1] + [f"--exclude={p}" for p in SECURITY_POLICY["read_deny_names"]] \
-            + [f"--exclude-dir={d.split('/')[-1]}" for d in SECURITY_POLICY["read_deny_dirs"]] + argv[1:]
+        argv = (
+            argv[:1]
+            + [f"--glob=!{p}" for p in SECURITY_POLICY["read_deny_names"]]
+            + argv[1:]
+        )
+    elif exe == "grep" and any(
+        a in ("-r", "-R", "--recursive", "--dereference-recursive")
+        or (a.startswith("-") and not a.startswith("--") and set(a[1:]) & {"r", "R"})
+        for a in argv[1:]
+    ):
+        argv = (
+            argv[:1]
+            + [f"--exclude={p}" for p in SECURITY_POLICY["read_deny_names"]]
+            + [
+                f"--exclude-dir={d.split('/')[-1]}"
+                for d in SECURITY_POLICY["read_deny_dirs"]
+            ]
+            + argv[1:]
+        )
     return True, "", argv
 
 
@@ -676,7 +784,9 @@ def _path_candidates(arg):
     else:
         out.append(arg)
     for c in list(out):
-        body = c[2:] if len(c) > 1 and c[1] == ":" else c  # keep 'C:' drive prefix intact
+        body = (
+            c[2:] if len(c) > 1 and c[1] == ":" else c
+        )  # keep 'C:' drive prefix intact
         if ":" in body:
             out.extend(s for s in body.split(":") if s)
     return [c for c in out if c]
@@ -720,6 +830,7 @@ def _call_glob_files(pattern, path="."):
     """Find files matching a glob pattern. The root and every match go through
     the read policy, so '..' patterns and secret files never come back."""
     import glob as g
+
     if not _check_path_allowed(path, SECURITY_POLICY["read_allow"]):
         return {"error": f"glob_files denied: '{path}' is outside allowed directories"}
     matches = sorted(g.glob(os.path.join(path, pattern), recursive=True))
@@ -730,20 +841,27 @@ def _call_run_command(cmd, timeout=30):
     """Run an allowlisted command (str or argv list) WITHOUT a shell."""
     import shutil
     import subprocess
+
     allowed, reason, argv = _check_command_allowed(cmd)
     if not allowed:
         return {"error": f"run_command denied: {reason}"}
-    if argv[0] == "echo":       # cmd builtin on Windows: answer in-process
+    if argv[0] == "echo":  # cmd builtin on Windows: answer in-process
         return {"stdout": " ".join(argv[1:]) + "\n", "stderr": "", "returncode": 0}
     exe = shutil.which(argv[0])
     if not exe:
         return {"error": f"run_command failed: '{argv[0]}' not found on PATH"}
     if exe.lower().endswith((".cmd", ".bat")) and any(
-            c in _CMD_META_CHARS for a in argv[1:] for c in a):
-        return {"error": "run_command denied: cmd metacharacters in arguments to a .cmd/.bat target"}
+        c in _CMD_META_CHARS for a in argv[1:] for c in a
+    ):
+        return {
+            "error": "run_command denied: cmd metacharacters in arguments to a .cmd/.bat target"
+        }
     try:
         r = subprocess.run(
-            [exe] + argv[1:], shell=False, capture_output=True, text=True,
+            [exe] + argv[1:],
+            shell=False,
+            capture_output=True,
+            text=True,
             timeout=timeout,
         )
         result = {"stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
@@ -752,6 +870,7 @@ def _call_run_command(cmd, timeout=30):
         return {"error": f"Command timed out after {timeout}s"}
     except Exception as e:
         return {"error": f"run_command failed: {e}"}
+
 
 # --- run_python: host-CPython DS bridge -----------------------------------
 
@@ -764,6 +883,7 @@ def _host_python_cmd():
     """Interpreter for run_python: the Windows launcher pin 'py -3.13' when
     available (full DS stack), else the interpreter running this harness."""
     import shutil
+
     if shutil.which("py"):
         return ["py", "-3.13"]
     return [sys.executable]
@@ -772,9 +892,13 @@ def _host_python_cmd():
 def _kill_process_tree(proc):
     """Kill a subprocess and all its children."""
     import subprocess
+
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                       capture_output=True, check=False)
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+            capture_output=True,
+            check=False,
+        )
     else:
         proc.kill()
 
@@ -790,6 +914,7 @@ def _call_run_python(code, timeout=60):
     '[truncated]' marker, exit code appended when nonzero.
     """
     import subprocess
+
     if not isinstance(code, str) or not code.strip():
         return {"error": "run_python requires a non-empty code string"}
     try:
@@ -798,8 +923,10 @@ def _call_run_python(code, timeout=60):
         timeout = SECURITY_POLICY["run_python"]["default_timeout_s"]
 
     if not _RUN_PYTHON_LOCK.acquire(blocking=False):
-        return {"error": "run_python denied: another run_python call is in "
-                         "progress (max_concurrent: 1)"}
+        return {
+            "error": "run_python denied: another run_python call is in "
+            "progress (max_concurrent: 1)"
+        }
     try:
         work_dir = _SESSION_WORK_DIR or (SANDBOX_OUTPUT_ROOT / "default")
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -864,8 +991,14 @@ def _diff_output_dir(before):
     return sorted(path for path, sig in after.items() if before.get(path) != sig)
 
 
-def _call_llm(prompt, model="claude-haiku-4-5-20251001", max_tokens=1000,
-              system=None, temperature=0.0, backend="anthropic"):
+def _call_llm(
+    prompt,
+    model="claude-haiku-4-5-20251001",
+    max_tokens=1000,
+    system=None,
+    temperature=0.0,
+    backend="anthropic",
+):
     """Call an LM as a sub-query. Returns the text response.
 
     Args:
@@ -972,13 +1105,25 @@ def _call_llm(prompt, model="claude-haiku-4-5-20251001", max_tokens=1000,
         return resp["choices"][0]["message"]["content"]
 
     else:
-        return {"error": f"Unknown backend: {backend}. Use 'local', 'anthropic', 'openai', or 'openrouter'."}
+        return {
+            "error": f"Unknown backend: {backend}. Use 'local', 'anthropic', 'openai', or 'openrouter'."
+        }
 
-    return {"error": "No LLM backend available. Start LM Studio or set ANTHROPIC_API_KEY / OPENAI_API_KEY."}
+    return {
+        "error": "No LLM backend available. Start LM Studio or set ANTHROPIC_API_KEY / OPENAI_API_KEY."
+    }
 
 
-def _call_agent(prompt, agent="claude-code", model=None, max_turns=None,
-               timeout=600, cwd=None, isolated=False, permission_mode="default"):
+def _call_agent(
+    prompt,
+    agent="claude-code",
+    model=None,
+    max_turns=None,
+    timeout=600,
+    cwd=None,
+    isolated=False,
+    permission_mode="default",
+):
     """Spawn a headless agent and return its output.
 
     This is the RLM recursive call — a full agent with tool access runs
@@ -1060,10 +1205,11 @@ def _call_agent(prompt, agent="claude-code", model=None, max_turns=None,
             output += f"\n[stderr]: {r.stderr.strip()}"
         return output
     except subprocess.TimeoutExpired:
-        return {"error": f"Agent timed out after {timeout}s. Task may be too complex or agent is stuck."}
+        return {
+            "error": f"Agent timed out after {timeout}s. Task may be too complex or agent is stuck."
+        }
     except FileNotFoundError:
         return {"error": f"Agent '{agent}' not found on PATH. Is it installed?"}
-
 
 
 # function_name -> sync handler
@@ -1090,9 +1236,11 @@ EXTERNAL_FUNCTIONS = {
 # Harness core
 # ---------------------------------------------------------------------------
 
+
 def _create_manager(storage_dir=None):
     """Create a SessionManager with optional persistence."""
     import ouros
+
     sm = ouros.SessionManager()
     if storage_dir:
         storage = Path(storage_dir)
@@ -1101,8 +1249,9 @@ def _create_manager(storage_dir=None):
     return sm
 
 
-def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=False,
-                       reset_session=False):
+def execute_in_sandbox(
+    code, session_id=None, storage_dir=None, load_session=False, reset_session=False
+):
     """Execute Python code in an ouros session with external function bridge.
 
     Uses Session API for state persistence. External function calls pause
@@ -1126,7 +1275,8 @@ def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=Fal
 
     # Saved sessions live at {storage_dir}/{name}.bin
     has_saved = bool(
-        session_id and storage_dir
+        session_id
+        and storage_dir
         and (Path(storage_dir) / f"{session_id}.bin").exists()
     )
 
@@ -1136,7 +1286,9 @@ def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=Fal
             sm.load_session(name=session_id, session_id=sid)
             sm.register_external_functions(ext_funcs, session_id=sid)
         except Exception as e:
-            print(f"Warning: could not load session '{session_id}': {e}", file=sys.stderr)
+            print(
+                f"Warning: could not load session '{session_id}': {e}", file=sys.stderr
+            )
             sm.create_session(sid, external_functions=ext_funcs)
     else:
         existing = [s["id"] for s in sm.list_sessions()]
@@ -1175,9 +1327,9 @@ def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=Fal
         # Call real API
         handler = EXTERNAL_FUNCTIONS.get(func_name)
         if not handler:
-            result = _collect(session.resume(call_id, {
-                "error": f"Unknown function: {func_name}"
-            }))
+            result = _collect(
+                session.resume(call_id, {"error": f"Unknown function: {func_name}"})
+            )
             continue
 
         try:
@@ -1204,6 +1356,7 @@ def execute_in_sandbox(code, session_id=None, storage_dir=None, load_session=Fal
 def list_variables(session_id, storage_dir):
     """List variables in a saved session."""
     import ouros
+
     sm = _create_manager(storage_dir)
     try:
         sm.load_session(name=session_id, session_id=session_id)
@@ -1245,6 +1398,7 @@ def fork_session(source_id, new_id, storage_dir):
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Ouros Harness — sandboxed code execution with external function bridge"
@@ -1252,14 +1406,26 @@ def parse_args():
     p.add_argument("--code", "-c", help="Python code to execute")
     p.add_argument("--file", "-f", help="Python file to execute")
     p.add_argument("--session", "-s", help="Session ID for persistence")
-    p.add_argument("--storage", default=None, help="Storage directory (default: thoughts/shared/dives)")
-    p.add_argument("--load", action="store_true",
-                   help="Load a saved session before executing (now the default "
-                        "when a saved session exists; kept for compatibility)")
-    p.add_argument("--reset", action="store_true",
-                   help="Discard saved session state and start fresh (the old "
-                        "default for an existing --session without --load)")
-    p.add_argument("--list-vars", action="store_true", help="List variables in a session")
+    p.add_argument(
+        "--storage",
+        default=None,
+        help="Storage directory (default: thoughts/shared/dives)",
+    )
+    p.add_argument(
+        "--load",
+        action="store_true",
+        help="Load a saved session before executing (now the default "
+        "when a saved session exists; kept for compatibility)",
+    )
+    p.add_argument(
+        "--reset",
+        action="store_true",
+        help="Discard saved session state and start fresh (the old "
+        "default for an existing --session without --load)",
+    )
+    p.add_argument(
+        "--list-vars", action="store_true", help="List variables in a session"
+    )
     p.add_argument("--get-var", help="Get a variable as JSON")
     p.add_argument("--fork", help="Fork session into a new ID")
     return p.parse_args()

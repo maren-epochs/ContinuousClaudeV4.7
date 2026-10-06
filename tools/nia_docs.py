@@ -62,11 +62,12 @@ Requires: NIA_API_KEY environment variable
 
 import argparse
 import asyncio
+import io
 import json
 import os
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any
 
 # Search results routinely contain emoji and zero-width characters. A Windows
 # console defaults to cp1252, so printing them raises UnicodeEncodeError and
@@ -74,7 +75,8 @@ from typing import List
 # fail on a character we cannot represent.
 for _stream in (sys.stdout, sys.stderr):
     try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        if isinstance(_stream, io.TextIOWrapper):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
 
@@ -104,7 +106,10 @@ NIA_API_KEY = load_api_key()
 
 def get_headers() -> dict:
     """Get common headers for API requests."""
-    return {"Authorization": f"Bearer {NIA_API_KEY}", "Content-Type": "application/json"}
+    return {
+        "Authorization": f"Bearer {NIA_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
 # =============================================================================
@@ -114,9 +119,9 @@ def get_headers() -> dict:
 
 async def oracle_research(
     query: str,
-    repositories: list[str] = None,
-    data_sources: list[str] = None,
-    output_format: str = None,
+    repositories: list[str] | None = None,
+    data_sources: list[str] | None = None,
+    output_format: str | None = None,
     model: str = "claude-opus-4-5-20251101",
 ) -> dict:
     """Oracle autonomous research agent (Pro only).
@@ -134,7 +139,7 @@ async def oracle_research(
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/oracle"
-    payload = {"query": query, "model": model}
+    payload: dict[str, Any] = {"query": query, "model": model}
 
     if repositories:
         payload["repositories"] = repositories
@@ -145,7 +150,9 @@ async def oracle_research(
 
     async with aiohttp.ClientSession() as session:
         timeout = aiohttp.ClientTimeout(total=300)  # 5 min for deep research
-        async with session.post(url, headers=get_headers(), json=payload, timeout=timeout) as resp:
+        async with session.post(
+            url, headers=get_headers(), json=payload, timeout=timeout
+        ) as resp:
             if resp.status != 200:
                 return {"error": f"API error {resp.status}: {await resp.text()}"}
             return await resp.json()
@@ -153,15 +160,15 @@ async def oracle_research(
 
 async def oracle_research_stream(
     query: str,
-    repositories: list[str] = None,
-    data_sources: list[str] = None,
+    repositories: list[str] | None = None,
+    data_sources: list[str] | None = None,
     model: str = "claude-opus-4-5-20251101",
 ) -> None:
     """Oracle research with real-time streaming (Pro only). Prints events as they arrive."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/oracle/stream"
-    payload = {"query": query, "model": model}
+    payload: dict[str, Any] = {"query": query, "model": model}
 
     if repositories:
         payload["repositories"] = repositories
@@ -170,15 +177,17 @@ async def oracle_research_stream(
 
     async with aiohttp.ClientSession() as session:
         timeout = aiohttp.ClientTimeout(total=300)
-        async with session.post(url, headers=get_headers(), json=payload, timeout=timeout) as resp:
+        async with session.post(
+            url, headers=get_headers(), json=payload, timeout=timeout
+        ) as resp:
             if resp.status != 200:
                 print(f"Error: {resp.status} - {await resp.text()}")
                 return
 
             async for line in resp.content:
-                line = line.decode("utf-8").strip()
-                if line.startswith("data:"):
-                    print(line[5:].strip())
+                text = line.decode("utf-8").strip()
+                if text.startswith("data:"):
+                    print(text[5:].strip())
 
 
 async def oracle_list_sessions(limit: int = 20, offset: int = 0) -> dict:
@@ -186,7 +195,7 @@ async def oracle_list_sessions(limit: int = 20, offset: int = 0) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/oracle/sessions"
-    params = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=get_headers(), params=params) as resp:
@@ -226,7 +235,7 @@ async def oracle_chat_followup(session_id: str, message: str) -> None:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/oracle/sessions/{session_id}/chat"
-    payload = {"message": message}
+    payload: dict[str, Any] = {"message": message}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -235,9 +244,9 @@ async def oracle_chat_followup(session_id: str, message: str) -> None:
                 return
 
             async for line in resp.content:
-                line = line.decode("utf-8").strip()
-                if line.startswith("data:"):
-                    print(line[5:].strip())
+                text = line.decode("utf-8").strip()
+                if text.startswith("data:"):
+                    print(text[5:].strip())
 
 
 async def oracle_list_jobs() -> dict:
@@ -255,15 +264,15 @@ async def oracle_list_jobs() -> dict:
 
 async def oracle_create_job(
     query: str,
-    repositories: list[str] = None,
-    data_sources: list[str] = None,
+    repositories: list[str] | None = None,
+    data_sources: list[str] | None = None,
     model: str = "claude-opus-4-5-20251101",
 ) -> dict:
     """Create Oracle research job (Pro only). Returns immediately, runs async."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/oracle/jobs"
-    payload = {"query": query, "model": model}
+    payload: dict[str, Any] = {"query": query, "model": model}
 
     if repositories:
         payload["repositories"] = repositories
@@ -316,9 +325,9 @@ async def oracle_stream_job_events(job_id: str) -> None:
                 return
 
             async for line in resp.content:
-                line = line.decode("utf-8").strip()
-                if line.startswith("data:"):
-                    print(line[5:].strip())
+                text = line.decode("utf-8").strip()
+                if text.startswith("data:"):
+                    print(text[5:].strip())
 
 
 # =============================================================================
@@ -328,8 +337,8 @@ async def oracle_stream_job_events(job_id: str) -> None:
 
 async def search_query(
     messages: list[dict],
-    repositories: list[str] = None,
-    data_sources: List[str] = None,
+    repositories: list[str] | None = None,
+    data_sources: list[str] | None = None,
     search_mode: str = "repositories",
     include_sources: bool = True,
 ) -> dict:
@@ -337,7 +346,11 @@ async def search_query(
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/search/query"
-    payload = {"messages": messages, "search_mode": search_mode, "include_sources": include_sources}
+    payload: dict[str, Any] = {
+        "messages": messages,
+        "search_mode": search_mode,
+        "include_sources": include_sources,
+    }
 
     if repositories:
         payload["repositories"] = repositories
@@ -351,12 +364,14 @@ async def search_query(
             return await resp.json()
 
 
-async def search_web(query: str, category: str = None, time_range: str = None) -> dict:
+async def search_web(
+    query: str, category: str | None = None, time_range: str | None = None
+) -> dict:
     """Web search."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/search/web"
-    payload = {"query": query}
+    payload: dict[str, Any] = {"query": query}
 
     if category:
         payload["category"] = category
@@ -375,11 +390,13 @@ async def search_deep(query: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/search/deep"
-    payload = {"query": query}
+    payload: dict[str, Any] = {"query": query}
 
     async with aiohttp.ClientSession() as session:
         timeout = aiohttp.ClientTimeout(total=300)
-        async with session.post(url, headers=get_headers(), json=payload, timeout=timeout) as resp:
+        async with session.post(
+            url, headers=get_headers(), json=payload, timeout=timeout
+        ) as resp:
             if resp.status != 200:
                 return {"error": f"API error {resp.status}: {await resp.text()}"}
             return await resp.json()
@@ -390,7 +407,7 @@ async def search_universal(query: str, limit: int = 10) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/search/universal"
-    payload = {"query": query, "search_mode": "unified", "limit": limit}
+    payload: dict[str, Any] = {"query": query, "search_mode": "unified", "limit": limit}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -406,7 +423,7 @@ async def search_package_hybrid(
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/package-search/hybrid"
-    payload = {
+    payload: dict[str, Any] = {
         "registry": registry,
         "package_name": package,
         "semantic_queries": [query],
@@ -427,7 +444,12 @@ async def search_package_grep(
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/package-search/grep"
-    payload = {"registry": registry, "package_name": package, "pattern": pattern, "limit": limit}
+    payload: dict[str, Any] = {
+        "registry": registry,
+        "package_name": package,
+        "pattern": pattern,
+        "limit": limit,
+    }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -441,12 +463,14 @@ async def search_package_grep(
 # =============================================================================
 
 
-async def repos_list(q: str = None, status: str = None, limit: int = 100, offset: int = 0) -> dict:
+async def repos_list(
+    q: str | None = None, status: str | None = None, limit: int = 100, offset: int = 0
+) -> dict:
     """List all indexed repositories."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/repositories"
-    params = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
     if q:
         params["q"] = q
     if status:
@@ -459,12 +483,12 @@ async def repos_list(q: str = None, status: str = None, limit: int = 100, offset
             return await resp.json()
 
 
-async def repos_index(repo: str, github_token: str = None) -> dict:
+async def repos_index(repo: str, github_token: str | None = None) -> dict:
     """Index a new GitHub repository."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/repositories"
-    payload = {"repository": repo}
+    payload: dict[str, Any] = {"repository": repo}
     if github_token:
         payload["github_token"] = github_token
 
@@ -506,7 +530,7 @@ async def repos_rename(repository_id: str, display_name: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/repositories/{repository_id}/rename"
-    payload = {"display_name": display_name}
+    payload: dict[str, Any] = {"display_name": display_name}
 
     async with aiohttp.ClientSession() as session:
         async with session.patch(url, headers=get_headers(), json=payload) as resp:
@@ -533,7 +557,7 @@ async def repos_content(repository_id: str, path: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/repositories/{repository_id}/content"
-    payload = {"path": path}
+    payload: dict[str, Any] = {"path": path}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -549,7 +573,11 @@ async def repos_grep(
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/repositories/{repository_id}/grep"
-    payload = {"pattern": pattern, "context_lines": context_lines, "exhaustive": exhaustive}
+    payload: dict[str, Any] = {
+        "pattern": pattern,
+        "context_lines": context_lines,
+        "exhaustive": exhaustive,
+    }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -564,13 +592,17 @@ async def repos_grep(
 
 
 async def sources_list(
-    q: str = None, status: str = None, source_type: str = None, limit: int = 100, offset: int = 0
+    q: str | None = None,
+    status: str | None = None,
+    source_type: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
 ) -> dict:
     """List all data sources."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources"
-    params = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
     if q:
         params["q"] = q
     if status:
@@ -585,12 +617,12 @@ async def sources_list(
             return await resp.json()
 
 
-async def sources_index(url_to_index: str, display_name: str = None) -> dict:
+async def sources_index(url_to_index: str, display_name: str | None = None) -> dict:
     """Index a new data source (documentation website)."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources"
-    payload = {"url": url_to_index}
+    payload: dict[str, Any] = {"url": url_to_index}
     if display_name:
         payload["display_name"] = display_name
 
@@ -632,7 +664,7 @@ async def sources_content(source_id: str, path: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources/{source_id}/content"
-    payload = {"path": path}
+    payload: dict[str, Any] = {"path": path}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -659,7 +691,7 @@ async def sources_ls(source_id: str, path: str = "/") -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources/{source_id}/ls"
-    params = {"path": path}
+    params: dict[str, Any] = {"path": path}
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=get_headers(), params=params) as resp:
@@ -673,7 +705,7 @@ async def sources_read(source_id: str, path: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources/{source_id}/read"
-    params = {"path": path}
+    params: dict[str, Any] = {"path": path}
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=get_headers(), params=params) as resp:
@@ -687,7 +719,7 @@ async def sources_grep(source_id: str, pattern: str, context_lines: int = 3) -> 
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources/{source_id}/grep"
-    payload = {"pattern": pattern, "context_lines": context_lines}
+    payload: dict[str, Any] = {"pattern": pattern, "context_lines": context_lines}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -701,7 +733,7 @@ async def sources_rename(source_id: str, display_name: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/data-sources/rename"
-    payload = {"source_id": source_id, "display_name": display_name}
+    payload: dict[str, Any] = {"source_id": source_id, "display_name": display_name}
 
     async with aiohttp.ClientSession() as session:
         async with session.patch(url, headers=get_headers(), json=payload) as resp:
@@ -715,12 +747,14 @@ async def sources_rename(source_id: str, display_name: str) -> dict:
 # =============================================================================
 
 
-async def papers_list(limit: int = 50, offset: int = 0, status: str = None) -> dict:
+async def papers_list(
+    limit: int = 50, offset: int = 0, status: str | None = None
+) -> dict:
     """List indexed research papers."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/research-papers"
-    params = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
     if status:
         params["status"] = status
 
@@ -736,7 +770,7 @@ async def papers_index(arxiv_id: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/research-papers"
-    payload = {"arxiv_id": arxiv_id}
+    payload: dict[str, Any] = {"arxiv_id": arxiv_id}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=get_headers(), json=payload) as resp:
@@ -751,13 +785,16 @@ async def papers_index(arxiv_id: str) -> dict:
 
 
 async def context_list(
-    limit: int = 20, offset: int = 0, tags: str = None, agent_source: str = None
+    limit: int = 20,
+    offset: int = 0,
+    tags: str | None = None,
+    agent_source: str | None = None,
 ) -> dict:
     """List conversation contexts."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/contexts"
-    params = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
     if tags:
         params["tags"] = tags
     if agent_source:
@@ -771,13 +808,17 @@ async def context_list(
 
 
 async def context_save(
-    title: str, content: str, summary: str = None, tags: list[str] = None, metadata: dict = None
+    title: str,
+    content: str,
+    summary: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> dict:
     """Save conversation context."""
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/contexts"
-    payload = {"title": title, "content": content}
+    payload: dict[str, Any] = {"title": title, "content": content}
     if summary:
         payload["summary"] = summary
     if tags:
@@ -797,7 +838,7 @@ async def context_search_text(query: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/contexts/search"
-    params = {"query": query}
+    params: dict[str, Any] = {"query": query}
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=get_headers(), params=params) as resp:
@@ -811,7 +852,7 @@ async def context_search_semantic(query: str) -> dict:
     import aiohttp
 
     url = f"{NIA_API_URL}/v2/contexts/semantic-search"
-    params = {"query": query}
+    params: dict[str, Any] = {"query": query}
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=get_headers(), params=params) as resp:
@@ -877,7 +918,9 @@ def format_oracle_result(result: dict) -> str:
     if result.get("citations"):
         output.append("\n## Citations")
         for i, cite in enumerate(result["citations"], 1):
-            output.append(f"{i}. [{cite.get('tool', 'unknown')}] {cite.get('summary', '')[:200]}")
+            output.append(
+                f"{i}. [{cite.get('tool', 'unknown')}] {cite.get('summary', '')[:200]}"
+            )
 
     if result.get("duration_ms"):
         output.append(
@@ -908,9 +951,21 @@ def format_search_result(result: dict, search_type: str) -> str:
         for i, item in enumerate(result["results"][:10], 1):
             if isinstance(item, dict):
                 # Grep results nest data under "result" key — unwrap it
-                inner = item.get("result", {}) if isinstance(item.get("result"), dict) else {}
-                source = item.get("source", {}) if isinstance(item.get("source"), dict) else {}
-                meta = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+                inner = (
+                    item.get("result", {})
+                    if isinstance(item.get("result"), dict)
+                    else {}
+                )
+                source = (
+                    item.get("source", {})
+                    if isinstance(item.get("source"), dict)
+                    else {}
+                )
+                meta = (
+                    item.get("metadata", {})
+                    if isinstance(item.get("metadata"), dict)
+                    else {}
+                )
 
                 # Content: check all levels (top, inner, document)
                 text = (
@@ -944,7 +999,9 @@ def format_search_result(result: dict, search_type: str) -> str:
                     title = f"{title}:{line_num}"
 
                 score = item.get("score")
-                score_str = f" (score: {score:.3f})" if isinstance(score, (int, float)) else ""
+                score_str = (
+                    f" (score: {score:.3f})" if isinstance(score, (int, float)) else ""
+                )
                 url = source.get("url") or source.get("file_path") or ""
                 output.append(f"\n{i}. **{title}**{score_str}")
                 if url:
@@ -1031,23 +1088,33 @@ def build_parser() -> argparse.ArgumentParser:
     oracle_parser = subparsers.add_parser("oracle", help="Oracle research (Pro only)")
     oracle_sub = oracle_parser.add_subparsers(dest="action")
 
-    oracle_research_p = oracle_sub.add_parser("research", help="Run autonomous research")
+    oracle_research_p = oracle_sub.add_parser(
+        "research", help="Run autonomous research"
+    )
     oracle_research_p.add_argument("query", help="Research question")
     oracle_research_p.add_argument("--repos", nargs="*", help="Repository IDs")
     oracle_research_p.add_argument("--sources", nargs="*", help="Data source IDs")
     oracle_research_p.add_argument(
         "--model",
         default="claude-opus-4-5-20251101",
-        choices=["claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-1m"],
+        choices=[
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-5-1m",
+        ],
     )
-    oracle_research_p.add_argument("--stream", action="store_true", help="Stream results")
+    oracle_research_p.add_argument(
+        "--stream", action="store_true", help="Stream results"
+    )
 
     oracle_sessions_p = oracle_sub.add_parser("sessions", help="List research sessions")
     oracle_sessions_p.add_argument("--limit", type=int, default=20)
 
     oracle_session_p = oracle_sub.add_parser("session", help="Get session details")
     oracle_session_p.add_argument("session_id", help="Session ID")
-    oracle_session_p.add_argument("--messages", action="store_true", help="Get chat messages")
+    oracle_session_p.add_argument(
+        "--messages", action="store_true", help="Get chat messages"
+    )
 
     oracle_chat_p = oracle_sub.add_parser("chat", help="Follow-up chat in session")
     oracle_chat_p.add_argument("session_id", help="Session ID")
@@ -1183,7 +1250,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     context_search_p = context_sub.add_parser("search", help="Search contexts")
     context_search_p.add_argument("query", help="Search query")
-    context_search_p.add_argument("--semantic", action="store_true", help="Use semantic search")
+    context_search_p.add_argument(
+        "--semantic", action="store_true", help="Use semantic search"
+    )
 
     context_get_p = context_sub.add_parser("get", help="Get context")
     context_get_p.add_argument("context_id", help="Context ID")
@@ -1215,7 +1284,9 @@ async def main():
             if args.action == "research":
                 print(f"Running Oracle research: {args.query}")
                 if args.stream:
-                    await oracle_research_stream(args.query, args.repos, args.sources, args.model)
+                    await oracle_research_stream(
+                        args.query, args.repos, args.sources, args.model
+                    )
                 else:
                     result = await oracle_research(
                         args.query, args.repos, args.sources, model=args.model
@@ -1251,7 +1322,9 @@ async def main():
                 print(json.dumps(result, indent=2, default=str))
 
             elif args.action == "create-job":
-                result = await oracle_create_job(args.query, args.repos, model=args.model)
+                result = await oracle_create_job(
+                    args.query, args.repos, model=args.model
+                )
                 print(json.dumps(result, indent=2, default=str))
 
         # Search commands
@@ -1369,7 +1442,9 @@ async def main():
                 print(format_list_result(result, "Contexts"))
 
             elif args.action == "save":
-                result = await context_save(args.title, args.content, args.summary, args.tags)
+                result = await context_save(
+                    args.title, args.content, args.summary, args.tags
+                )
                 print(json.dumps(result, indent=2, default=str))
 
             elif args.action == "search":

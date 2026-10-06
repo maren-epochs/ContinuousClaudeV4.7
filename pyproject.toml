@@ -1,0 +1,77 @@
+# Tool configuration only: this repo is not a built/installed package (no [build-system]).
+[project]
+name = "continuous-claude"
+version = "4.7.0"
+requires-python = ">=3.13"
+# dependencies: declared by VAL-602 (runtime + dev tool pins); intentionally absent here.
+
+[tool.ruff]
+target-version = "py313"
+# Vendored from the dataviz skill: never lint or reformat it here.
+extend-exclude = ["tools/viz/validate_palette.py"]
+# Honor the excludes for explicitly passed paths too (pre-commit, editor hooks).
+force-exclude = true
+
+[tool.ruff.lint]
+# Rule set: ruff's own default selection (no `select`), i.e. exactly what a bare
+# `ruff check .` ran before this file existed (ruff 0.16 default set).
+# That set was NOT clean on 2026-10-06 (100 findings in 5 files). Implicit-Optional
+# (RUF013) was fixed with the mypy pass; the rest is grandfathered per file below so
+# new code gets the full set. Delete an entry when a refactor wave cleans that file.
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on returncode themselves; class-level fixtures are read-only.
+"**/test_*.py" = ["PLW1510", "RUF012"]
+# Grandfathered (pre-existing, 2026-10-06): nested `async with` and one blind except.
+"tools/nia_docs.py" = ["SIM117", "BLE001"]
+"tools/exa_search.py" = ["SIM117"]
+# Grandfathered (pre-existing): sandbox bridge; changes here get a hand-reviewed diff.
+"tools/ouros_harness.py" = [
+    "BLE001",
+    "F401",
+    "F541",
+    "F841",
+    "FURB188",
+    "I001",
+    "PLW1510",
+    "S110",
+]
+
+[tool.ruff.format]
+# ruff format defaults (black-compatible): double quotes, 88 columns, LF/CRLF preserved per file.
+quote-style = "double"
+line-ending = "auto"
+# Not formatted: python blocks inside skill/docs markdown (the /visualize PRELUDE is a
+# verbatim one-liner that tools/viz/test_import.py byte-compares) and research
+# artifacts under continuum/ (demo.py opens with that same PRELUDE line).
+exclude = ["**/*.md", "continuum/**"]
+
+[tool.mypy]
+# Strictness: mypy defaults (non-strict). Unannotated functions are not checked
+# (check_untyped_defs off); annotated code is, including no-implicit-Optional.
+# Third-party imports without stubs resolve to Any (ignore_missing_imports).
+python_version = "3.13"
+files = ["tools", "install"]
+ignore_missing_imports = true
+warn_unused_configs = true
+exclude = [
+    '(^|/)test_[^/]*\.py$',
+    '^tools/viz/validate_palette\.py$',
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tools", "install"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["tools", "install"]
+omit = ["*/test_*.py", "*/validate_palette.py"]
+# Several suites drive the CLIs as child processes (context_ledger, validate_report,
+# sync_global, ouros_harness); measure those too.
+patch = ["subprocess"]
+
+[tool.coverage.report]
+omit = ["*/test_*.py", "*/validate_palette.py"]
+show_missing = true
+skip_empty = true

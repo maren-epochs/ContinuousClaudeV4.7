@@ -63,6 +63,8 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
 
+Python checks (config in `pyproject.toml`; `tools/viz/validate_palette.py` is vendored and excluded): `ruff check .`, `ruff format --check .`, `py -3.13 -m mypy`, `py -3.13 -m pytest -q` (every `tools/**/test_*.py` + `install/test_*.py` unittest suite), `py -3.13 -m coverage run -m pytest -q && py -3.13 -m coverage report`.
+
 ## Visualization (tools/viz)
 
 Host CPython only (`py -3.13`); install: `tools/requirements-viz.txt` + `py -3.13 -m playwright install chromium` (see `install/README.md`). Driven by `/visualize`.

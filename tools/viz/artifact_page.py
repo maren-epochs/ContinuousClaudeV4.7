@@ -70,6 +70,7 @@ and adds a message to window.__chartsErrors.
 
 No colors live here - every value comes from tools/viz/palette.json.
 """
+
 from __future__ import annotations
 
 import base64
@@ -90,7 +91,7 @@ else:  # run as a script (py tools/viz/artifact_page.py ...) or with tools/viz o
     _here = str(Path(__file__).resolve().parent)
     if _here not in sys.path:
         sys.path.insert(0, _here)
-    import palette
+    import palette  # type: ignore[no-redef]  # same module as the relative import above
 
 KINDS = ("vega-lite", "echarts", "plotly")
 MODE_DEFAULTS = ("auto", "light", "dark")
@@ -111,30 +112,35 @@ MAX_INLINE_BYTES = 2 * 1024 * 1024
 MAX_PAGE_BYTES = 16 * 1024 * 1024
 DEFAULT_HEIGHT = 320
 BAR_MAX_PX = 24
-REQUIRED_CAPABILITIES = {"downloads": True}   # Download CSV -> claude.use("downloads")
+REQUIRED_CAPABILITIES = {"downloads": True}  # Download CSV -> claude.use("downloads")
 LEGEND_STROKE = {"icon": "rect", "itemWidth": 16, "itemHeight": 2}
 TOKEN_PREFIX = "token:"
 _TOKEN_RE = re.compile(r"token:(.*)", re.DOTALL)
 
 
 def _css_names(mode):
-    return [line.split(":", 1)[0].strip()[2:] for line in palette.css_tokens(mode).splitlines()
-            if line.strip().startswith("--")]
+    return [
+        line.split(":", 1)[0].strip()[2:]
+        for line in palette.css_tokens(mode).splitlines()
+        if line.strip().startswith("--")
+    ]
 
 
 # Names a token reference may use: declared as CSS custom properties in both modes.
 TOKEN_NAMES = tuple(n for n in _css_names("light") if n in set(_css_names("dark")))
-DUAL_AXIS_WARNING = ("Dual y-axis removed: two scales on one plot mislead. "
-                     "Plot the second measure as its own chart or index both to a common base.")
+DUAL_AXIS_WARNING = (
+    "Dual y-axis removed: two scales on one plot mislead. "
+    "Plot the second measure as its own chart or index both to a common base."
+)
 
 
 # --------------------------------------------------------------------------- json
 
 
 def _json_default(obj):
-    if hasattr(obj, "tolist"):          # numpy arrays / scalars
+    if hasattr(obj, "tolist"):  # numpy arrays / scalars
         return obj.tolist()
-    if hasattr(obj, "isoformat"):       # datetime, date, pandas Timestamp
+    if hasattr(obj, "isoformat"):  # datetime, date, pandas Timestamp
         return obj.isoformat()
     if isinstance(obj, (set, tuple)):
         return list(obj)
@@ -148,7 +154,9 @@ def _plain(obj):
 
 def _script_json(obj):
     """JSON safe inside <script>: no '<', '>', '&' or line separators survive raw."""
-    text = json.dumps(obj, default=_json_default, ensure_ascii=True, separators=(",", ":"))
+    text = json.dumps(
+        obj, default=_json_default, ensure_ascii=True, separators=(",", ":")
+    )
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
@@ -207,7 +215,9 @@ def token(name):
     """
     name = str(name)
     if name not in TOKEN_NAMES:
-        raise ValueError(f"unknown palette token {name!r}; known: {', '.join(TOKEN_NAMES)}")
+        raise ValueError(
+            f"unknown palette token {name!r}; known: {', '.join(TOKEN_NAMES)}"
+        )
     return TOKEN_PREFIX + name
 
 
@@ -223,8 +233,10 @@ def _check_tokens(obj, where):
         elif isinstance(v, str) and v.startswith(TOKEN_PREFIX):
             name = _TOKEN_RE.fullmatch(v).group(1)
             if name not in TOKEN_NAMES:
-                raise ValueError(f"chart {where!r}: unknown palette token {name!r} in "
-                                 f"{v!r}; known: {', '.join(TOKEN_NAMES)}")
+                raise ValueError(
+                    f"chart {where!r}: unknown palette token {name!r} in "
+                    f"{v!r}; known: {', '.join(TOKEN_NAMES)}"
+                )
 
 
 # --------------------------------------------------------------------------- vega-lite
@@ -272,43 +284,74 @@ def _vl_crosshair(spec, values):
     mark = spec["mark"]
     kind = _mark_type(mark)
     base_enc = {k: v for k, v in enc.items() if k != "x"}
-    x_tip = {k: x[k] for k in ("field", "type", "timeUnit", "title", "format") if k in x}
+    x_tip = {
+        k: x[k] for k in ("field", "type", "timeUnit", "title", "format") if k in x
+    }
     y_plain = isinstance(y, dict) and y.get("field") and not y.get("aggregate")
     color_field = color.get("field") if isinstance(color, dict) else None
     derived = _vl_derived(spec.get("transform"))
     series = _vl_series(color_field, values, derived) if color_field else []
     rule = {
         "mark": {"type": "rule", "strokeWidth": 1},
-        "encoding": {"opacity": {"condition": {"value": 1, "param": "hover", "empty": False},
-                                 "value": 0}},
-        "params": [{"name": "hover", "select": {
-            "type": "point", "fields": [x["field"]], "nearest": True,
-            "on": "pointerover", "clear": "pointerout"}}],
+        "encoding": {
+            "opacity": {
+                "condition": {"value": 1, "param": "hover", "empty": False},
+                "value": 0,
+            }
+        },
+        "params": [
+            {
+                "name": "hover",
+                "select": {
+                    "type": "point",
+                    "fields": [x["field"]],
+                    "nearest": True,
+                    "on": "pointerover",
+                    "clear": "pointerout",
+                },
+            }
+        ],
     }
     if color_field and y_plain and (series or series is None):
-        rule["transform"] = [{"pivot": color_field, "value": y["field"],
-                              "groupby": [x["field"]]}]
+        rule["transform"] = [
+            {"pivot": color_field, "value": y["field"], "groupby": [x["field"]]}
+        ]
         if series:
             rule["encoding"]["tooltip"] = [x_tip] + [
                 {"field": _vl_field_escape(s), "type": "quantitative", "title": str(s)}
-                for s in series]
-        else:   # transform output with unknown values: show every pivoted field
+                for s in series
+            ]
+        else:  # transform output with unknown values: show every pivoted field
             rule["mark"]["tooltip"] = {"content": "data"}
     else:
         tips = [x_tip]
         if color_field:
-            tips.append({"field": color_field, "type": color.get("type", "nominal"),
-                         "title": color.get("title", color_field)})
+            tips.append(
+                {
+                    "field": color_field,
+                    "type": color.get("type", "nominal"),
+                    "title": color.get("title", color_field),
+                }
+            )
         if isinstance(y, dict) and y.get("field"):
-            tips.append({k: y[k] for k in ("field", "type", "aggregate", "title", "format")
-                         if k in y})
+            tips.append(
+                {
+                    k: y[k]
+                    for k in ("field", "type", "aggregate", "title", "format")
+                    if k in y
+                }
+            )
         rule["encoding"]["tooltip"] = tips
     layers = [{"mark": mark, "encoding": base_enc}]
     if kind == "line" and y_plain:
         point_enc = {k: v for k, v in base_enc.items() if k in ("y", "color")}
-        layers.append({"transform": [{"filter": {"param": "hover", "empty": False}}],
-                       "mark": {"type": "point", "filled": True, "size": 64},
-                       "encoding": point_enc})
+        layers.append(
+            {
+                "transform": [{"filter": {"param": "hover", "empty": False}}],
+                "mark": {"type": "point", "filled": True, "size": 64},
+                "encoding": point_enc,
+            }
+        )
     layers.append(rule)
     out = {k: v for k, v in spec.items() if k not in ("mark", "encoding")}
     out["encoding"] = {"x": x}
@@ -335,7 +378,11 @@ def _vl_legend(spec, values):
         if field in derived and derived[field] is None:
             color.setdefault("legend", {})
             continue
-        if field in derived and "sort" not in color and                 "domain" not in (color.get("scale") or {}):
+        if (
+            field in derived
+            and "sort" not in color
+            and "domain" not in (color.get("scale") or {})
+        ):
             color["sort"] = list(derived[field])  # slots follow the fold order
         if field not in derived and values is None:
             continue
@@ -349,23 +396,33 @@ def _vl_legend(spec, values):
 def _prepare_vega_lite(spec, warnings):
     values = _vl_values(spec)
     resolve = spec.get("resolve")
-    if isinstance(resolve, dict) and (resolve.get("scale") or {}).get("y") == "independent":
+    if (
+        isinstance(resolve, dict)
+        and (resolve.get("scale") or {}).get("y") == "independent"
+    ):
         resolve["scale"].pop("y")
         if not resolve["scale"]:
             resolve.pop("scale")
         if not resolve:
             spec.pop("resolve")
         warnings.append(DUAL_AXIS_WARNING)
-    single = "mark" in spec and not any(k in spec for k in (
-        "layer", "params", "facet", "repeat", "concat", "hconcat", "vconcat"))
+    single = "mark" in spec and not any(
+        k in spec
+        for k in ("layer", "params", "facet", "repeat", "concat", "hconcat", "vconcat")
+    )
     if single:
         kind = _mark_type(spec["mark"])
         if kind in ("line", "area"):
             spec = _vl_crosshair(spec, values)
-        elif kind and not (isinstance(spec["mark"], dict) and "tooltip" in spec["mark"]):
+        elif kind and not (
+            isinstance(spec["mark"], dict) and "tooltip" in spec["mark"]
+        ):
             spec["mark"] = _mark_with(spec["mark"], tooltip=True)
     _vl_legend(spec, values)
-    if single and _mark_type(spec.get("mark") or spec["layer"][0].get("mark")) == "line":
+    if (
+        single
+        and _mark_type(spec.get("mark") or spec["layer"][0].get("mark")) == "line"
+    ):
         base = spec if "mark" in spec else spec["layer"][0]
         legend = ((base.get("encoding") or {}).get("color") or {}).get("legend")
         if isinstance(legend, dict):
@@ -387,8 +444,9 @@ def _as_list(v):
 
 
 def _markerless(s):
-    return s.get("type") == "line" and (s.get("showSymbol") is False
-                                        or s.get("symbol") == "none")
+    return s.get("type") == "line" and (
+        s.get("showSymbol") is False or s.get("symbol") == "none"
+    )
 
 
 def _end_label_names(value, series, warnings):
@@ -402,18 +460,28 @@ def _end_label_names(value, series, warnings):
         return None
     if value is False or value is None:
         return set()
-    if not isinstance(value, (list, tuple)) or \
-            not all(isinstance(n, str) for n in value):
-        warnings.append(f"end_labels ignored: expected True or a list of series names, "
-                        f"got {value!r}.")
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(n, str) for n in value
+    ):
+        warnings.append(
+            f"end_labels ignored: expected True or a list of series names, "
+            f"got {value!r}."
+        )
         return set()
-    lines = {str(s["name"]) for s in series if s.get("type") == "line" and s.get("name")}
+    lines = {
+        str(s["name"]) for s in series if s.get("type") == "line" and s.get("name")
+    }
     unknown = [n for n in value if n not in lines]
     if unknown:
-        warnings.append("end_labels: no line series named "
-                        + ", ".join(repr(n) for n in unknown)
-                        + (f"; line series are {', '.join(repr(n) for n in sorted(lines))}."
-                           if lines else "; the chart has no named line series."))
+        warnings.append(
+            "end_labels: no line series named "
+            + ", ".join(repr(n) for n in unknown)
+            + (
+                f"; line series are {', '.join(repr(n) for n in sorted(lines))}."
+                if lines
+                else "; the chart has no named line series."
+            )
+        )
     return set(value) & lines
 
 
@@ -433,13 +501,21 @@ def _prepare_echarts(opt, warnings, end_labels=False):
             s.pop("yAxisIndex", None)
         warnings.append(DUAL_AXIS_WARNING)
     x_axes = _as_list(opt.get("xAxis"))
-    horizontal = bool(x_axes) and isinstance(x_axes[0], dict) and \
-        x_axes[0].get("type") == "value" and bool(y_axes) and \
-        isinstance(y_axes[0], dict) and y_axes[0].get("type") == "category"
+    horizontal = (
+        bool(x_axes)
+        and isinstance(x_axes[0], dict)
+        and x_axes[0].get("type") == "value"
+        and bool(y_axes)
+        and isinstance(y_axes[0], dict)
+        and y_axes[0].get("type") == "category"
+    )
     lineish = any(s.get("type") == "line" for s in series)
     if "tooltip" not in opt:
-        opt["tooltip"] = ({"trigger": "axis", "axisPointer": {"type": "line"}} if lineish
-                          else {"trigger": "item"})
+        opt["tooltip"] = (
+            {"trigger": "axis", "axisPointer": {"type": "line"}}
+            if lineish
+            else {"trigger": "item"}
+        )
     legend = opt.get("legend")
     show = len(series) >= 2
     if isinstance(legend, dict) or legend is None:
@@ -447,19 +523,26 @@ def _prepare_echarts(opt, warnings, end_labels=False):
         legend["show"] = show
         if show:
             legend.setdefault("top", 0)
-            if all(_markerless(s) for s in series):   # key mirrors the stroke
+            if all(_markerless(s) for s in series):  # key mirrors the stroke
                 for k, v in LEGEND_STROKE.items():
                     legend.setdefault(k, v)
         opt["legend"] = legend
     fit = "grid" not in opt
     if fit:
-        opt["grid"] = {"left": 8, "right": 16, "top": 40 if show else 16, "bottom": 8,
-                       "containLabel": True}
+        opt["grid"] = {
+            "left": 8,
+            "right": 16,
+            "top": 40 if show else 16,
+            "bottom": 8,
+            "containLabel": True,
+        }
     for s in series:
         if s.get("type") == "bar":
             s.setdefault("barMaxWidth", BAR_MAX_PX)
             item = s.setdefault("itemStyle", {})
-            item.setdefault("borderRadius", [0, 4, 4, 0] if horizontal else [4, 4, 0, 0])
+            item.setdefault(
+                "borderRadius", [0, 4, 4, 0] if horizontal else [4, 4, 0, 0]
+            )
         elif s.get("type") == "line":
             s.setdefault("lineStyle", {}).setdefault("width", 2)
             s.setdefault("symbolSize", 8)
@@ -501,8 +584,18 @@ def _echarts_rows(opt, series, x_axes):
 
 # --------------------------------------------------------------------------- plotly
 
-_BDATA_TYPES = {"f8": "d", "f4": "f", "i1": "b", "u1": "B", "i2": "h", "u2": "H",
-                "i4": "i", "u4": "I", "i8": "q", "u8": "Q"}
+_BDATA_TYPES = {
+    "f8": "d",
+    "f4": "f",
+    "i1": "b",
+    "u1": "B",
+    "i2": "h",
+    "u2": "H",
+    "i4": "i",
+    "u4": "I",
+    "i8": "q",
+    "u8": "Q",
+}
 
 
 def _plotly_values(v):
@@ -519,20 +612,26 @@ def _plotly_values(v):
 def _prepare_plotly(fig, warnings):
     data = [t for t in _as_list(fig.get("data")) if isinstance(t, dict)]
     layout = fig.setdefault("layout", {})
-    dual = [k for k, v in layout.items()
-            if re.fullmatch(r"yaxis\d+", k) and isinstance(v, dict) and v.get("overlaying")]
+    dual = [
+        k
+        for k, v in layout.items()
+        if re.fullmatch(r"yaxis\d+", k) and isinstance(v, dict) and v.get("overlaying")
+    ]
     if dual:
         for k in dual:
             layout.pop(k)
-        names = {"y" + k[len("yaxis"):] for k in dual}
+        names = {"y" + k[len("yaxis") :] for k in dual}
         for t in data:
             if t.get("yaxis") in names:
                 t.pop("yaxis")
         warnings.append(DUAL_AXIS_WARNING)
     layout.pop("width", None)
     layout["autosize"] = True
-    lines = any(t.get("type", "scatter") in ("scatter", "scattergl")
-                and "lines" in str(t.get("mode", "lines")) for t in data)
+    lines = any(
+        t.get("type", "scatter") in ("scatter", "scattergl")
+        and "lines" in str(t.get("mode", "lines"))
+        for t in data
+    )
     if lines:
         layout.setdefault("hovermode", "x unified")
     shown = [t for t in data if t.get("showlegend") is not False]
@@ -563,7 +662,9 @@ def prepare_chart(chart):
         raise TypeError("a chart must be a dict with 'kind' and 'spec'")
     kind = chart.get("kind")
     if kind not in KINDS:
-        raise ValueError(f"unknown chart kind {kind!r}; expected one of {', '.join(KINDS)}")
+        raise ValueError(
+            f"unknown chart kind {kind!r}; expected one of {', '.join(KINDS)}"
+        )
     spec = chart.get("spec")
     if not isinstance(spec, dict):
         raise TypeError(f"chart {chart.get('title')!r}: 'spec' must be a dict")
@@ -574,17 +675,25 @@ def prepare_chart(chart):
     if kind == "vega-lite":
         spec, rows = _prepare_vega_lite(spec, warnings)
     elif kind == "echarts":
-        spec, rows, fit = _prepare_echarts(spec, warnings,
-                                           end_labels=chart.get("end_labels"))
+        spec, rows, fit = _prepare_echarts(
+            spec, warnings, end_labels=chart.get("end_labels")
+        )
     else:
         spec, rows = _prepare_plotly(spec, warnings)
     given = chart.get("rows")
     if given is not None:
         rows = _plain(list(given))
     height = int(chart.get("height") or DEFAULT_HEIGHT)
-    return {"kind": kind, "spec": spec, "rows": rows, "warnings": warnings,
-            "title": str(chart.get("title") or ""), "caption": chart.get("caption"),
-            "height": max(120, height), "fit": fit}
+    return {
+        "kind": kind,
+        "spec": spec,
+        "rows": rows,
+        "warnings": warnings,
+        "title": str(chart.get("title") or ""),
+        "caption": chart.get("caption"),
+        "height": max(120, height),
+        "fit": fit,
+    }
 
 
 def capabilities_for(charts):
@@ -597,8 +706,14 @@ def capabilities_for(charts):
 
 def from_altair(chart, title="", caption=None, rows=None, height=DEFAULT_HEIGHT):
     """Altair chart -> chart dict (kind 'vega-lite')."""
-    return {"kind": "vega-lite", "spec": chart.to_dict(), "title": title,
-            "caption": caption, "rows": rows, "height": height}
+    return {
+        "kind": "vega-lite",
+        "spec": chart.to_dict(),
+        "title": title,
+        "caption": caption,
+        "rows": rows,
+        "height": height,
+    }
 
 
 def from_plotly(fig, title="", caption=None, rows=None, height=None):
@@ -606,9 +721,14 @@ def from_plotly(fig, title="", caption=None, rows=None, height=None):
     spec = _plain(fig.to_plotly_json())
     spec.pop("config", None)
     h = height or (spec.get("layout") or {}).get("height") or DEFAULT_HEIGHT
-    return {"kind": "plotly", "spec": {"data": spec.get("data", []),
-                                       "layout": spec.get("layout", {})},
-            "title": title, "caption": caption, "rows": rows, "height": h}
+    return {
+        "kind": "plotly",
+        "spec": {"data": spec.get("data", []), "layout": spec.get("layout", {})},
+        "title": title,
+        "caption": caption,
+        "rows": rows,
+        "height": h,
+    }
 
 
 # --------------------------------------------------------------------------- table + csv
@@ -669,11 +789,16 @@ def _table_html(rows, max_rows):
     esc = html.escape
     out = []
     if len(rows) > len(shown):
-        out.append(f'<p class="table-note">Showing {len(shown)} of {len(rows)} rows; '
-                   "the CSV download has all of them.</p>")
+        out.append(
+            f'<p class="table-note">Showing {len(shown)} of {len(rows)} rows; '
+            "the CSV download has all of them.</p>"
+        )
     out.append("<table>")
-    numeric = {c for c in cols
-               if all(_is_number(r.get(c)) for r in shown if r.get(c) is not None)}
+    numeric = {
+        c
+        for c in cols
+        if all(_is_number(r.get(c)) for r in shown if r.get(c) is not None)
+    }
     heads = []
     for c in cols:
         cls = ' class="num"' if c in numeric else ""
@@ -1164,8 +1289,9 @@ _BRIDGE_JS = r"""(function () {
 def _check_title(title):
     words = str(title or "").split()
     if not 2 <= len(words) <= 4:
-        raise ValueError(f"title must be 2-4 words for an Artifact page, got {len(words)}: "
-                         f"{title!r}")
+        raise ValueError(
+            f"title must be 2-4 words for an Artifact page, got {len(words)}: {title!r}"
+        )
     return " ".join(words)
 
 
@@ -1174,20 +1300,32 @@ def _card_html(i, c, max_rows):
     cid = f"chart-{i + 1}"
     title = c["title"] or f"Chart {i + 1}"
     rows = c["rows"] or []
-    parts = [f'<figure class="card" id="{cid}">', '<div class="card-head">',
-             f'<h2 class="card-title">{esc(title)}</h2>', '<div class="card-tools">',
-             (f'<button type="button" class="table-toggle" aria-pressed="false" '
-              f'aria-controls="{cid}-table">Table</button>')]
+    parts = [
+        f'<figure class="card" id="{cid}">',
+        '<div class="card-head">',
+        f'<h2 class="card-title">{esc(title)}</h2>',
+        '<div class="card-tools">',
+        (
+            f'<button type="button" class="table-toggle" aria-pressed="false" '
+            f'aria-controls="{cid}-table">Table</button>'
+        ),
+    ]
     table = '<p class="table-note">No underlying rows were supplied for this chart.</p>'
     if rows:
         table, cols = _table_html(rows, max_rows)
         name = _slug(c["title"], cid) + ".csv"
-        parts.append(f'<a class="csv" download="{esc(name)}" '
-                     f'href="{_csv_href(rows, cols)}">Download CSV</a>')
+        parts.append(
+            f'<a class="csv" download="{esc(name)}" '
+            f'href="{_csv_href(rows, cols)}">Download CSV</a>'
+        )
     parts.append("</div></div>")
-    parts.extend(f'<p class="warning" role="note">Warning: {esc(w)}</p>' for w in c["warnings"])
-    parts.append(f'<div class="chart" id="{cid}-plot" style="height: {c["height"]}px" '
-                 f'role="img" aria-label="{esc(title)}"></div>')
+    parts.extend(
+        f'<p class="warning" role="note">Warning: {esc(w)}</p>' for w in c["warnings"]
+    )
+    parts.append(
+        f'<div class="chart" id="{cid}-plot" style="height: {c["height"]}px" '
+        f'role="img" aria-label="{esc(title)}"></div>'
+    )
     parts.append(f'<div class="table-wrap" id="{cid}-table" hidden>\n{table}\n</div>')
     if c["caption"]:
         parts.append(f"<figcaption>{esc(str(c['caption']))}</figcaption>")
@@ -1207,24 +1345,38 @@ def build_page(charts, title, description="", mode_default="auto", table_rows=No
     token name, inline data over 2 MB (aggregate first) or a page over 16 MB.
     """
     if mode_default not in MODE_DEFAULTS:
-        raise ValueError(f"mode_default must be one of {MODE_DEFAULTS}, got {mode_default!r}")
+        raise ValueError(
+            f"mode_default must be one of {MODE_DEFAULTS}, got {mode_default!r}"
+        )
     page_title = _check_title(title)
     charts = list(charts or [])
     if not charts:
         raise ValueError("build_page needs at least one chart")
     max_rows = MAX_TABLE_ROWS if table_rows is None else max(1, int(table_rows))
     prepared = [prepare_chart(c) for c in charts]
-    payload = [{"id": f"chart-{i + 1}-plot", "kind": c["kind"], "spec": c["spec"],
-                "height": c["height"], "fit": c["fit"]} for i, c in enumerate(prepared)]
+    payload = [
+        {
+            "id": f"chart-{i + 1}-plot",
+            "kind": c["kind"],
+            "spec": c["spec"],
+            "height": c["height"],
+            "fit": c["fit"],
+        }
+        for i, c in enumerate(prepared)
+    ]
     payload_json = _script_json(payload)
     inline = len(payload_json) + sum(
-        len(json.dumps(c["rows"], default=_json_default)) for c in prepared if c["rows"])
+        len(json.dumps(c["rows"], default=_json_default)) for c in prepared if c["rows"]
+    )
     if inline > MAX_INLINE_BYTES:
-        raise ValueError(f"inline data is {inline / 1048576:.1f} MB (limit 2 MB): aggregate "
-                         "first (group/bin in duckdb or polars) and pass the summary rows")
+        raise ValueError(
+            f"inline data is {inline / 1048576:.1f} MB (limit 2 MB): aggregate "
+            "first (group/bin in duckdb or polars) and pass the summary rows"
+        )
     kinds = [k for k in KINDS if any(c["kind"] == k for c in prepared)]
-    scripts = "\n".join(f'<script src="{CDN[name]}"></script>'
-                        for k in kinds for name in SCRIPTS_FOR[k])
+    scripts = "\n".join(
+        f'<script src="{CDN[name]}"></script>' for k in kinds for name in SCRIPTS_FOR[k]
+    )
     theme_attr = "" if mode_default == "auto" else f' data-theme="{mode_default}"'
     esc = html.escape
     desc = f'<p class="description">{esc(str(description))}</p>' if description else ""
@@ -1263,8 +1415,10 @@ def build_page(charts, title, description="", mode_default="auto", table_rows=No
 """
     size = len(doc.encode("utf-8"))
     if size >= MAX_PAGE_BYTES:
-        raise ValueError(f"page is {size / 1048576:.1f} MB; Artifact pages must stay under "
-                         "16 MB - aggregate first")
+        raise ValueError(
+            f"page is {size / 1048576:.1f} MB; Artifact pages must stay under "
+            "16 MB - aggregate first"
+        )
     return doc
 
 
@@ -1283,9 +1437,11 @@ def main(argv=None):
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(prog="artifact_page.py",
-                                     description="Build an Artifact-ready chart page from a "
-                                                 "JSON list of chart dicts.")
+    parser = argparse.ArgumentParser(
+        prog="artifact_page.py",
+        description="Build an Artifact-ready chart page from a "
+        "JSON list of chart dicts.",
+    )
     parser.add_argument("charts", help="JSON file: list of {kind, spec, title, ...}")
     parser.add_argument("out", help="output .html path")
     parser.add_argument("--title", required=True, help="2-4 words")
@@ -1295,8 +1451,13 @@ def main(argv=None):
     try:
         with open(args.charts, encoding="utf-8") as fh:
             charts = json.load(fh)
-        out = write_page(charts, args.out, title=args.title, description=args.description,
-                         mode_default=args.mode)
+        out = write_page(
+            charts,
+            args.out,
+            title=args.title,
+            description=args.description,
+            mode_default=args.mode,
+        )
     except (OSError, ValueError, TypeError) as exc:
         sys.stderr.write(f"artifact_page.py: {exc}\n")
         return 2

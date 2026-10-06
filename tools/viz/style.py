@@ -20,6 +20,7 @@ seaborn are imported inside the functions that need them (gt_style only
 calls methods on the GT it is given). No hex literal lives here -
 tools/viz/test_style.py greps for one.
 """
+
 from __future__ import annotations
 
 import functools
@@ -28,6 +29,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+from cycler import cycler
 from matplotlib import font_manager
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -37,7 +39,7 @@ else:  # run as a script (py tools/viz/style.py [mode]) or with tools/viz on sys
     _here = str(Path(__file__).resolve().parent)
     if _here not in sys.path:
         sys.path.insert(0, _here)
-    import palette
+    import palette  # type: ignore[no-redef]  # same module as the relative import above
 
 MODES = palette.MODES
 TEMPLATE_NAMES = {"light": "house-light", "dark": "house-dark"}
@@ -51,28 +53,37 @@ REFERENCE_DPI = 100
 SAVE_DPI = 144
 LINE_PX = 2
 MARKER_PX = 8
-GAP_PX = 2          # surface gap between touching marks and the dot ring
+GAP_PX = 2  # surface gap between touching marks and the dot ring
 HAIRLINE_PX = 1
 BAR_MAX_PX = 24
-BAR_CORNER_PX = 4   # rounded data-end (altair only; see bar_kwargs)
+BAR_CORNER_PX = 4  # rounded data-end (altair only; see bar_kwargs)
 AREA_OPACITY = 0.1
 TABLE_MARGIN_PX = 16  # great_tables container padding: the PNG is never cropped flush
-FALLBACK_FONT = "DejaVu Sans"   # bundled with matplotlib, always present
+FALLBACK_FONT = "DejaVu Sans"  # bundled with matplotlib, always present
 # CJK-capable families in fallback order (Windows, then Noto/Source Han,
 # macOS, Linux). Every one font_manager sees whose cmap holds any CJK_PROBES
 # code point joins font.family, so Han, kana and Hangul each find a face.
-CJK_FONTS = ("Microsoft YaHei", "Yu Gothic", "Malgun Gothic", "MS Gothic",
-             "Noto Sans CJK SC", "Noto Sans CJK JP", "Source Han Sans SC",
-             "PingFang SC", "Hiragino Sans", "WenQuanYi Zen Hei")
+CJK_FONTS = (
+    "Microsoft YaHei",
+    "Yu Gothic",
+    "Malgun Gothic",
+    "MS Gothic",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "Hiragino Sans",
+    "WenQuanYi Zen Hei",
+)
 CJK_PROBES = {
-    "han": 0x4E2D,     # CJK UNIFIED IDEOGRAPH-4E2D
-    "kana": 0x3042,    # HIRAGANA LETTER A
+    "han": 0x4E2D,  # CJK UNIFIED IDEOGRAPH-4E2D
+    "kana": 0x3042,  # HIRAGANA LETTER A
     "hangul": 0xD55C,  # HANGUL SYLLABLE HAN
 }
 
-LINE_PT = 1.5       # >= px_to_pt(LINE_PX) == 1.44
-MARKER_PT = 6.0     # >= px_to_pt(MARKER_PX) == 5.76
-GAP_PT = 1.5        # >= px_to_pt(GAP_PX)
+LINE_PT = 1.5  # >= px_to_pt(LINE_PX) == 1.44
+MARKER_PT = 6.0  # >= px_to_pt(MARKER_PX) == 5.76
+GAP_PT = 1.5  # >= px_to_pt(GAP_PX)
 HAIRLINE_PT = 0.75  # >= px_to_pt(HAIRLINE_PX) == 0.72
 
 SEQ_CMAP = "house-seq"
@@ -111,7 +122,7 @@ def resolve_font(stack: list[str] | None = None) -> str:
     any OS, so they are skipped; DejaVu Sans is the floor (bundled).
     """
     installed = {f.name for f in font_manager.fontManager.ttflist}
-    for name in (stack if stack is not None else font_stack()):
+    for name in stack if stack is not None else font_stack():
         if name in installed:
             return name
     return FALLBACK_FONT
@@ -130,8 +141,9 @@ def cjk_fonts(candidates: tuple[str, ...] = CJK_FONTS) -> tuple[str, ...]:
         if name not in installed:
             continue
         try:
-            path = font_manager.findfont(font_manager.FontProperties(family=name),
-                                         fallback_to_default=False)
+            path = font_manager.findfont(
+                font_manager.FontProperties(family=name), fallback_to_default=False
+            )
             charmap = font_manager.get_font(path).get_charmap()
         except (OSError, RuntimeError, ValueError):
             continue
@@ -156,7 +168,8 @@ def _register_colormaps() -> None:
     wanted = {SEQ_CMAP: seq, SEQ_CMAP + "_r": seq.reversed()}
     for m in MODES:
         wanted[DIV_CMAP[m]] = LinearSegmentedColormap.from_list(
-            DIV_CMAP[m], list(palette.diverging(m)))
+            DIV_CMAP[m], list(palette.diverging(m))
+        )
     for name, cmap in wanted.items():
         if name not in matplotlib.colormaps:
             matplotlib.colormaps.register(cmap, name=name)
@@ -170,7 +183,7 @@ def matplotlib_rc(mode: str = "light") -> dict:
     families = font_families()
     return {
         # series identity: fixed slot order, never cycled past 8
-        "axes.prop_cycle": matplotlib.cycler(color=palette.categorical(mode)),
+        "axes.prop_cycle": cycler(color=palette.categorical(mode)),
         # lines: 2px, round join/cap; markers >= 8px with a 2px surface ring
         "lines.linewidth": LINE_PT,
         "lines.solid_joinstyle": "round",
@@ -205,7 +218,7 @@ def matplotlib_rc(mode: str = "light") -> dict:
         "grid.color": sf["grid"],
         "grid.linewidth": HAIRLINE_PT,
         "grid.linestyle": "-",
-        "grid.alpha": 1.0,   # the grid token is already the recessive step
+        "grid.alpha": 1.0,  # the grid token is already the recessive step
         "xtick.color": sf["axis"],
         "ytick.color": sf["axis"],
         "xtick.major.width": HAIRLINE_PT,
@@ -264,8 +277,7 @@ def set_seaborn(mode: str = "light") -> dict:
     """
     import seaborn as sns
 
-    sns.set_theme(style="white", palette=palette.categorical(mode),
-                  font="sans-serif")
+    sns.set_theme(style="white", palette=palette.categorical(mode), font="sans-serif")
     return apply_matplotlib(mode)
 
 
@@ -301,22 +313,37 @@ def plotly_template(mode: str = "light") -> str:
         paper_bgcolor=sf["surface"],
         plot_bgcolor=sf["surface"],
         font={"family": css_font_family(), "color": tx["primary"]},
-        title={"font": {"color": tx["primary"]}, "x": 0, "xref": "paper",
-               "xanchor": "left", "y": 1, "yref": "container", "yanchor": "top",
-               "pad": {"t": 12}},
+        title={
+            "font": {"color": tx["primary"]},
+            "x": 0,
+            "xref": "paper",
+            "xanchor": "left",
+            "y": 1,
+            "yref": "container",
+            "yanchor": "top",
+            "pad": {"t": 12},
+        },
         colorway=palette.categorical(mode),
-        colorscale={"sequential": _scale(palette.sequential()),
-                    "sequentialminus": _scale(list(reversed(palette.sequential()))),
-                    "diverging": _scale([low, mid, high])},
+        colorscale={
+            "sequential": _scale(palette.sequential()),
+            "sequentialminus": _scale(list(reversed(palette.sequential()))),
+            "diverging": _scale([low, mid, high]),
+        },
         xaxis=dict(axis, showgrid=False),
         yaxis=axis,
         hovermode="x unified",
         hoverlabel={"font": {"family": css_font_family()}},
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02,
-                "xanchor": "left", "x": 0, "bgcolor": TRANSPARENT,
-                "font": {"color": tx["secondary"]}},
-        margin={"l": 48, "r": 24, "t": 80, "b": 40},   # room for title + legend
-        bargap=0.25,          # bars never fill the slot (<= 24px cap is per chart)
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "left",
+            "x": 0,
+            "bgcolor": TRANSPARENT,
+            "font": {"color": tx["secondary"]},
+        },
+        margin={"l": 48, "r": 24, "t": 80, "b": 40},  # room for title + legend
+        bargap=0.25,  # bars never fill the slot (<= 24px cap is per chart)
         bargroupgap=0.05,
     )
     ring = {"color": sf["surface"], "width": GAP_PX}
@@ -325,10 +352,16 @@ def plotly_template(mode: str = "light") -> str:
         data={
             "bar": [go.Bar(marker={"line": ring})],
             "histogram": [go.Histogram(marker={"line": ring})],
-            "scatter": [go.Scatter(line={"width": LINE_PX},
-                                   marker={"size": MARKER_PX, "line": ring})],
-            "scattergl": [go.Scattergl(line={"width": LINE_PX},
-                                       marker={"size": MARKER_PX, "line": ring})],
+            "scatter": [
+                go.Scatter(
+                    line={"width": LINE_PX}, marker={"size": MARKER_PX, "line": ring}
+                )
+            ],
+            "scattergl": [
+                go.Scattergl(
+                    line={"width": LINE_PX}, marker={"size": MARKER_PX, "line": ring}
+                )
+            ],
             "heatmap": [go.Heatmap(colorscale=_scale(palette.sequential()))],
         },
     )
@@ -353,27 +386,45 @@ def altair_config(mode: str = "light") -> dict:
             "font": family,
             "view": {"stroke": None},
             "axis": {
-                "domainColor": sf["axis"], "domainWidth": HAIRLINE_PX,
-                "gridColor": sf["grid"], "gridWidth": HAIRLINE_PX,
+                "domainColor": sf["axis"],
+                "domainWidth": HAIRLINE_PX,
+                "gridColor": sf["grid"],
+                "gridWidth": HAIRLINE_PX,
                 "gridDash": [],
-                "tickColor": sf["axis"], "tickWidth": HAIRLINE_PX,
-                "labelColor": tx["secondary"], "titleColor": tx["secondary"],
-                "labelFont": family, "titleFont": family,
+                "tickColor": sf["axis"],
+                "tickWidth": HAIRLINE_PX,
+                "labelColor": tx["secondary"],
+                "titleColor": tx["secondary"],
+                "labelFont": family,
+                "titleFont": family,
                 "titleFontWeight": "normal",
             },
             "axisX": {"grid": False},
             "legend": {
-                "orient": "top", "direction": "horizontal",
-                "labelColor": tx["secondary"], "titleColor": tx["secondary"],
-                "labelFont": family, "titleFont": family,
+                "orient": "top",
+                "direction": "horizontal",
+                "labelColor": tx["secondary"],
+                "titleColor": tx["secondary"],
+                "labelFont": family,
+                "titleFont": family,
                 "titleFontWeight": "normal",
-                "symbolType": "circle", "symbolSize": MARKER_PX ** 2,
+                "symbolType": "circle",
+                "symbolSize": MARKER_PX**2,
             },
-            "title": {"color": tx["primary"], "subtitleColor": tx["secondary"],
-                      "font": family, "subtitleFont": family,
-                      "anchor": "start", "fontWeight": "normal"},
-            "header": {"labelColor": tx["secondary"], "titleColor": tx["primary"],
-                       "labelFont": family, "titleFont": family},
+            "title": {
+                "color": tx["primary"],
+                "subtitleColor": tx["secondary"],
+                "font": family,
+                "subtitleFont": family,
+                "anchor": "start",
+                "fontWeight": "normal",
+            },
+            "header": {
+                "labelColor": tx["secondary"],
+                "titleColor": tx["primary"],
+                "labelFont": family,
+                "titleFont": family,
+            },
             "text": {"color": tx["primary"], "font": family},
             "range": {
                 "category": palette.categorical(mode),
@@ -383,15 +434,28 @@ def altair_config(mode: str = "light") -> dict:
                 "diverging": list(palette.diverging(mode)),
             },
             "mark": {"color": palette.categorical(mode)[0]},
-            "bar": {"stroke": sf["surface"], "strokeWidth": GAP_PX,
-                    "cornerRadiusEnd": BAR_CORNER_PX},
+            "bar": {
+                "stroke": sf["surface"],
+                "strokeWidth": GAP_PX,
+                "cornerRadiusEnd": BAR_CORNER_PX,
+            },
             "rect": {"stroke": sf["surface"], "strokeWidth": GAP_PX},
-            "line": {"strokeWidth": LINE_PX, "strokeJoin": "round",
-                     "strokeCap": "round"},
-            "point": {"filled": True, "size": MARKER_PX ** 2,
-                      "stroke": sf["surface"], "strokeWidth": GAP_PX},
-            "circle": {"size": MARKER_PX ** 2,
-                       "stroke": sf["surface"], "strokeWidth": GAP_PX},
+            "line": {
+                "strokeWidth": LINE_PX,
+                "strokeJoin": "round",
+                "strokeCap": "round",
+            },
+            "point": {
+                "filled": True,
+                "size": MARKER_PX**2,
+                "stroke": sf["surface"],
+                "strokeWidth": GAP_PX,
+            },
+            "circle": {
+                "size": MARKER_PX**2,
+                "stroke": sf["surface"],
+                "strokeWidth": GAP_PX,
+            },
             "area": {"opacity": AREA_OPACITY, "line": {"strokeWidth": LINE_PX}},
         }
     }
@@ -408,7 +472,7 @@ def altair_theme(mode: str = "light") -> str:
         return config
 
     if hasattr(alt, "theme") and hasattr(alt.theme, "register"):
-        alt.theme.register(name, enable=False)(house_theme)   # altair >= 5.5
+        alt.theme.register(name, enable=False)(house_theme)  # altair >= 5.5
     else:  # altair < 5.5
         alt.themes.register(name, house_theme)
     return name
@@ -470,10 +534,12 @@ def bokeh_attrs(mode: str = "light") -> dict:
                 "title_text_color": tx["secondary"],
                 "title_text_font": family,
             },
-            "Line": {"line_width": LINE_PX, "line_join": "round",
-                     "line_cap": "round"},
-            "Scatter": {"size": MARKER_PX, "line_color": sf["surface"],
-                        "line_width": GAP_PX},
+            "Line": {"line_width": LINE_PX, "line_join": "round", "line_cap": "round"},
+            "Scatter": {
+                "size": MARKER_PX,
+                "line_color": sf["surface"],
+                "line_width": GAP_PX,
+            },
             "VBar": {"line_color": sf["surface"], "line_width": GAP_PX},
             "HBar": {"line_color": sf["surface"], "line_width": GAP_PX},
             "VArea": {"fill_alpha": AREA_OPACITY},
@@ -513,23 +579,36 @@ def gt_options(mode: str = "light") -> dict:
     rule = {"style": "solid", "width": hair, "color": sf["axis"]}
     fine = {"style": "solid", "width": hair, "color": sf["grid"]}
     borders = {
-        "table_border_top": off, "table_border_bottom": off,
-        "table_border_left": off, "table_border_right": off,
-        "heading_border_bottom": off, "heading_border_lr": off,
-        "column_labels_border_top": off, "column_labels_border_lr": off,
+        "table_border_top": off,
+        "table_border_bottom": off,
+        "table_border_left": off,
+        "table_border_right": off,
+        "heading_border_bottom": off,
+        "heading_border_lr": off,
+        "column_labels_border_top": off,
+        "column_labels_border_lr": off,
         "column_labels_vlines": off,
         "column_labels_border_bottom": rule,
         "table_body_border_top": dict(rule, width="0px"),
         "table_body_border_bottom": rule,
-        "table_body_hlines": fine, "table_body_vlines": off,
-        "row_group_border_top": fine, "row_group_border_bottom": fine,
-        "row_group_border_left": off, "row_group_border_right": off,
-        "stub_border": off, "stub_row_group_border": off,
-        "summary_row_border": rule, "grand_summary_row_border": rule,
-        "source_notes_border_bottom": off, "source_notes_border_lr": off,
+        "table_body_hlines": fine,
+        "table_body_vlines": off,
+        "row_group_border_top": fine,
+        "row_group_border_bottom": fine,
+        "row_group_border_left": off,
+        "row_group_border_right": off,
+        "stub_border": off,
+        "stub_row_group_border": off,
+        "summary_row_border": rule,
+        "grand_summary_row_border": rule,
+        "source_notes_border_bottom": off,
+        "source_notes_border_lr": off,
     }
-    options = {f"{name}_{part}": value
-               for name, spec in borders.items() for part, value in spec.items()}
+    options = {
+        f"{name}_{part}": value
+        for name, spec in borders.items()
+        for part, value in spec.items()
+    }
     options.update(
         container_padding_x=margin,
         container_padding_y=margin,
@@ -549,17 +628,26 @@ def gt_css(table_id: str, mode: str = "light") -> str:
     sf = palette.surface(mode)
     tx = palette.text(mode)
     scope = f"#{table_id}"
-    labels = ", ".join(f"{scope} .{cls}" for cls in (
-        "gt_col_heading", "gt_column_spanner", "gt_subtitle", "gt_sourcenote",
-        "gt_footnote"))
-    return "\n".join((
-        f"{scope} {{ background-color: {sf['surface']}; }}",
-        f"{scope} .gt_table_body {{ font-variant-numeric: tabular-nums; }}",
-        # border-collapse tie (same width/style): the first body row's grid
-        # hline beats the column-label rule, so it wears the axis ink itself
-        f"{scope} .gt_table_body > tr:first-child > * {{ border-top-color: {sf['axis']}; }}",
-        f"{labels} {{ color: {tx['secondary']}; }}",
-    ))
+    labels = ", ".join(
+        f"{scope} .{cls}"
+        for cls in (
+            "gt_col_heading",
+            "gt_column_spanner",
+            "gt_subtitle",
+            "gt_sourcenote",
+            "gt_footnote",
+        )
+    )
+    return "\n".join(
+        (
+            f"{scope} {{ background-color: {sf['surface']}; }}",
+            f"{scope} .gt_table_body {{ font-variant-numeric: tabular-nums; }}",
+            # border-collapse tie (same width/style): the first body row's grid
+            # hline beats the column-label rule, so it wears the axis ink itself
+            f"{scope} .gt_table_body > tr:first-child > * {{ border-top-color: {sf['axis']}; }}",
+            f"{labels} {{ color: {tx['secondary']}; }}",
+        )
+    )
 
 
 def gt_style(gt, mode: str = "light"):
@@ -590,11 +678,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="style.py",
         description="Dump the house style (matplotlib rcParams, altair config, "
-                    "bokeh theme attrs) for one mode as JSON.")
-    parser.add_argument("mode", nargs="?", default="light", choices=MODES,
-                        help="color mode (default: light)")
+        "bokeh theme attrs) for one mode as JSON.",
+    )
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        default="light",
+        choices=MODES,
+        help="color mode (default: light)",
+    )
     mode = parser.parse_args().mode
-    rc = {k: (str(v) if k == "axes.prop_cycle" else v)
-          for k, v in matplotlib_rc(mode).items()}
-    print(json.dumps({"matplotlib": rc, "altair": altair_config(mode),
-                      "bokeh": bokeh_attrs(mode)}, indent=1))
+    rc = {
+        k: (str(v) if k == "axes.prop_cycle" else v)
+        for k, v in matplotlib_rc(mode).items()
+    }
+    print(
+        json.dumps(
+            {
+                "matplotlib": rc,
+                "altair": altair_config(mode),
+                "bokeh": bokeh_attrs(mode),
+            },
+            indent=1,
+        )
+    )
