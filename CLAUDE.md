@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 6 hooks (+ tldr-shim helper).
+Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 7 hooks (session-start not registered by default; + tldr-shim helper).
 
 ## Skills
 
@@ -34,6 +34,7 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 6 hooks (+ tldr-s
 | `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction |
 | `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff; falls back to transcript usage when no statusline ran (headless) |
 | `worker-report-check.mjs` | SubagentStop (worker frontmatter) | Runs `tools/validate_report.py` on the worker's report; blocks ≤2× on ERRORs |
+| `session-start.mjs` | SessionStart (not registered by default) | startup/clear: `bloks context` (capped 6000 chars); compact: newest handoff from the handoff root |
 
 Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. Tests: `.claude/hooks/test_*.sh`.
 
