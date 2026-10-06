@@ -8,6 +8,7 @@ the library does not import). Browser-backed tests share the module's single
 lazily-started Playwright chromium and skip with a reason when it is absent.
 All output goes to tempfile directories.
 """
+
 import ast
 import contextlib
 import io
@@ -32,8 +33,17 @@ from tools.viz import export
 
 EXPORT_PY = os.path.join(REPO_ROOT, "tools", "viz", "export.py")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-LAZY_LIBS = ("matplotlib", "plotly", "altair", "bokeh", "great_tables",
-             "holoviews", "playwright", "kaleido", "vl_convert")
+LAZY_LIBS = (
+    "matplotlib",
+    "plotly",
+    "altair",
+    "bokeh",
+    "great_tables",
+    "holoviews",
+    "playwright",
+    "kaleido",
+    "vl_convert",
+)
 
 BROWSER_SKIP = None
 try:
@@ -55,11 +65,12 @@ def try_import(name):
 
 def rgb(hexstr):
     hexstr = hexstr.lstrip("#")
-    return tuple(int(hexstr[i:i + 2], 16) for i in (0, 2, 4))
+    return tuple(int(hexstr[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def png_colors(path):
     from PIL import Image
+
     with Image.open(path) as im:
         im = im.convert("RGB")
         return {color: count for count, color in im.getcolors(maxcolors=1 << 24)}
@@ -67,6 +78,7 @@ def png_colors(path):
 
 def corner(path):
     from PIL import Image
+
     with Image.open(path) as im:
         return im.convert("RGB").getpixel((2, 2))
 
@@ -122,16 +134,22 @@ class Source(unittest.TestCase):
         for fn in ast.walk(tree):
             if isinstance(fn, ast.FunctionDef) and fn.name != "main":
                 for node in ast.walk(fn):
-                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                            and node.func.id == "print"):
+                    if (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == "print"
+                    ):
                         offenders.append(fn.name)
         self.assertEqual(offenders, [])
 
     def test_import_is_lazy(self):
-        code = (f"import sys; sys.path.insert(0, {REPO_ROOT!r}); import tools.viz.export; "
-                f"print(sorted(m for m in {LAZY_LIBS!r} if m in sys.modules))")
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                              text=True, check=False)
+        code = (
+            f"import sys; sys.path.insert(0, {REPO_ROOT!r}); import tools.viz.export; "
+            f"print(sorted(m for m in {LAZY_LIBS!r} if m in sys.modules))"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=False
+        )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "[]")
 
@@ -148,6 +166,7 @@ class Arguments(ExportCase):
 
     def test_unknown_format_is_value_error(self):
         import matplotlib.pyplot as plt
+
         fig = plt.figure()
         try:
             with self.assertRaises(ValueError):
@@ -157,12 +176,15 @@ class Arguments(ExportCase):
 
     def test_bad_mode_is_value_error(self):
         with self.assertRaises(ValueError):
-            export.render_html("<p>x</p>", os.path.join(self.out, "x.png"), mode="sepia")
+            export.render_html(
+                "<p>x</p>", os.path.join(self.out, "x.png"), mode="sepia"
+            )
 
 
 class MatplotlibBranch(ExportCase):
     def test_png_svg_and_html_note(self):
         import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots(figsize=(3, 2))
         ax.bar([1, 2, 3], [3, 1, 2])
         try:
@@ -177,6 +199,7 @@ class MatplotlibBranch(ExportCase):
 
     def test_axes_resolves_to_figure_and_formats_subset(self):
         import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots(figsize=(3, 2))
         ax.plot([1, 2, 3])
         try:
@@ -194,8 +217,10 @@ PLOTLY, PLOTLY_SKIP = try_import("plotly.graph_objects")
 @unittest.skipIf(PLOTLY is None, PLOTLY_SKIP or "")
 class PlotlyBranch(ExportCase):
     def fig(self):
-        return PLOTLY.Figure(PLOTLY.Bar(x=["a", "b"], y=[2, 3], marker_color="#1060e0"),
-                             layout={"width": 400, "height": 300})
+        return PLOTLY.Figure(
+            PLOTLY.Bar(x=["a", "b"], y=[2, 3], marker_color="#1060e0"),
+            layout={"width": 400, "height": 300},
+        )
 
     def test_png_svg_html(self):
         res = self.save_quiet(self.fig(), "plotly")
@@ -210,8 +235,9 @@ class PlotlyBranch(ExportCase):
     @needs_browser
     def test_kaleido_failure_falls_back_to_render_html(self):
         fig = self.fig()
-        with mock.patch.object(type(fig), "write_image",
-                               side_effect=RuntimeError("no chrome")):
+        with mock.patch.object(
+            type(fig), "write_image", side_effect=RuntimeError("no chrome")
+        ):
             res = self.save_quiet(fig, "fallback", formats=("png", "svg"))
         self.assert_png(res["png"])
         self.assertIsNone(res["svg"])
@@ -228,16 +254,25 @@ ALTAIR, ALTAIR_SKIP = try_import("altair")
 class AltairBranch(ExportCase):
     def test_png_svg_html_without_browser(self):
         import pandas as pd
-        chart = ALTAIR.Chart(pd.DataFrame({"k": ["a", "b"], "v": [2, 3]})).mark_bar().encode(
-            x="k:N", y="v:Q")
-        with mock.patch.object(export, "get_browser",
-                               side_effect=AssertionError("altair must not use the browser")):
+
+        chart = (
+            ALTAIR.Chart(pd.DataFrame({"k": ["a", "b"], "v": [2, 3]}))
+            .mark_bar()
+            .encode(x="k:N", y="v:Q")
+        )
+        with mock.patch.object(
+            export,
+            "get_browser",
+            side_effect=AssertionError("altair must not use the browser"),
+        ):
             res = self.save_quiet(chart, "alt")
         self.assert_png(res["png"])
         self.assert_file(res["svg"], "<svg")
         self.assert_file(res["html"], "vega")
         with open(res["html"], encoding="utf-8") as fh:
-            self.assertNotRegex(fh.read(), r"<script[^>]+src=\"https?://")  # self-contained
+            self.assertNotRegex(
+                fh.read(), r"<script[^>]+src=\"https?://"
+            )  # self-contained
 
 
 BOKEH, BOKEH_SKIP = try_import("bokeh.plotting")
@@ -272,12 +307,16 @@ GT, GT_SKIP = try_import("great_tables")
 class GreatTablesBranch(ExportCase):
     def table(self):
         import pandas as pd
+
         return GT.GT(pd.DataFrame({"name": ["a", "b"], "value": [1, 2]}))
 
     def test_html_without_browser(self):
-        with mock.patch.object(type(self.table()), "gtsave",
-                               side_effect=AssertionError("gtsave must not be called"),
-                               create=True):
+        with mock.patch.object(
+            type(self.table()),
+            "gtsave",
+            side_effect=AssertionError("gtsave must not be called"),
+            create=True,
+        ):
             res = self.save_quiet(self.table(), "gt", formats=("html",))
         self.assert_file(res["html"], "<table")
 
@@ -293,13 +332,18 @@ class GreatTablesBranch(ExportCase):
         from PIL import Image
 
         from tools.viz import palette, style
+
         band = style.TABLE_MARGIN_PX * export.FIGURE_SCALE
         for mode in ("light", "dark"):
             sf = palette.surface(mode)
-            table = (self.table().tab_header(title="Styled", subtitle="sub")
-                     .tab_source_note("Source: test"))
-            res = self.save_quiet(style.gt_style(table, mode), f"gt-{mode}",
-                                  formats=("png",), mode=mode)
+            table = (
+                self.table()
+                .tab_header(title="Styled", subtitle="sub")
+                .tab_source_note("Source: test")
+            )
+            res = self.save_quiet(
+                style.gt_style(table, mode), f"gt-{mode}", formats=("png",), mode=mode
+            )
             self.assert_png(res["png"])
             self.assertGreater(os.path.getsize(res["png"]), 0)
             with Image.open(res["png"]) as im:
@@ -308,20 +352,32 @@ class GreatTablesBranch(ExportCase):
                 self.assertGreater(w, 2 * band)
                 self.assertGreater(h, 2 * band)
                 px = im.load()
-                edge = [px[x, y] for y in range(h) for x in range(w)
-                        if x < band - 1 or y < band - 1 or x >= w - band + 1
-                        or y >= h - band + 1]
+                edge = [
+                    px[x, y]
+                    for y in range(h)
+                    for x in range(w)
+                    if x < band - 1
+                    or y < band - 1
+                    or x >= w - band + 1
+                    or y >= h - band + 1
+                ]
                 colors = {c for _, c in im.getcolors(maxcolors=1 << 24)}
-            self.assertEqual(set(edge), {rgb(sf["surface"])},
-                             f"{mode}: margin band is not pure surface")
+            self.assertEqual(
+                set(edge),
+                {rgb(sf["surface"])},
+                f"{mode}: margin band is not pure surface",
+            )
             self.assertIn(rgb(sf["axis"]), colors, f"{mode}: no hairline rule drawn")
             # the column-label rule is axis ink: two axis rules (label + body bottom),
             # not one - the first body row's grid hline must not win the collapse tie
             with Image.open(res["png"]) as im:
                 im = im.convert("RGB")
                 column = [im.getpixel((w // 2, y)) for y in range(h)]
-            runs = [y for y in range(1, h)
-                    if column[y] == rgb(sf["axis"]) and column[y - 1] != rgb(sf["axis"])]
+            runs = [
+                y
+                for y in range(1, h)
+                if column[y] == rgb(sf["axis"]) and column[y - 1] != rgb(sf["axis"])
+            ]
             self.assertEqual(len(runs), 2, f"{mode}: axis rules at {runs}")
 
 
@@ -332,6 +388,7 @@ HV, HV_SKIP = try_import("holoviews")
 class HoloviewsBranch(ExportCase):
     def test_render_then_recurse(self):
         import matplotlib.pyplot as plt
+
         mpl_fig = plt.figure(figsize=(2, 2))
         try:
             with mock.patch.object(HV, "render", return_value=mpl_fig) as render:
@@ -398,9 +455,13 @@ class RenderHtml(ExportCase):
     def render(self, html, name, **kw):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            path = export.render_html(html, os.path.join(self.out, name),
-                                      width=kw.pop("width", 320), height=kw.pop("height", 200),
-                                      **kw)
+            path = export.render_html(
+                html,
+                os.path.join(self.out, name),
+                width=kw.pop("width", 320),
+                height=kw.pop("height", 200),
+                **kw,
+            )
         self.assertEqual(buf.getvalue(), "", "render_html must never print")
         self.assert_png(path)
         return path
@@ -426,6 +487,7 @@ class RenderHtml(ExportCase):
 
     def test_viewport_size(self):
         from PIL import Image
+
         path = self.render(THEME_PAGE, "size.png", width=500, height=260)
         with Image.open(path) as im:
             self.assertEqual(im.size, (500, 260))
@@ -440,15 +502,18 @@ class RenderHtml(ExportCase):
 
     def test_ready_hook_timeout_is_export_error(self):
         with self.assertRaises(export.ExportError) as ctx:
-            export.render_html(NEVER_READY_PAGE, os.path.join(self.out, "never.png"),
-                               timeout_ms=1000)
+            export.render_html(
+                NEVER_READY_PAGE, os.path.join(self.out, "never.png"), timeout_ms=1000
+            )
         self.assertIn("__chartsReady", str(ctx.exception))
 
     def test_tiny_plotly_cdn_page(self):
         if PLOTLY is None:
             self.skipTest(PLOTLY_SKIP)
-        fig = PLOTLY.Figure(PLOTLY.Bar(x=["a", "b"], y=[2, 3], marker_color="#1060e0"),
-                            layout={"width": 400, "height": 300})
+        fig = PLOTLY.Figure(
+            PLOTLY.Bar(x=["a", "b"], y=[2, 3], marker_color="#1060e0"),
+            layout={"width": 400, "height": 300},
+        )
         html = fig.to_html(include_plotlyjs="cdn", full_html=True)
         src = re.search(r'src="(https://[^"]+)"', html).group(1)
         try:
@@ -464,9 +529,24 @@ class RenderHtml(ExportCase):
             fh.write(THEME_PAGE)
         out = os.path.join(self.out, "cli.png")
         proc = subprocess.run(
-            [sys.executable, EXPORT_PY, "render", page, out, "--mode", "dark",
-             "--width", "300", "--height", "150"],
-            capture_output=True, text=True, check=False, timeout=120)
+            [
+                sys.executable,
+                EXPORT_PY,
+                "render",
+                page,
+                out,
+                "--mode",
+                "dark",
+                "--width",
+                "300",
+                "--height",
+                "150",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), os.path.abspath(out))
         self.assert_png(out)
@@ -474,9 +554,18 @@ class RenderHtml(ExportCase):
 
     def test_cli_missing_input_exits_nonzero(self):
         proc = subprocess.run(
-            [sys.executable, EXPORT_PY, "render", os.path.join(self.out, "nope.html"),
-             os.path.join(self.out, "x.png")],
-            capture_output=True, text=True, check=False, timeout=120)
+            [
+                sys.executable,
+                EXPORT_PY,
+                "render",
+                os.path.join(self.out, "nope.html"),
+                os.path.join(self.out, "x.png"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("nope.html", proc.stderr)
 

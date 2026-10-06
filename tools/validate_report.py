@@ -25,12 +25,31 @@ from pathlib import Path
 
 RESULTS = ("success", "partial", "blocked")
 SEVERITIES = ("blocking", "non-blocking")
-ASSERTION_TYPES = ("invariant", "behavioral", "contract", "property", "fuzz", "approval")
+ASSERTION_TYPES = (
+    "invariant",
+    "behavioral",
+    "contract",
+    "property",
+    "fuzz",
+    "approval",
+)
 STATUSES = ("pending", "passed", "failed")
 COMPLEXITIES = ("patch", "feature", "multi-feature", "greenfield")
 
-REPORT_FIELDS = ("task", "assertion", "result", "implemented", "remaining", "tests",
-                 "checks", "bloks_used", "corrections", "discoveries", "issues", "conventions")
+REPORT_FIELDS = (
+    "task",
+    "assertion",
+    "result",
+    "implemented",
+    "remaining",
+    "tests",
+    "checks",
+    "bloks_used",
+    "corrections",
+    "discoveries",
+    "issues",
+    "conventions",
+)
 # Real bloks CLI: positional text, options after. --lib/--title/--body/--text don't exist.
 BLOKS_CMD = re.compile(r'^bloks new rule "(?:[^"\\]|\\.)+"(?: --tags [\w.:/,+-]+)?$')
 BAD_BLOKS_FLAGS = re.compile(r"--(?:lib|title|body|text)\b")
@@ -65,7 +84,9 @@ def _expect(f, obj, key, kind, path, required=True):
     v = obj[key]
     # bool is an int subclass — never accept it where an int is meant
     if kind is int and isinstance(v, bool) or not isinstance(v, kind):
-        names = "|".join(k.__name__ for k in (kind if isinstance(kind, tuple) else (kind,)))
+        names = "|".join(
+            k.__name__ for k in (kind if isinstance(kind, tuple) else (kind,))
+        )
         f.error(f"{path}.{key}", f"expected {names}, got {_type_name(v)}")
         return None
     return v
@@ -84,7 +105,9 @@ def _list_of_objects(f, report, key, allowed, required, check=None):
     for i, item in enumerate(items):
         p = f"$.{key}[{i}]"
         if not isinstance(item, dict):
-            f.error(p, f"expected object {{{', '.join(required)}}}, got {_type_name(item)}")
+            f.error(
+                p, f"expected object {{{', '.join(required)}}}, got {_type_name(item)}"
+            )
             continue
         for k in required:
             _expect(f, item, k, str, p)
@@ -99,7 +122,9 @@ def _check_bloks_used(f, item, p):
     elif "helpful" not in item:
         f.error(f"{p}.helpful", "missing required field")
     if item.get("helpful") is False and not item.get("reason"):
-        f.warn(f"{p}.reason", "helpful: false without a reason — EVOLVE can't act on it")
+        f.warn(
+            f"{p}.reason", "helpful: false without a reason — EVOLVE can't act on it"
+        )
 
 
 def _check_discovery(f, item, p):
@@ -107,7 +132,10 @@ def _check_discovery(f, item, p):
     if not isinstance(cmd, str) or cmd == "":
         return
     if BAD_BLOKS_FLAGS.search(cmd):
-        f.error(f"{p}.bloks_cmd", 'invented flag (--lib/--title/--body/--text); syntax: bloks new rule "<text>" --tags a,b')
+        f.error(
+            f"{p}.bloks_cmd",
+            'invented flag (--lib/--title/--body/--text); syntax: bloks new rule "<text>" --tags a,b',
+        )
     elif not BLOKS_CMD.match(cmd):
         f.error(f"{p}.bloks_cmd", 'expected: bloks new rule "<text>" [--tags a,b]')
 
@@ -123,8 +151,12 @@ def _check_check(f, item, p):
     if {"command", "exit_code"} <= keys:
         if not isinstance(item["command"], str):
             f.error(f"{p}.command", f"expected str, got {_type_name(item['command'])}")
-        if not isinstance(item["exit_code"], int) or isinstance(item["exit_code"], bool):
-            f.error(f"{p}.exit_code", f"expected int, got {_type_name(item['exit_code'])}")
+        if not isinstance(item["exit_code"], int) or isinstance(
+            item["exit_code"], bool
+        ):
+            f.error(
+                f"{p}.exit_code", f"expected int, got {_type_name(item['exit_code'])}"
+            )
         _extra(f, item, ("command", "exit_code", "observed"), p)
     elif {"action", "observed"} <= keys:
         _extra(f, item, ("action", "observed"), p)
@@ -157,7 +189,10 @@ def validate_report(report):
         if bad:
             f.error("$.assertion", f"not an assertion id: {bad}")
         elif len(ids) > 1:
-            f.warn("$.assertion", "multiple assertions — plan decomposes one task = one assertion")
+            f.warn(
+                "$.assertion",
+                "multiple assertions — plan decomposes one task = one assertion",
+            )
     _expect(f, report, "implemented", str, "$")
     _expect(f, report, "remaining", str, "$")
 
@@ -167,7 +202,9 @@ def validate_report(report):
         for i, t in enumerate(added or []):
             p = f"$.tests.added[{i}]"
             if not isinstance(t, dict):
-                f.error(p, f"expected object {{file, name, verifies}}, got {_type_name(t)}")
+                f.error(
+                    p, f"expected object {{file, name, verifies}}, got {_type_name(t)}"
+                )
                 continue
             for k in ("file", "name", "verifies"):
                 _expect(f, t, k, str, p)
@@ -180,7 +217,10 @@ def validate_report(report):
             # null only when no test command ran (docs-only work)
             if code is None:
                 if command:
-                    f.error("$.tests.exit_code", "null but tests.command is set — record the exit code")
+                    f.error(
+                        "$.tests.exit_code",
+                        "null but tests.command is set — record the exit code",
+                    )
             elif not isinstance(code, int) or isinstance(code, bool):
                 f.error("$.tests.exit_code", f"expected int, got {_type_name(code)}")
         _extra(f, tests, ("added", "command", "exit_code"), "$.tests")
@@ -189,16 +229,38 @@ def validate_report(report):
     for i, c in enumerate(checks or []):
         p = f"$.checks[{i}]"
         if not isinstance(c, dict):
-            f.error(p, f"expected object {{command, exit_code}} | {{action, observed}}, got {_type_name(c)}")
+            f.error(
+                p,
+                f"expected object {{command, exit_code}} | {{action, observed}}, got {_type_name(c)}",
+            )
         else:
             _check_check(f, c, p)
 
-    _list_of_objects(f, report, "bloks_used", ("card", "helpful", "reason"), ("card",), _check_bloks_used)
+    _list_of_objects(
+        f,
+        report,
+        "bloks_used",
+        ("card", "helpful", "reason"),
+        ("card",),
+        _check_bloks_used,
+    )
     _list_of_objects(f, report, "corrections", ("block", "issue"), ("block", "issue"))
-    _list_of_objects(f, report, "discoveries", ("lib", "finding", "bloks_cmd"),
-                     ("lib", "finding", "bloks_cmd"), _check_discovery)
-    _list_of_objects(f, report, "issues", ("severity", "description"),
-                     ("severity", "description"), _check_issue)
+    _list_of_objects(
+        f,
+        report,
+        "discoveries",
+        ("lib", "finding", "bloks_cmd"),
+        ("lib", "finding", "bloks_cmd"),
+        _check_discovery,
+    )
+    _list_of_objects(
+        f,
+        report,
+        "issues",
+        ("severity", "description"),
+        ("severity", "description"),
+        _check_issue,
+    )
 
     conventions = _expect(f, report, "conventions", list, "$")
     for i, c in enumerate(conventions or []):
@@ -249,8 +311,24 @@ def validate_contract(contract):
                 f.error(f"{p}.{k}", f"expected str|null, got {_type_name(a[k])}")
         if a.get("status") == "passed" and not a.get("evidence"):
             f.error(f"{p}.evidence", "status passed without evidence")
-        _extra(f, a, ("id", "type", "text", "milestone", "status", "depends", "worker",
-                      "evidence", "presentation", "variants", "medium"), p)
+        _extra(
+            f,
+            a,
+            (
+                "id",
+                "type",
+                "text",
+                "milestone",
+                "status",
+                "depends",
+                "worker",
+                "evidence",
+                "presentation",
+                "variants",
+                "medium",
+            ),
+            p,
+        )
 
     milestones = _expect(f, contract, "milestones", list, "$") or []
     names = set()
@@ -275,13 +353,28 @@ def validate_contract(contract):
             continue
         for j, dep in enumerate(a.get("depends") or []):
             if dep not in ids:
-                f.error(f"$.assertions[{i}].depends[{j}]", f"unknown assertion id {dep!r}")
+                f.error(
+                    f"$.assertions[{i}].depends[{j}]", f"unknown assertion id {dep!r}"
+                )
         ms = a.get("milestone")
         if milestones and isinstance(ms, str) and ms not in names:
             f.error(f"$.assertions[{i}].milestone", f"unknown milestone {ms!r}")
 
-    _extra(f, contract, ("task", "complexity", "milestones", "assertions", "baseline",
-                         "premortem", "post_validation", "meta_goal"), "$")
+    _extra(
+        f,
+        contract,
+        (
+            "task",
+            "complexity",
+            "milestones",
+            "assertions",
+            "baseline",
+            "premortem",
+            "post_validation",
+            "meta_goal",
+        ),
+        "$",
+    )
     return f, ids
 
 
@@ -299,9 +392,14 @@ def _emit(path, findings):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("reports", nargs="*", help="worker report JSON files")
-    ap.add_argument("--contract", help="contract.json: validate it and cross-check report assertion ids")
+    ap.add_argument(
+        "--contract",
+        help="contract.json: validate it and cross-check report assertion ids",
+    )
     try:
         args = ap.parse_args(argv)
     except SystemExit as e:
@@ -309,7 +407,11 @@ def main(argv=None):
     if not args.reports and not args.contract:
         ap.print_usage(sys.stderr)
         return 2
-    missing = [p for p in args.reports + ([args.contract] if args.contract else []) if not Path(p).is_file()]
+    missing = [
+        p
+        for p in args.reports + ([args.contract] if args.contract else [])
+        if not Path(p).is_file()
+    ]
     if missing:
         for p in missing:
             print(f"{p}: file not found", file=sys.stderr)
@@ -334,7 +436,11 @@ def main(argv=None):
             failed = True
             continue
         rf = validate_report(obj)
-        if contract_ids is not None and isinstance(obj, dict) and isinstance(obj.get("assertion"), str):
+        if (
+            contract_ids is not None
+            and isinstance(obj, dict)
+            and isinstance(obj.get("assertion"), str)
+        ):
             for aid in (a.strip() for a in obj["assertion"].split(",")):
                 if ASSERTION_ID.match(aid) and aid not in contract_ids:
                     rf.error("$.assertion", f"{aid} not in contract")

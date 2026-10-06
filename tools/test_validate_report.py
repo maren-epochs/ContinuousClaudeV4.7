@@ -31,15 +31,27 @@ VALID = {
     "result": "success",
     "implemented": "wrapped fetch in retry(3)",
     "remaining": "",
-    "tests": {"added": [{"file": "t.py", "name": "retries", "verifies": "VAL-001"}],
-              "command": "pytest t.py", "exit_code": 0},
-    "checks": [{"command": "ruff check .", "exit_code": 0},
-               {"action": "ran CLI", "observed": "3 attempts logged"}],
-    "bloks_used": [{"card": "httpx-retry", "helpful": True},
-                   {"card": "old-card", "helpful": False, "reason": "API renamed"}],
+    "tests": {
+        "added": [{"file": "t.py", "name": "retries", "verifies": "VAL-001"}],
+        "command": "pytest t.py",
+        "exit_code": 0,
+    },
+    "checks": [
+        {"command": "ruff check .", "exit_code": 0},
+        {"action": "ran CLI", "observed": "3 attempts logged"},
+    ],
+    "bloks_used": [
+        {"card": "httpx-retry", "helpful": True},
+        {"card": "old-card", "helpful": False, "reason": "API renamed"},
+    ],
     "corrections": [{"block": "old-card", "issue": "API renamed"}],
-    "discoveries": [{"lib": "httpx", "finding": "Client is not thread-safe",
-                     "bloks_cmd": 'bloks new rule "httpx: Client is not thread-safe" --tags httpx,python'}],
+    "discoveries": [
+        {
+            "lib": "httpx",
+            "finding": "Client is not thread-safe",
+            "bloks_cmd": 'bloks new rule "httpx: Client is not thread-safe" --tags httpx,python',
+        }
+    ],
     "issues": [{"severity": "non-blocking", "description": "flaky test t.py:4"}],
     "conventions": ["single quotes"],
 }
@@ -48,8 +60,18 @@ CONTRACT = {
     "task": "retry",
     "complexity": "feature",
     "milestones": [{"name": "m1", "status": "pending", "assertions": ["VAL-001"]}],
-    "assertions": [{"id": "VAL-001", "type": "invariant", "text": "fetch retries", "milestone": "m1",
-                    "status": "pending", "depends": [], "worker": None, "evidence": None}],
+    "assertions": [
+        {
+            "id": "VAL-001",
+            "type": "invariant",
+            "text": "fetch retries",
+            "milestone": "m1",
+            "status": "pending",
+            "depends": [],
+            "worker": None,
+            "evidence": None,
+        }
+    ],
 }
 
 
@@ -67,8 +89,13 @@ class ValidateReportTests(unittest.TestCase):
         return str(p)
 
     def _run(self, *args):
-        proc = subprocess.run([sys.executable, str(VALIDATOR), *args],
-                              capture_output=True, text=True, encoding="utf-8", check=False)
+        proc = subprocess.run(
+            [sys.executable, str(VALIDATOR), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
         return proc.returncode, proc.stdout
 
     def _report(self, mutate):
@@ -95,6 +122,7 @@ class ValidateReportTests(unittest.TestCase):
         def m(r):
             r["issues"] = [{"severity": "minor", "description": "x"}]
             r["checks"] = ["node --check: pass"]
+
         code, out = self._run(self._report(m))
         self.assertEqual(code, 1)
         self.assertIn("ERROR $.issues[0].severity", out)
@@ -109,21 +137,32 @@ class ValidateReportTests(unittest.TestCase):
         def m(r):
             r["notes"] = "x"
             r["tests"]["red"] = "3 failed"
+
         code, out = self._run(self._report(m))
         self.assertEqual(code, 0, out)
         self.assertIn("WARN $.notes: unknown field", out)
         self.assertIn("WARN $.tests.red: unknown field", out)
 
     def test_invented_bloks_flags_fail(self):
-        code, out = self._run(self._report(lambda r: r["discoveries"][0].update(
-            bloks_cmd="bloks new rule --lib httpx --text 'x'")))
+        code, out = self._run(
+            self._report(
+                lambda r: r["discoveries"][0].update(
+                    bloks_cmd="bloks new rule --lib httpx --text 'x'"
+                )
+            )
+        )
         self.assertEqual(code, 1)
         self.assertIn("invented flag", out)
 
     def test_space_separated_tags_fail(self):
         # clap value_delimiter=',' — a second bare word is an unexpected argument
-        code, out = self._run(self._report(lambda r: r["discoveries"][0].update(
-            bloks_cmd='bloks new rule "x" --tags httpx python')))
+        code, out = self._run(
+            self._report(
+                lambda r: r["discoveries"][0].update(
+                    bloks_cmd='bloks new rule "x" --tags httpx python'
+                )
+            )
+        )
         self.assertEqual(code, 1)
         self.assertIn("$.discoveries[0].bloks_cmd", out)
 
@@ -131,11 +170,15 @@ class ValidateReportTests(unittest.TestCase):
         code, out = self._run(self._report(lambda r: r["tests"].update(exit_code=None)))
         self.assertEqual(code, 1)
         self.assertIn("null but tests.command is set", out)
-        code, out = self._run(self._report(lambda r: r["tests"].update(command="", exit_code=None)))
+        code, out = self._run(
+            self._report(lambda r: r["tests"].update(command="", exit_code=None))
+        )
         self.assertEqual(code, 0, out)
 
     def test_blocked_early_exit_accepted(self):
-        code, out = self._run(self._write("r.json", {"result": "blocked", "reason": "no creds"}))
+        code, out = self._run(
+            self._write("r.json", {"result": "blocked", "reason": "no creds"})
+        )
         self.assertEqual(code, 0, out)
 
     def test_malformed_json_fails(self):
@@ -151,7 +194,9 @@ class ValidateReportTests(unittest.TestCase):
         c = self._write("contract.json", CONTRACT)
         code, out = self._run(self._write("r.json", VALID), "--contract", c)
         self.assertEqual(code, 0, out)
-        code, out = self._run(self._report(lambda r: r.update(assertion="VAL-999")), "--contract", c)
+        code, out = self._run(
+            self._report(lambda r: r.update(assertion="VAL-999")), "--contract", c
+        )
         self.assertEqual(code, 1)
         self.assertIn("VAL-999 not in contract", out)
 
@@ -161,9 +206,12 @@ class ValidateReportTests(unittest.TestCase):
         bad["milestones"][0]["assertions"].append("VAL-002")
         code, out = self._run("--contract", self._write("contract.json", bad))
         self.assertEqual(code, 1)
-        for frag in ("$.assertions[0].type", "$.assertions[0].status",
-                     "depends[0]: unknown assertion id 'VAL-404'",
-                     "$.milestones[0].assertions[1]: unknown assertion id 'VAL-002'"):
+        for frag in (
+            "$.assertions[0].type",
+            "$.assertions[0].status",
+            "depends[0]: unknown assertion id 'VAL-404'",
+            "$.milestones[0].assertions[1]: unknown assertion id 'VAL-002'",
+        ):
             self.assertIn(frag, out)
 
     def test_contract_passed_requires_evidence(self):

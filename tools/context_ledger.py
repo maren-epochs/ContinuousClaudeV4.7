@@ -100,7 +100,11 @@ class Reader:
                 if not isinstance(e, dict):
                     self.skipped += 1
                     continue
-                if self.version is None and isinstance(e.get("version"), str) and e["version"]:
+                if (
+                    self.version is None
+                    and isinstance(e.get("version"), str)
+                    and e["version"]
+                ):
                     self.version = e["version"]
                 if e.get("type") != "assistant" or e.get("isSidechain"):
                     continue
@@ -115,7 +119,12 @@ class Reader:
                 if not isinstance(label, str) or not label:
                     label = NONE_LABEL
                 ts = e.get("timestamp")
-                yield (ts if isinstance(ts, str) else "", ctx, _int(usage.get("output_tokens")), label)
+                yield (
+                    ts if isinstance(ts, str) else "",
+                    ctx,
+                    _int(usage.get("output_tokens")),
+                    label,
+                )
 
 
 def build_ledger(path):
@@ -137,8 +146,16 @@ def build_ledger(path):
             compactions.append({"turn": turns, "from": prev_ctx, "to": ctx})
             step = 0
         if span is None or span["label"] != label:
-            span = {"label": label, "first_turn": turns, "last_turn": turns, "turns": 0,
-                    "start_context": ctx, "end_context": ctx, "delta": 0, "_ts": ts}
+            span = {
+                "label": label,
+                "first_turn": turns,
+                "last_turn": turns,
+                "turns": 0,
+                "start_context": ctx,
+                "end_context": ctx,
+                "delta": 0,
+                "_ts": ts,
+            }
             spans.append(span)
         span["last_turn"] = turns
         span["turns"] += 1
@@ -188,23 +205,33 @@ def render_text(ledger):
     labw = max([len("label")] + [len(s["label"]) for s in spans])
     lines.append("")
     lines.append("SPANS")
-    lines.append(f"  {'#':>4}  {'label':<{labw}}  {'first':>6}  {'last':>6}  {'turns':>5}  "
-                 f"{'start':>9}  {'end':>9}  {'delta':>9}  started")
+    lines.append(
+        f"  {'#':>4}  {'label':<{labw}}  {'first':>6}  {'last':>6}  {'turns':>5}  "
+        f"{'start':>9}  {'end':>9}  {'delta':>9}  started"
+    )
     for i, s in enumerate(spans, 1):
-        lines.append(f"  {i:>4}  {s['label']:<{labw}}  {s['first_turn']:>6}  {s['last_turn']:>6}  "
-                     f"{s['turns']:>5}  {s['start_context']:>9,}  {s['end_context']:>9,}  "
-                     f"{s['delta']:>9,}  {_time(s.get('_ts', ''))}")
+        lines.append(
+            f"  {i:>4}  {s['label']:<{labw}}  {s['first_turn']:>6}  {s['last_turn']:>6}  "
+            f"{s['turns']:>5}  {s['start_context']:>9,}  {s['end_context']:>9,}  "
+            f"{s['delta']:>9,}  {_time(s.get('_ts', ''))}"
+        )
 
     skills = ledger["skills"]
     lines.append("")
     lines.append("SKILLS")
     lines.append(f"  {'label':<{labw}}  {'delta':>9}  {'spans':>5}  {'turns':>5}")
     for label, k in sorted(skills.items(), key=lambda kv: -kv[1]["delta"]):
-        lines.append(f"  {label:<{labw}}  {k['delta']:>9,}  {k['spans']:>5}  {k['turns']:>5}")
+        lines.append(
+            f"  {label:<{labw}}  {k['delta']:>9,}  {k['spans']:>5}  {k['turns']:>5}"
+        )
 
     lines.append("")
-    lines.append("note: attributionSkill is sticky (last invoked skill) - per-skill totals are upper bounds;")
-    lines.append("      subagent/worker tokens live in <session>/subagents/ and are not in this ledger.")
+    lines.append(
+        "note: attributionSkill is sticky (last invoked skill) - per-skill totals are upper bounds;"
+    )
+    lines.append(
+        "      subagent/worker tokens live in <session>/subagents/ and are not in this ledger."
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -235,9 +262,13 @@ def main(argv=None):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("transcript", nargs="?", help="transcript .jsonl path")
-    ap.add_argument("--session", help="session id; resolves ~/.claude/projects/<slug>/<id>.jsonl")
+    ap.add_argument(
+        "--session", help="session id; resolves ~/.claude/projects/<slug>/<id>.jsonl"
+    )
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     try:
         args = ap.parse_args(argv)
@@ -254,13 +285,19 @@ def main(argv=None):
         print(f"cannot read {path}: {e}", file=sys.stderr)
         return 2
     if ledger["turns"] == 0:
-        print(f"no assistant usage turns found in {path} "
-              f"(skipped lines: {ledger['skipped_lines']})", file=sys.stderr)
+        print(
+            f"no assistant usage turns found in {path} "
+            f"(skipped lines: {ledger['skipped_lines']})",
+            file=sys.stderr,
+        )
         return 1
 
     if args.json:
         out = dict(ledger)
-        out["spans"] = [{k: v for k, v in s.items() if not k.startswith("_")} for s in ledger["spans"]]
+        out["spans"] = [
+            {k: v for k, v in s.items() if not k.startswith("_")}
+            for s in ledger["spans"]
+        ]
         print(json.dumps(out, indent=2, ensure_ascii=True))
     else:
         sys.stdout.write(render_text(ledger))

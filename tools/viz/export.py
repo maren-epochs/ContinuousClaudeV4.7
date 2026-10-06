@@ -40,6 +40,7 @@ CLI (for skills calling from Bash):
     py -3.13 tools/viz/export.py render page.html out.png --mode dark --width 1200 --height 800
 prints the absolute png path; exit 2 with the reason on stderr on failure.
 """
+
 import argparse
 import atexit
 import contextlib
@@ -50,10 +51,12 @@ import sys
 READY_HOOK = "window.__chartsReady"
 FORMATS = ("png", "svg", "html")
 MODES = ("light", "dark")
-PNG_DPI = 144          # matplotlib png
-FIGURE_SCALE = 2       # plotly/altair/bokeh/GT png pixel density
+PNG_DPI = 144  # matplotlib png
+FIGURE_SCALE = 2  # plotly/altair/bokeh/GT png pixel density
 DEFAULT_TIMEOUT_MS = 30000
-INSTALL_HINT = "py -3.13 -m pip install playwright && py -3.13 -m playwright install chromium"
+INSTALL_HINT = (
+    "py -3.13 -m pip install playwright && py -3.13 -m playwright install chromium"
+)
 _EXTENSIONS = (".png", ".svg", ".html", ".htm")
 
 _STATE = {"playwright": None, "browser": None, "atexit": False}
@@ -72,7 +75,9 @@ _READY_JS = """() => {
   }
   return r === undefined || Boolean(r);
 }"""
-_READY_ERROR_JS = "() => (window.__vizExportWatch && window.__vizExportWatch.error) || null"
+_READY_ERROR_JS = (
+    "() => (window.__vizExportWatch && window.__vizExportWatch.error) || null"
+)
 _SETTLE_JS = """() => document.fonts.ready.then(() => new Promise(
   (resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))"""
 _THEME_JS = "(mode) => { document.documentElement.dataset.theme = mode; }"
@@ -83,7 +88,8 @@ _RESET_CSS = "<style>html,body{margin:0;padding:0}</style>"
 # container width leaves at the screenshot edge is not the white/dark canvas.
 _GT_CONTAINER = "div:has(> table.gt_table)"
 _GT_PNG_CSS = (
-    "<style>" + _GT_CONTAINER
+    "<style>"
+    + _GT_CONTAINER
     + "{width:max-content !important;overflow:visible !important}</style>"
     "<script>addEventListener('DOMContentLoaded', () => {"
     " const box = document.querySelector('" + _GT_CONTAINER + "');"
@@ -92,7 +98,8 @@ _GT_PNG_CSS = (
     " let bg = getComputedStyle(box).backgroundColor;"
     " if (clear(bg)) bg = getComputedStyle(box.querySelector('table')).backgroundColor;"
     " if (!clear(bg)) document.documentElement.style.background = bg;"
-    "});</script>")
+    "});</script>"
+)
 
 
 class ExportError(RuntimeError):
@@ -107,6 +114,7 @@ def _short(exc):
 
 # ---------------------------------------------------------------- browser
 
+
 def get_browser():
     """Return the shared Playwright chromium, launching it on first use."""
     browser = _STATE["browser"]
@@ -116,8 +124,9 @@ def get_browser():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
-        raise ExportError(f"playwright is not installed ({_short(exc)}); install: "
-                          f"{INSTALL_HINT}") from exc
+        raise ExportError(
+            f"playwright is not installed ({_short(exc)}); install: {INSTALL_HINT}"
+        ) from exc
     pw = None
     try:
         pw = sync_playwright().start()
@@ -126,8 +135,10 @@ def get_browser():
         if pw is not None:
             with contextlib.suppress(Exception):
                 pw.stop()
-        raise ExportError(f"cannot launch Playwright chromium ({_short(exc)}); install: "
-                          f"{INSTALL_HINT}") from exc
+        raise ExportError(
+            f"cannot launch Playwright chromium ({_short(exc)}); install: "
+            f"{INSTALL_HINT}"
+        ) from exc
     _STATE["playwright"], _STATE["browser"] = pw, browser
     if not _STATE["atexit"]:
         atexit.register(close_browser)
@@ -149,23 +160,36 @@ def close_browser():
 
 # ---------------------------------------------------------------- render_html
 
+
 def _html_source(html_or_path):
     if isinstance(html_or_path, bytes):
         html_or_path = html_or_path.decode("utf-8")
     if isinstance(html_or_path, os.PathLike) or (
-            isinstance(html_or_path, str) and "<" not in html_or_path):
+        isinstance(html_or_path, str) and "<" not in html_or_path
+    ):
         path = os.path.abspath(os.fspath(html_or_path))
         if not os.path.isfile(path):
             raise FileNotFoundError(f"no such HTML file: {path}")
         return "url", pathlib.Path(path).as_uri()
     if isinstance(html_or_path, str):
         return "html", html_or_path
-    raise TypeError(f"html_or_path must be an HTML string or a file path, "
-                    f"not {type(html_or_path).__name__}")
+    raise TypeError(
+        f"html_or_path must be an HTML string or a file path, "
+        f"not {type(html_or_path).__name__}"
+    )
 
 
-def render_html(html_or_path, png_path, width=1200, height=800, mode="light", *,
-                scale=1, timeout_ms=DEFAULT_TIMEOUT_MS, selector=None):
+def render_html(
+    html_or_path,
+    png_path,
+    width=1200,
+    height=800,
+    mode="light",
+    *,
+    scale=1,
+    timeout_ms=DEFAULT_TIMEOUT_MS,
+    selector=None,
+):
     """Rasterize HTML (string or file path) to png_path; return its absolute path.
 
     width/height set the viewport (CSS px); the screenshot is full_page, or the
@@ -179,8 +203,11 @@ def render_html(html_or_path, png_path, width=1200, height=800, mode="light", *,
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-    context = browser.new_context(viewport={"width": int(width), "height": int(height)},
-                                  device_scale_factor=scale, color_scheme=mode)
+    context = browser.new_context(
+        viewport={"width": int(width), "height": int(height)},
+        device_scale_factor=scale,
+        color_scheme=mode,
+    )
     try:
         page = context.new_page()
         page.emulate_media(color_scheme=mode)
@@ -190,12 +217,16 @@ def render_html(html_or_path, png_path, width=1200, height=800, mode="light", *,
             else:
                 page.set_content(source, wait_until="networkidle", timeout=timeout_ms)
         except PlaywrightTimeout as exc:
-            raise ExportError(f"page did not reach network idle within {timeout_ms} ms") from exc
+            raise ExportError(
+                f"page did not reach network idle within {timeout_ms} ms"
+            ) from exc
         page.evaluate(_THEME_JS, mode)
         try:
             page.wait_for_function(_READY_JS, timeout=timeout_ms)
         except PlaywrightTimeout as exc:
-            raise ExportError(f"{READY_HOOK} did not become ready within {timeout_ms} ms") from exc
+            raise ExportError(
+                f"{READY_HOOK} did not become ready within {timeout_ms} ms"
+            ) from exc
         failure = page.evaluate(_READY_ERROR_JS)
         if failure:
             raise ExportError(f"{READY_HOOK} rejected: {failure}")
@@ -218,13 +249,16 @@ html_to_png = render_html
 
 # ---------------------------------------------------------------- save
 
+
 def _formats(formats):
     if isinstance(formats, str):
         formats = (formats,)
     fmts = tuple(dict.fromkeys(f.lower().lstrip(".") for f in formats))
     bad = [f for f in fmts if f not in FORMATS]
     if bad or not fmts:
-        raise ValueError(f"formats must be a non-empty subset of {FORMATS}, got {formats!r}")
+        raise ValueError(
+            f"formats must be a non-empty subset of {FORMATS}, got {formats!r}"
+        )
     return fmts
 
 
@@ -246,6 +280,7 @@ def _classify(obj):
     roots = _roots(obj)
     if roots & {"matplotlib", "seaborn"}:
         from matplotlib.figure import Figure
+
         if isinstance(obj, Figure):
             return "matplotlib", obj
         fig = getattr(obj, "figure", None)
@@ -253,33 +288,45 @@ def _classify(obj):
             return "matplotlib", fig
     if "plotly" in roots:
         from plotly.basedatatypes import BaseFigure
+
         if isinstance(obj, BaseFigure):
             return "plotly", obj
     if "altair" in roots:
         import altair
+
         if isinstance(obj, altair.TopLevelMixin):
             return "altair", obj
     if "bokeh" in roots:
         from bokeh.document import Document
         from bokeh.model import Model
+
         if isinstance(obj, (Model, Document)):
             return "bokeh", obj
     if "great_tables" in roots:
         from great_tables import GT
+
         if isinstance(obj, GT):
             return "great_tables", obj
     if "holoviews" in roots:
         from holoviews.core.dimension import Dimensioned
+
         if isinstance(obj, Dimensioned):
             return "holoviews", obj
-    raise TypeError(f"cannot export {type(obj).__module__}.{type(obj).__name__}; supported: "
-                    "matplotlib Figure/Axes, plotly Figure, altair Chart, bokeh model, "
-                    "great_tables GT, holoviews object")
+    raise TypeError(
+        f"cannot export {type(obj).__module__}.{type(obj).__name__}; supported: "
+        "matplotlib Figure/Axes, plotly Figure, altair Chart, bokeh model, "
+        "great_tables GT, holoviews object"
+    )
 
 
 def _wrap_fragment(fragment):
-    return ("<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + _RESET_CSS
-            + "</head><body>" + fragment + "</body></html>")
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        + _RESET_CSS
+        + "</head><body>"
+        + fragment
+        + "</body></html>"
+    )
 
 
 def _write_text(path, text):
@@ -317,17 +364,31 @@ def _save_plotly(fig, stem, fmts, result, opts):
             with contextlib.suppress(OSError):
                 os.remove(path)
         if fmt == "svg":
-            result["notes"].append(f"plotly svg skipped: kaleido failed ({reason}); "
-                                   "no browser fallback for svg")
+            result["notes"].append(
+                f"plotly svg skipped: kaleido failed ({reason}); "
+                "no browser fallback for svg"
+            )
             continue
         width = fig.layout.width or 700
         height = fig.layout.height or 500
-        fragment = fig.to_html(include_plotlyjs=True, full_html=False,
-                               default_width=f"{width}px", default_height=f"{height}px")
-        result["png"] = render_html(_wrap_fragment(fragment), path, width=width, height=height,
-                                    mode=opts["mode"], scale=opts["scale"],
-                                    timeout_ms=opts["timeout_ms"])
-        result["notes"].append(f"plotly png via render_html fallback (kaleido failed: {reason})")
+        fragment = fig.to_html(
+            include_plotlyjs=True,
+            full_html=False,
+            default_width=f"{width}px",
+            default_height=f"{height}px",
+        )
+        result["png"] = render_html(
+            _wrap_fragment(fragment),
+            path,
+            width=width,
+            height=height,
+            mode=opts["mode"],
+            scale=opts["scale"],
+            timeout_ms=opts["timeout_ms"],
+        )
+        result["notes"].append(
+            f"plotly png via render_html fallback (kaleido failed: {reason})"
+        )
 
 
 def _save_altair(chart, stem, fmts, result, opts):
@@ -346,6 +407,7 @@ def _save_altair(chart, stem, fmts, result, opts):
 def _save_bokeh(model, stem, fmts, result, opts):
     from bokeh.embed import file_html
     from bokeh.resources import INLINE
+
     kwargs = {"theme": opts["bokeh_theme"]} if opts["bokeh_theme"] is not None else {}
     html = file_html(model, INLINE, title=os.path.basename(stem), **kwargs)
     if "html" in fmts:
@@ -355,13 +417,21 @@ def _save_bokeh(model, stem, fmts, result, opts):
         width = getattr(model, "width", None) or 800
         height = getattr(model, "height", None) or 600
         page = html.replace("<head>", "<head>" + _RESET_CSS, 1)
-        result["png"] = render_html(page, f"{stem}.png", width=width, height=height,
-                                    mode=opts["mode"], scale=opts["scale"],
-                                    timeout_ms=opts["timeout_ms"])
+        result["png"] = render_html(
+            page,
+            f"{stem}.png",
+            width=width,
+            height=height,
+            mode=opts["mode"],
+            scale=opts["scale"],
+            timeout_ms=opts["timeout_ms"],
+        )
         result["notes"].append("bokeh png via render_html")
     if "svg" in fmts:
-        result["notes"].append("bokeh svg skipped: needs output_backend='svg' + "
-                               "selenium export_svgs; not supported")
+        result["notes"].append(
+            "bokeh svg skipped: needs output_backend='svg' + "
+            "selenium export_svgs; not supported"
+        )
 
 
 def _gt_png_page(html):
@@ -378,9 +448,16 @@ def _save_great_tables(table, stem, fmts, result, opts):
         result["html"] = f"{stem}.html"
         _write_text(result["html"], html)
     if "png" in fmts:
-        result["png"] = render_html(_gt_png_page(html), f"{stem}.png", width=800,
-                                    height=600, mode=opts["mode"], scale=opts["scale"],
-                                    timeout_ms=opts["timeout_ms"], selector=_GT_CONTAINER)
+        result["png"] = render_html(
+            _gt_png_page(html),
+            f"{stem}.png",
+            width=800,
+            height=600,
+            mode=opts["mode"],
+            scale=opts["scale"],
+            timeout_ms=opts["timeout_ms"],
+            selector=_GT_CONTAINER,
+        )
         result["notes"].append("great_tables png via render_html (gtsave not used)")
     if "svg" in fmts:
         result["notes"].append("great_tables svg skipped: no svg export")
@@ -388,6 +465,7 @@ def _save_great_tables(table, stem, fmts, result, opts):
 
 def _save_holoviews(obj, stem, fmts, result, opts):
     import holoviews
+
     errors = []
     for backend in ("bokeh", "matplotlib"):
         try:
@@ -399,8 +477,11 @@ def _save_holoviews(obj, stem, fmts, result, opts):
         result["notes"].append(f"holoviews rendered via {backend} backend to {kind}")
         _HANDLERS[kind](target, stem, fmts, result, opts)
         return
-    raise ExportError("holoviews could not render with any plotting backend ("
-                      + "; ".join(errors) + ")")
+    raise ExportError(
+        "holoviews could not render with any plotting backend ("
+        + "; ".join(errors)
+        + ")"
+    )
 
 
 _HANDLERS = {
@@ -413,8 +494,16 @@ _HANDLERS = {
 }
 
 
-def save(fig, path, formats=FORMATS, *, mode="light", scale=FIGURE_SCALE, bokeh_theme=None,
-         timeout_ms=DEFAULT_TIMEOUT_MS):
+def save(
+    fig,
+    path,
+    formats=FORMATS,
+    *,
+    mode="light",
+    scale=FIGURE_SCALE,
+    bokeh_theme=None,
+    timeout_ms=DEFAULT_TIMEOUT_MS,
+):
     """Export a chart object; return {"png", "svg", "html": abs path|None, "notes": [str]}.
 
     `path` is a stem or a file name whose .png/.svg/.html extension is dropped;
@@ -427,18 +516,26 @@ def save(fig, path, formats=FORMATS, *, mode="light", scale=FIGURE_SCALE, bokeh_
     kind, target = _classify(fig)
     stem = _stem(path)
     result = {"png": None, "svg": None, "html": None, "notes": []}
-    opts = {"mode": mode, "scale": scale, "bokeh_theme": bokeh_theme, "timeout_ms": timeout_ms}
+    opts = {
+        "mode": mode,
+        "scale": scale,
+        "bokeh_theme": bokeh_theme,
+        "timeout_ms": timeout_ms,
+    }
     _HANDLERS[kind](target, stem, fmts, result, opts)
     return result
 
 
 # ---------------------------------------------------------------- CLI
 
+
 def main(argv=None):
     with contextlib.suppress(AttributeError):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(prog="export.py", description="Rasterize HTML with "
-                                     "the shared Playwright chromium.")
+    parser = argparse.ArgumentParser(
+        prog="export.py",
+        description="Rasterize HTML with the shared Playwright chromium.",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     render = sub.add_parser("render", help="render an HTML file to PNG")
     render.add_argument("html", help="HTML file path")
@@ -451,9 +548,16 @@ def main(argv=None):
     render.add_argument("--selector", default=None, help="screenshot this element only")
     args = parser.parse_args(argv)
     try:
-        path = render_html(pathlib.Path(args.html), args.png, width=args.width,
-                           height=args.height, mode=args.mode, scale=args.scale,
-                           timeout_ms=args.timeout_ms, selector=args.selector)
+        path = render_html(
+            pathlib.Path(args.html),
+            args.png,
+            width=args.width,
+            height=args.height,
+            mode=args.mode,
+            scale=args.scale,
+            timeout_ms=args.timeout_ms,
+            selector=args.selector,
+        )
     except (ExportError, OSError, ValueError) as exc:
         sys.stderr.write(f"export.py: {_short(exc)}\n")
         return 2

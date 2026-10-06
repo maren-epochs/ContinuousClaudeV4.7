@@ -34,7 +34,9 @@ _spec.loader.exec_module(oh)
 
 
 def _denied(result):
-    return isinstance(result, dict) and "error" in result and "denied" in result["error"]
+    return (
+        isinstance(result, dict) and "error" in result and "denied" in result["error"]
+    )
 
 
 class RunCommandBypassTests(unittest.TestCase):
@@ -156,16 +158,18 @@ class ReadPolicyTests(unittest.TestCase):
 
     def test_run_command_cannot_read_secrets_via_arguments(self):
         # Review 2026-10-05: allowed commands read any path they are handed.
-        for cmd in (["git", "diff", "--no-index", "NUL", ".env"],
-                    "git diff --no-index NUL .env",
-                    "git blame --contents .env x",
-                    "git show HEAD:.env",
-                    "grep -r SECRET .env",
-                    "wc -c .env.local",
-                    "wc -c server.pem",
-                    "wc -c .env:stream",
-                    ["git", "diff", "--no-index", "NUL", str(Path.home() / ".claude.json")],
-                    f"wc -c {Path.home() / '.ssh' / 'config'}"):
+        for cmd in (
+            ["git", "diff", "--no-index", "NUL", ".env"],
+            "git diff --no-index NUL .env",
+            "git blame --contents .env x",
+            "git show HEAD:.env",
+            "grep -r SECRET .env",
+            "wc -c .env.local",
+            "wc -c server.pem",
+            "wc -c .env:stream",
+            ["git", "diff", "--no-index", "NUL", str(Path.home() / ".claude.json")],
+            f"wc -c {Path.home() / '.ssh' / 'config'}",
+        ):
             with self.subTest(cmd=cmd):
                 self.assertTrue(_denied(oh._call_run_command(cmd)), cmd)
 
@@ -173,7 +177,9 @@ class ReadPolicyTests(unittest.TestCase):
         outside = Path(tempfile.mkdtemp(prefix="ouros-out-")).resolve()
         try:
             (outside / "x.txt").write_text("x")
-            self.assertTrue(_denied(oh._call_run_command(["wc", "-c", str(outside / "x.txt")])))
+            self.assertTrue(
+                _denied(oh._call_run_command(["wc", "-c", str(outside / "x.txt")]))
+            )
         finally:
             shutil.rmtree(outside, ignore_errors=True)
         r = oh._call_run_command("wc -c sub/ok.txt")
@@ -194,7 +200,9 @@ class ReadPolicyTests(unittest.TestCase):
     def test_case_variant_of_allowed_path(self):
         if os.name != "nt":
             self.skipTest("case-insensitive paths are a Windows property")
-        self.assertEqual(oh._call_read_file(str(self.proj / "SUB" / "OK.TXT").upper()), "ok")
+        self.assertEqual(
+            oh._call_read_file(str(self.proj / "SUB" / "OK.TXT").upper()), "ok"
+        )
 
     def test_traversal_to_claude_env_denied(self):
         rel = os.path.relpath(Path.home() / ".claude" / ".env", self.proj)
@@ -203,7 +211,9 @@ class ReadPolicyTests(unittest.TestCase):
 
     def test_cwd_home_grants_nothing(self):
         os.chdir(Path.home())
-        self.assertTrue(_denied(oh._call_read_file(str(Path.home() / ".claude" / ".env"))))
+        self.assertTrue(
+            _denied(oh._call_read_file(str(Path.home() / ".claude" / ".env")))
+        )
         self.assertTrue(_denied(oh._call_read_file(".gitconfig")))
 
     def test_data_root_does_not_expose_secrets(self):
@@ -238,8 +248,10 @@ class AgentCallTests(unittest.TestCase):
     def test_default_max_turns(self):
         argv = self._argv()
         self.assertIn("--max-turns", argv)
-        self.assertEqual(argv[argv.index("--max-turns") + 1],
-                         str(oh.SECURITY_POLICY["agent_default_max_turns"]))
+        self.assertEqual(
+            argv[argv.index("--max-turns") + 1],
+            str(oh.SECURITY_POLICY["agent_default_max_turns"]),
+        )
 
     def test_explicit_max_turns(self):
         argv = self._argv(max_turns=3)

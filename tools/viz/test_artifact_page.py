@@ -9,6 +9,7 @@ reason when it is absent; chart-content pixel checks additionally skip when
 the pinned CDNs are unreachable (the surface light/dark check still runs).
 All output goes to tempfile directories.
 """
+
 import ast
 import os
 import re
@@ -27,7 +28,8 @@ from tools.viz import export, palette
 
 PAGE_PY = os.path.join(REPO_ROOT, "tools", "viz", "artifact_page.py")
 ALLOWED_SRC = re.compile(
-    r"^https://(cdnjs\.cloudflare\.com/|cdn\.jsdelivr\.net/npm/|unpkg\.com/)")
+    r"^https://(cdnjs\.cloudflare\.com/|cdn\.jsdelivr\.net/npm/|unpkg\.com/)"
+)
 PINNED = {
     "vega": "https://cdn.jsdelivr.net/npm/vega@6.4.0",
     "vega-lite": "https://cdn.jsdelivr.net/npm/vega-lite@6.4.3",
@@ -60,7 +62,9 @@ CDN_SKIP = "pinned CDNs unreachable - chart content cannot load"
 
 def line_rows():
     rows = []
-    for i, month in enumerate(["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"]):
+    for i, month in enumerate(
+        ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"]
+    ):
         rows.append({"month": month, "region": "North", "sales": 120 + 15 * i})
         rows.append({"month": month, "region": "South", "sales": 160 - 8 * i})
     return rows
@@ -77,8 +81,12 @@ def line_chart():
             "data": {"values": line_rows()},
             "mark": "line",
             "encoding": {
-                "x": {"field": "month", "type": "temporal", "timeUnit": "utcyearmonth",
-                      "title": "Month"},
+                "x": {
+                    "field": "month",
+                    "type": "temporal",
+                    "timeUnit": "utcyearmonth",
+                    "title": "Month",
+                },
                 "y": {"field": "sales", "type": "quantitative", "title": "Sales"},
                 "color": {"field": "region", "type": "nominal", "title": "Region"},
             },
@@ -102,8 +110,12 @@ def bar_chart():
 
 
 def two_chart_page(**kw):
-    return ap.build_page([line_chart(), bar_chart()], "Quarterly Ops Review",
-                         description="Sales and ticket volume.", **kw)
+    return ap.build_page(
+        [line_chart(), bar_chart()],
+        "Quarterly Ops Review",
+        description="Sales and ticket volume.",
+        **kw,
+    )
 
 
 def head_of(html):
@@ -114,12 +126,12 @@ def css_block(html, selector):
     """Body of the first `selector { ... }` rule (no nested braces)."""
     i = html.index(selector)
     start = html.index("{", i) + 1
-    return html[start: html.index("}", start)]
+    return html[start : html.index("}", start)]
 
 
 def rgb(hexstr):
     h = hexstr.lstrip("#")
-    return tuple(int(h[k:k + 2], 16) for k in (0, 2, 4))
+    return tuple(int(h[k : k + 2], 16) for k in (0, 2, 4))
 
 
 def near(px, target, tol=6):
@@ -134,8 +146,10 @@ class Source(unittest.TestCase):
         with open(PAGE_PY, "rb") as fh:
             raw = fh.read()
         raw.decode("ascii")  # raises on non-ASCII
-        self.assertIsNone(re.search(rb"#[0-9a-fA-F]{6}\b", raw),
-                          "colors must come from palette tokens, not hex literals")
+        self.assertIsNone(
+            re.search(rb"#[0-9a-fA-F]{6}\b", raw),
+            "colors must come from palette tokens, not hex literals",
+        )
 
     def test_no_print_outside_main(self):
         with open(PAGE_PY, encoding="ascii") as fh:
@@ -144,15 +158,21 @@ class Source(unittest.TestCase):
             if fn.name == "main":
                 continue
             for node in ast.walk(fn):
-                if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "print":
+                if (
+                    isinstance(node, ast.Call)
+                    and getattr(node.func, "id", "") == "print"
+                ):
                     self.fail(f"print() inside {fn.name}")
 
     def test_import_is_lazy(self):
-        code = (f"import sys; sys.path.insert(0, {REPO_ROOT!r}); import tools.viz.artifact_page; "
-                "bad = [m for m in ('plotly', 'altair', 'playwright', 'pandas') "
-                "if m in sys.modules]; print(','.join(bad))")
-        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                             check=True).stdout.strip()
+        code = (
+            f"import sys; sys.path.insert(0, {REPO_ROOT!r}); import tools.viz.artifact_page; "
+            "bad = [m for m in ('plotly', 'altair', 'playwright', 'pandas') "
+            "if m in sys.modules]; print(','.join(bad))"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        ).stdout.strip()
         self.assertEqual(out, "", f"importing artifact_page pulled in: {out}")
 
 
@@ -173,8 +193,11 @@ class PageStructure(unittest.TestCase):
     def test_doctype_charset_viewport(self):
         self.assertTrue(self.html.lstrip().lower().startswith("<!doctype html>"))
         self.assertIn('<meta charset="utf-8">', self.html)
-        self.assertRegex(self.html, r'<meta name="viewport" content="width=device-width, '
-                                    r'initial-scale=1">')
+        self.assertRegex(
+            self.html,
+            r'<meta name="viewport" content="width=device-width, '
+            r'initial-scale=1">',
+        )
 
     def test_one_style_block_with_light_tokens_on_root(self):
         self.assertEqual(self.html.count("<style>"), 1)
@@ -183,7 +206,9 @@ class PageStructure(unittest.TestCase):
             self.assertIn(line, root)
 
     def test_dark_tokens_under_both_selectors(self):
-        media = '@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {'
+        media = (
+            '@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {'
+        )
         self.assertIn(media, self.html)
         self.assertIn(':root[data-theme="dark"] {', self.html)
         media_body = css_block(self.html, ':root:not([data-theme="light"]) {')
@@ -208,8 +233,15 @@ class PageStructure(unittest.TestCase):
         for src in srcs:
             self.assertRegex(src, ALLOWED_SRC)
             self.assertIn(src, PINNED.values())
-        self.assertEqual(srcs, [PINNED["vega"], PINNED["vega-lite"], PINNED["vega-embed"],
-                                PINNED["echarts"]])
+        self.assertEqual(
+            srcs,
+            [
+                PINNED["vega"],
+                PINNED["vega-lite"],
+                PINNED["vega-embed"],
+                PINNED["echarts"],
+            ],
+        )
         self.assertNotIn("plotly", " ".join(srcs))
         self.assertNotRegex(self.html, r"<link[^>]+stylesheet")
 
@@ -217,7 +249,9 @@ class PageStructure(unittest.TestCase):
         head = head_of(self.html)
         self.assertIn("window.__chartsReady =", head)
         # assigned before any external script so it exists even if a CDN hangs
-        self.assertLess(head.index("window.__chartsReady ="), head.index("<script src="))
+        self.assertLess(
+            head.index("window.__chartsReady ="), head.index("<script src=")
+        )
 
     def test_no_dual_axis_and_size(self):
         self.assertNotIn("yaxis2", self.html)
@@ -260,7 +294,9 @@ class VegaLitePatching(unittest.TestCase):
         self.assertIn("layer", spec)
         self.assertNotIn("mark", spec)
         self.assertEqual(spec["encoding"]["x"]["field"], "month")
-        rules = [lyr for lyr in spec["layer"] if ap._mark_type(lyr.get("mark")) == "rule"]
+        rules = [
+            lyr for lyr in spec["layer"] if ap._mark_type(lyr.get("mark")) == "rule"
+        ]
         self.assertEqual(len(rules), 1)
         rule = rules[0]
         sel = rule["params"][0]["select"]
@@ -269,28 +305,52 @@ class VegaLitePatching(unittest.TestCase):
         self.assertEqual(sel["on"], "pointerover")
         self.assertEqual(rule["transform"][0]["pivot"], "region")
         titles = [t.get("title") for t in rule["encoding"]["tooltip"]]
-        self.assertEqual(titles, ["Month", "North", "South"])  # one tooltip, every series
+        self.assertEqual(
+            titles, ["Month", "North", "South"]
+        )  # one tooltip, every series
 
     def test_two_series_shows_legend_one_series_hides(self):
         spec = ap.prepare_chart(line_chart())["spec"]
         base = spec["layer"][0]
         self.assertIsNot(base["encoding"]["color"].get("legend", {}), None)
         one = line_chart()
-        one["spec"]["data"]["values"] = [r for r in line_rows() if r["region"] == "North"]
+        one["spec"]["data"]["values"] = [
+            r for r in line_rows() if r["region"] == "North"
+        ]
         base1 = ap.prepare_chart(one)["spec"]["layer"][0]
         self.assertIsNone(base1["encoding"]["color"]["legend"])
 
     def test_bar_gets_tooltip_and_existing_layer_untouched(self):
-        bar = {"kind": "vega-lite", "title": "t", "spec": {
-            "data": {"values": [{"a": "x", "b": 1}]}, "mark": "bar",
-            "encoding": {"x": {"field": "a", "type": "nominal"},
-                         "y": {"field": "b", "type": "quantitative"}}}}
+        bar = {
+            "kind": "vega-lite",
+            "title": "t",
+            "spec": {
+                "data": {"values": [{"a": "x", "b": 1}]},
+                "mark": "bar",
+                "encoding": {
+                    "x": {"field": "a", "type": "nominal"},
+                    "y": {"field": "b", "type": "quantitative"},
+                },
+            },
+        }
         spec = ap.prepare_chart(bar)["spec"]
         self.assertEqual(spec["mark"], {"type": "bar", "tooltip": True})
-        layered = {"kind": "vega-lite", "title": "t", "spec": {
-            "data": {"values": [{"a": 1, "b": 1}]},
-            "layer": [{"mark": "line", "encoding": {"x": {"field": "a"}, "y": {"field": "b"}}}]}}
-        self.assertEqual(ap.prepare_chart(layered)["spec"]["layer"], layered["spec"]["layer"])
+        layered = {
+            "kind": "vega-lite",
+            "title": "t",
+            "spec": {
+                "data": {"values": [{"a": 1, "b": 1}]},
+                "layer": [
+                    {
+                        "mark": "line",
+                        "encoding": {"x": {"field": "a"}, "y": {"field": "b"}},
+                    }
+                ],
+            },
+        }
+        self.assertEqual(
+            ap.prepare_chart(layered)["spec"]["layer"], layered["spec"]["layer"]
+        )
 
     def test_independent_y_is_removed_with_warning(self):
         dual = line_chart()
@@ -300,9 +360,15 @@ class VegaLitePatching(unittest.TestCase):
         self.assertTrue(any("dual" in w.lower() for w in out["warnings"]))
 
     def test_altair_datasets_are_read_for_rows(self):
-        spec = {"data": {"name": "d1"}, "datasets": {"d1": [{"k": "a", "v": 2}]},
-                "mark": "point", "encoding": {"x": {"field": "k", "type": "nominal"},
-                                              "y": {"field": "v", "type": "quantitative"}}}
+        spec = {
+            "data": {"name": "d1"},
+            "datasets": {"d1": [{"k": "a", "v": 2}]},
+            "mark": "point",
+            "encoding": {
+                "x": {"field": "k", "type": "nominal"},
+                "y": {"field": "v", "type": "quantitative"},
+            },
+        }
         out = ap.prepare_chart({"kind": "vega-lite", "title": "t", "spec": spec})
         self.assertEqual(out["rows"], [{"k": "a", "v": 2}])
 
@@ -315,20 +381,31 @@ class EchartsPatching(unittest.TestCase):
         self.assertEqual(opt["series"][0]["barMaxWidth"], 24)
 
     def test_line_tooltip_axis_and_legend_for_two_series(self):
-        opt = {"xAxis": {"type": "category", "data": ["a", "b"]}, "yAxis": {"type": "value"},
-               "series": [{"type": "line", "name": "s1", "data": [1, 2]},
-                          {"type": "line", "name": "s2", "data": [2, 1]}]}
+        opt = {
+            "xAxis": {"type": "category", "data": ["a", "b"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {"type": "line", "name": "s1", "data": [1, 2]},
+                {"type": "line", "name": "s2", "data": [2, 1]},
+            ],
+        }
         out = ap.prepare_chart({"kind": "echarts", "title": "t", "spec": opt})
         self.assertEqual(out["spec"]["tooltip"]["trigger"], "axis")
         self.assertTrue(out["spec"]["legend"]["show"])
-        self.assertEqual(out["rows"], [{"category": "a", "s1": 1, "s2": 2},
-                                       {"category": "b", "s1": 2, "s2": 1}])
+        self.assertEqual(
+            out["rows"],
+            [{"category": "a", "s1": 1, "s2": 2}, {"category": "b", "s1": 2, "s2": 1}],
+        )
 
     def test_second_y_axis_dropped(self):
-        opt = {"xAxis": {"type": "category", "data": ["a"]},
-               "yAxis": [{"type": "value"}, {"type": "value"}],
-               "series": [{"type": "bar", "data": [1]},
-                          {"type": "line", "data": [5], "yAxisIndex": 1}]}
+        opt = {
+            "xAxis": {"type": "category", "data": ["a"]},
+            "yAxis": [{"type": "value"}, {"type": "value"}],
+            "series": [
+                {"type": "bar", "data": [1]},
+                {"type": "line", "data": [5], "yAxisIndex": 1},
+            ],
+        }
         out = ap.prepare_chart({"kind": "echarts", "title": "t", "spec": opt})
         self.assertIsInstance(out["spec"]["yAxis"], dict)
         self.assertNotIn("yAxisIndex", out["spec"]["series"][1])
@@ -338,12 +415,24 @@ class EchartsPatching(unittest.TestCase):
 class PlotlyPatching(unittest.TestCase):
     def fig(self, dual):
         layout = {"title": {"text": "x"}, "width": 900}
-        data = [{"type": "scatter", "mode": "lines", "name": "a", "x": [1, 2], "y": [3, 4]},
-                {"type": "scatter", "mode": "lines", "name": "b", "x": [1, 2], "y": [30, 10]}]
+        data = [
+            {"type": "scatter", "mode": "lines", "name": "a", "x": [1, 2], "y": [3, 4]},
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "b",
+                "x": [1, 2],
+                "y": [30, 10],
+            },
+        ]
         if dual:
             data[1]["yaxis"] = "y2"
             layout["yaxis2"] = {"overlaying": "y", "side": "right"}
-        return {"kind": "plotly", "title": "t", "spec": {"data": data, "layout": layout}}
+        return {
+            "kind": "plotly",
+            "title": "t",
+            "spec": {"data": data, "layout": layout},
+        }
 
     def test_dual_axis_dropped_with_visible_warning(self):
         html = ap.build_page([self.fig(True)], "Plotly Dual Test")
@@ -371,11 +460,16 @@ class PlotlyPatching(unittest.TestCase):
     def test_from_plotly_and_from_altair(self):
         import altair as alt
         import plotly.graph_objects as go
+
         p = ap.from_plotly(go.Figure(go.Bar(x=["a", "b"], y=[1, 2])), title="Bars")
         self.assertEqual(p["kind"], "plotly")
         self.assertIn("data", p["spec"])
-        a = ap.from_altair(alt.Chart(alt.Data(values=[{"a": 1, "b": 2}])).mark_point()
-                           .encode(x="a:Q", y="b:Q"), title="Points")
+        a = ap.from_altair(
+            alt.Chart(alt.Data(values=[{"a": 1, "b": 2}]))
+            .mark_point()
+            .encode(x="a:Q", y="b:Q"),
+            title="Points",
+        )
         self.assertEqual(a["kind"], "vega-lite")
         html = ap.build_page([p, a], "Helper Smoke Test")
         self.assertIn(PINNED["plotly"], html)
@@ -396,9 +490,15 @@ class Guards(unittest.TestCase):
 
     def test_large_inline_data_says_aggregate_first(self):
         big = [{"i": i, "label": "x" * 40} for i in range(60000)]
-        chart = {"kind": "vega-lite", "title": "Big", "spec": {
-            "data": {"values": big}, "mark": "point",
-            "encoding": {"x": {"field": "i", "type": "quantitative"}}}}
+        chart = {
+            "kind": "vega-lite",
+            "title": "Big",
+            "spec": {
+                "data": {"values": big},
+                "mark": "point",
+                "encoding": {"x": {"field": "i", "type": "quantitative"}},
+            },
+        }
         with self.assertRaisesRegex(ValueError, "aggregate first"):
             ap.build_page([chart], "Too Much Data")
 
@@ -407,7 +507,7 @@ class Guards(unittest.TestCase):
         c = bar_chart()
         c["rows"] = rows
         html = ap.build_page([c], "Truncation Check Page")
-        tbody = html[html.index("<tbody>"): html.index("</tbody>")]
+        tbody = html[html.index("<tbody>") : html.index("</tbody>")]
         self.assertEqual(tbody.count("<tr>"), 500)
         self.assertIn("Showing 500 of 600 rows", html)
         html2 = ap.build_page([c], "Truncation Check Page", table_rows=10)
@@ -429,13 +529,16 @@ class Guards(unittest.TestCase):
         html = ap.build_page([c], "Formula Check Page")
         href = re.search(r'href="data:text/csv;charset=utf-8,([^"]+)"', html).group(1)
         from urllib.parse import unquote
+
         csv_text = unquote(href)
         self.assertIn("'=HYPERLINK(1)", csv_text)
         self.assertIn(",-3", csv_text)
 
     def test_write_page(self):
         with tempfile.TemporaryDirectory() as d:
-            path = ap.write_page([bar_chart()], os.path.join(d, "p.html"), title="Write Page Test")
+            path = ap.write_page(
+                [bar_chart()], os.path.join(d, "p.html"), title="Write Page Test"
+            )
             self.assertTrue(os.path.isabs(path))
             with open(path, encoding="utf-8") as fh:
                 self.assertIn("<title>Write Page Test</title>", fh.read())
@@ -449,14 +552,20 @@ class Render(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from PIL import Image
+
         cls.Image = Image
         cls.tmp = tempfile.TemporaryDirectory()
         cls.html = two_chart_page()
         cls.png = {}
         for mode in ("light", "dark"):
             cls.png[mode] = export.render_html(
-                cls.html, os.path.join(cls.tmp.name, f"page-{mode}.png"),
-                width=1200, height=800, mode=mode, timeout_ms=45000)
+                cls.html,
+                os.path.join(cls.tmp.name, f"page-{mode}.png"),
+                width=1200,
+                height=800,
+                mode=mode,
+                timeout_ms=45000,
+            )
 
     @classmethod
     def tearDownClass(cls):
@@ -483,12 +592,15 @@ class Render(unittest.TestCase):
                 self.assertGreater(hits, 150, f"{mode}: too few {slot} pixels ({hits})")
 
     def page(self, width, height=900, mode="light"):
-        ctx = export.get_browser().new_context(viewport={"width": width, "height": height},
-                                               color_scheme=mode)
+        ctx = export.get_browser().new_context(
+            viewport={"width": width, "height": height}, color_scheme=mode
+        )
         self.addCleanup(ctx.close)
         page = ctx.new_page()
         page.set_content(self.html, wait_until="networkidle", timeout=45000)
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
         return page
 
     def test_phone_width_layout(self):
@@ -502,7 +614,9 @@ class Render(unittest.TestCase):
                   (r) => [r.left, r.top, r.right, r.bottom]),
                   errors: window.__chartsErrors || []};
         }""")
-        self.assertLessEqual(m["scroll"], m["inner"], "horizontal scroll at phone width")
+        self.assertLessEqual(
+            m["scroll"], m["inner"], "horizontal scroll at phone width"
+        )
         self.assertEqual((m["pl"], m["pr"]), ("16px", "16px"))
         (l1, _t1, r1, b1), (l2, t2, _r2, _b2) = m["cards"]
         self.assertEqual(l1, 16)
@@ -516,17 +630,23 @@ class Render(unittest.TestCase):
         page = self.page(1200)
         before = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
         page.click("#theme-toggle")
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
-        after = page.evaluate("() => [document.documentElement.dataset.theme, "
-                              "getComputedStyle(document.body).backgroundColor]")
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
+        after = page.evaluate(
+            "() => [document.documentElement.dataset.theme, "
+            "getComputedStyle(document.body).backgroundColor]"
+        )
         self.assertEqual(after[0], "dark")
         self.assertNotEqual(before, after[1])
         self.assertTrue(page.is_hidden(".card >> nth=0 >> .table-wrap"))
         page.click(".card >> nth=0 >> .table-toggle")
         self.assertTrue(page.is_visible(".card >> nth=0 >> .table-wrap"))
         self.assertTrue(page.is_hidden(".card >> nth=0 >> .chart"))
-        self.assertEqual(page.get_attribute(".card >> nth=0 >> .table-toggle", "aria-pressed"),
-                         "true")
+        self.assertEqual(
+            page.get_attribute(".card >> nth=0 >> .table-toggle", "aria-pressed"),
+            "true",
+        )
 
 
 # --------------------------------------------------------------------------- VAL-401
@@ -534,22 +654,37 @@ class Render(unittest.TestCase):
 
 def fold_chart(transform=None, legend=None):
     """Wide rows; series come from a fold (or the given transform), not the inline rows."""
-    rows = [{"month": r["month"], "North": r["sales"]} for r in line_rows()
-            if r["region"] == "North"]
+    rows = [
+        {"month": r["month"], "North": r["sales"]}
+        for r in line_rows()
+        if r["region"] == "North"
+    ]
     for r, s in zip(rows, [r for r in line_rows() if r["region"] == "South"]):
         r["South"] = s["sales"]
     color = {"field": "series", "type": "nominal"}
     if legend is not None:
         color["legend"] = legend
-    return {"kind": "vega-lite", "title": "Folded sales", "height": 300, "spec": {
-        "data": {"values": rows},
-        "transform": transform or [{"fold": ["North", "South"], "as": ["series", "value"]}],
-        "mark": "line",
-        "encoding": {
-            "x": {"field": "month", "type": "temporal", "timeUnit": "utcyearmonth",
-                  "title": "Month"},
-            "y": {"field": "value", "type": "quantitative", "title": "Sales"},
-            "color": color}}}
+    return {
+        "kind": "vega-lite",
+        "title": "Folded sales",
+        "height": 300,
+        "spec": {
+            "data": {"values": rows},
+            "transform": transform
+            or [{"fold": ["North", "South"], "as": ["series", "value"]}],
+            "mark": "line",
+            "encoding": {
+                "x": {
+                    "field": "month",
+                    "type": "temporal",
+                    "timeUnit": "utcyearmonth",
+                    "title": "Month",
+                },
+                "y": {"field": "value", "type": "quantitative", "title": "Sales"},
+                "color": color,
+            },
+        },
+    }
 
 
 def calc_chart():
@@ -562,12 +697,25 @@ def calc_chart():
 
 def stock_lines(names, show_symbol=False, **extra):
     days = [f"2026-01-{d:02d}" for d in range(1, 11)]
-    series = [{"name": n, "type": "line", "showSymbol": show_symbol,
-               "data": [[d, 10 * (i + 1) + j] for j, d in enumerate(days)]}
-              for i, n in enumerate(names)]
-    chart = {"kind": "echarts", "title": "Price lines", "height": 300,
-             "spec": {"xAxis": {"type": "time"}, "yAxis": {"type": "value"},
-                      "series": series}}
+    series = [
+        {
+            "name": n,
+            "type": "line",
+            "showSymbol": show_symbol,
+            "data": [[d, 10 * (i + 1) + j] for j, d in enumerate(days)],
+        }
+        for i, n in enumerate(names)
+    ]
+    chart = {
+        "kind": "echarts",
+        "title": "Price lines",
+        "height": 300,
+        "spec": {
+            "xAxis": {"type": "time"},
+            "yAxis": {"type": "value"},
+            "series": series,
+        },
+    }
     chart.update(extra)
     return chart
 
@@ -579,8 +727,12 @@ class Capabilities(unittest.TestCase):
         self.assertIn("capabilities_for", ap.__doc__)
 
     def test_capabilities_for_pages_with_and_without_csv(self):
-        self.assertEqual(ap.capabilities_for([line_chart(), bar_chart()]), {"downloads": True})
-        no_rows = stock_lines(["A", "B"])        # time axis, no category data -> no table rows
+        self.assertEqual(
+            ap.capabilities_for([line_chart(), bar_chart()]), {"downloads": True}
+        )
+        no_rows = stock_lines(
+            ["A", "B"]
+        )  # time axis, no category data -> no table rows
         self.assertEqual(ap.capabilities_for([no_rows]), {})
         no_rows["rows"] = [{"a": 1}]
         self.assertEqual(ap.capabilities_for([no_rows]), {"downloads": True})
@@ -593,7 +745,9 @@ class Capabilities(unittest.TestCase):
 
 class VegaLiteTransformSeries(unittest.TestCase):
     def rule(self, spec):
-        return next(lyr for lyr in spec["layer"] if ap._mark_type(lyr.get("mark")) == "rule")
+        return next(
+            lyr for lyr in spec["layer"] if ap._mark_type(lyr.get("mark")) == "rule"
+        )
 
     def test_fold_series_keep_legend_and_pivot_tooltip(self):
         spec = ap.prepare_chart(fold_chart())["spec"]
@@ -601,15 +755,24 @@ class VegaLiteTransformSeries(unittest.TestCase):
         self.assertIsInstance(legend, dict)
         self.assertEqual(legend.get("symbolType"), "stroke")
         rule = self.rule(spec)
-        self.assertEqual(rule["transform"][0],
-                         {"pivot": "series", "value": "value", "groupby": ["month"]})
+        self.assertEqual(
+            rule["transform"][0],
+            {"pivot": "series", "value": "value", "groupby": ["month"]},
+        )
         titles = [t.get("title") for t in rule["encoding"]["tooltip"]]
         self.assertEqual(titles, ["Month", "North", "South"])
-        self.assertEqual(spec["transform"][0]["fold"], ["North", "South"])  # stays top-level
+        self.assertEqual(
+            spec["transform"][0]["fold"], ["North", "South"]
+        )  # stays top-level
 
     def test_fold_default_key_name_and_author_legend_kept(self):
-        tf = [{"window": [{"op": "mean", "field": "North", "as": "North_7d"}], "frame": [-2, 0]},
-              {"fold": ["North", "North_7d"]}]
+        tf = [
+            {
+                "window": [{"op": "mean", "field": "North", "as": "North_7d"}],
+                "frame": [-2, 0],
+            },
+            {"fold": ["North", "North_7d"]},
+        ]
         c = fold_chart(transform=tf, legend={"title": None, "orient": "bottom"})
         c["spec"]["encoding"]["color"]["field"] = "key"
         spec = ap.prepare_chart(c)["spec"]
@@ -620,7 +783,9 @@ class VegaLiteTransformSeries(unittest.TestCase):
         self.assertEqual(titles[1:], ["North", "North_7d"])
 
     def test_fold_order_sets_color_sort_unless_author_set(self):
-        c = fold_chart(transform=[{"fold": ["South", "North"], "as": ["series", "value"]}])
+        c = fold_chart(
+            transform=[{"fold": ["South", "North"], "as": ["series", "value"]}]
+        )
         color = ap.prepare_chart(c)["spec"]["layer"][0]["encoding"]["color"]
         self.assertEqual(color["sort"], ["South", "North"])
         own = fold_chart()
@@ -646,7 +811,9 @@ class VegaLiteTransformSeries(unittest.TestCase):
         self.assertEqual(rule["mark"].get("tooltip"), {"content": "data"})
         self.assertNotIn("tooltip", rule["encoding"])
         off = calc_chart()
-        off["spec"]["encoding"]["color"]["legend"] = None    # author's explicit choice stays
+        off["spec"]["encoding"]["color"]["legend"] = (
+            None  # author's explicit choice stays
+        )
         base = ap.prepare_chart(off)["spec"]["layer"][0]
         self.assertIsNone(base["encoding"]["color"]["legend"])
 
@@ -654,9 +821,17 @@ class VegaLiteTransformSeries(unittest.TestCase):
 class EchartsLines(unittest.TestCase):
     def test_markerless_lines_get_stroke_legend_icon(self):
         opt = ap.prepare_chart(stock_lines(["AAPL", "MSFT"]))["spec"]
-        self.assertEqual((opt["legend"]["icon"], opt["legend"]["itemWidth"],
-                          opt["legend"]["itemHeight"]), ("rect", 16, 2))
-        marked = ap.prepare_chart(stock_lines(["AAPL", "MSFT"], show_symbol=True))["spec"]
+        self.assertEqual(
+            (
+                opt["legend"]["icon"],
+                opt["legend"]["itemWidth"],
+                opt["legend"]["itemHeight"],
+            ),
+            ("rect", 16, 2),
+        )
+        marked = ap.prepare_chart(stock_lines(["AAPL", "MSFT"], show_symbol=True))[
+            "spec"
+        ]
         self.assertNotIn("icon", marked["legend"])
         own = stock_lines(["AAPL", "MSFT"])
         own["spec"]["legend"] = {"icon": "circle"}
@@ -677,9 +852,12 @@ class EchartsLines(unittest.TestCase):
         for s in opt["series"]:
             self.assertTrue(s["endLabel"]["show"])
             self.assertEqual(s["endLabel"]["formatter"], "{a}")
-            self.assertNotIn("color", s["endLabel"])     # theme token applied at render time
-        self.assertEqual(ap.prepare_chart(stock_lines(["A", "B"], end_labels=True))["warnings"],
-                         [])
+            self.assertNotIn(
+                "color", s["endLabel"]
+            )  # theme token applied at render time
+        self.assertEqual(
+            ap.prepare_chart(stock_lines(["A", "B"], end_labels=True))["warnings"], []
+        )
 
     def test_end_labels_list_selects_named_series(self):
         out = ap.prepare_chart(stock_lines(["A", "B", "C"], end_labels=["B", "C"]))
@@ -713,7 +891,9 @@ class EchartsLines(unittest.TestCase):
         self.assertNotIn("endLabel", b)
         self.assertEqual(len(out["warnings"]), 1)
         self.assertIn("'Zed'", out["warnings"][0])
-        html = ap.build_page([stock_lines(["A", "B"], end_labels=["Zed"])], "End Label Page")
+        html = ap.build_page(
+            [stock_lines(["A", "B"], end_labels=["Zed"])], "End Label Page"
+        )
         self.assertIn('<p class="warning" role="note">Warning: end_labels', html)
 
     def test_end_labels_non_line_series_name_warns(self):
@@ -732,9 +912,14 @@ class EchartsLines(unittest.TestCase):
             self.assertIn("end_labels", out["warnings"][0])
 
     def test_end_labels_ignored_outside_echarts(self):
-        chart = {"kind": "plotly", "title": "t", "end_labels": True,
-                 "spec": {"data": [{"type": "scatter", "mode": "lines", "x": [1, 2],
-                                    "y": [1, 2]}]}}
+        chart = {
+            "kind": "plotly",
+            "title": "t",
+            "end_labels": True,
+            "spec": {
+                "data": [{"type": "scatter", "mode": "lines", "x": [1, 2], "y": [1, 2]}]
+            },
+        }
         self.assertEqual(ap.prepare_chart(chart)["warnings"], [])
 
 
@@ -768,8 +953,11 @@ class Downloads(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from urllib.parse import unquote
+
         cls.html = ap.build_page([bar_chart()], "Downloads Check Page")
-        href = re.search(r'href="data:text/csv;charset=utf-8,([^"]+)"', cls.html).group(1)
+        href = re.search(r'href="data:text/csv;charset=utf-8,([^"]+)"', cls.html).group(
+            1
+        )
         cls.csv = unquote(href)
         # init scripts run on navigation only (not set_content): load from a file URL
         cls.tmp = tempfile.TemporaryDirectory()
@@ -784,6 +972,7 @@ class Downloads(unittest.TestCase):
 
     def open(self, absent=False, **cfg):
         import json
+
         ctx = export.get_browser().new_context(viewport={"width": 900, "height": 700})
         self.addCleanup(ctx.close)
         page = ctx.new_page()
@@ -797,8 +986,12 @@ class Downloads(unittest.TestCase):
 
     def test_viewer_click_saves_csv_through_capability(self):
         page = self.open()
-        page.wait_for_selector('a.csv[data-save="ready"]', state="attached", timeout=15000)
-        self.assertEqual(page.evaluate("() => window.__saves.length"), 0, "save on load")
+        page.wait_for_selector(
+            'a.csv[data-save="ready"]', state="attached", timeout=15000
+        )
+        self.assertEqual(
+            page.evaluate("() => window.__saves.length"), 0, "save on load"
+        )
         page.click("a.csv")
         page.wait_for_function("() => window.__saves.length === 1", timeout=5000)
         saved = page.evaluate("() => window.__saves[0]")
@@ -807,7 +1000,9 @@ class Downloads(unittest.TestCase):
         self.assertTrue(page.evaluate("() => window.__lastPrevented"))
         self.assertEqual(page.evaluate("() => window.__useCalls"), ["downloads"])
         self.assertTrue(page.get_attribute("a.csv", "href").startswith("data:text/csv"))
-        page.wait_for_selector('a.csv[data-save="saved"]', state="attached", timeout=5000)
+        page.wait_for_selector(
+            'a.csv[data-save="saved"]', state="attached", timeout=5000
+        )
 
     def test_null_namespace_keeps_data_link(self):
         page = self.open(nullns=True)
@@ -828,20 +1023,28 @@ class Downloads(unittest.TestCase):
 
     def test_unavailable_hides_button_and_declined_does_not_retry(self):
         page = self.open(reject="unavailable")
-        page.wait_for_selector('a.csv[data-save="ready"]', state="attached", timeout=15000)
+        page.wait_for_selector(
+            'a.csv[data-save="ready"]', state="attached", timeout=15000
+        )
         page.click("a.csv")
         page.wait_for_selector("a.csv", state="hidden", timeout=5000)
         page = self.open(reject="declined")
-        page.wait_for_selector('a.csv[data-save="ready"]', state="attached", timeout=15000)
+        page.wait_for_selector(
+            'a.csv[data-save="ready"]', state="attached", timeout=15000
+        )
         page.click("a.csv")
-        page.wait_for_selector('a.csv[data-save="declined"]', state="attached", timeout=5000)
+        page.wait_for_selector(
+            'a.csv[data-save="declined"]', state="attached", timeout=5000
+        )
         self.settle(page)
         self.assertEqual(page.evaluate("() => window.__saves.length"), 1)
         self.assertTrue(page.is_visible("a.csv"))
 
     def test_pending_use_does_not_block_first_paint(self):
         page = self.open(hang=True)
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
         self.assertEqual(page.evaluate("() => window.__useCalls"), ["downloads"])
         self.assertTrue(page.is_visible("a.csv"))
 
@@ -850,12 +1053,17 @@ class Downloads(unittest.TestCase):
 @unittest.skipUnless(CDN_OK, CDN_SKIP)
 class LiveCharts(unittest.TestCase):
     def open(self, charts, width, title="Live Check Page"):
-        ctx = export.get_browser().new_context(viewport={"width": width, "height": 900},
-                                               color_scheme="light")
+        ctx = export.get_browser().new_context(
+            viewport={"width": width, "height": 900}, color_scheme="light"
+        )
         self.addCleanup(ctx.close)
         page = ctx.new_page()
-        page.set_content(ap.build_page(charts, title), wait_until="networkidle", timeout=45000)
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        page.set_content(
+            ap.build_page(charts, title), wait_until="networkidle", timeout=45000
+        )
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
         self.assertEqual(page.evaluate("() => window.__chartsErrors"), [])
         return page
 
@@ -863,15 +1071,19 @@ class LiveCharts(unittest.TestCase):
         box = page.locator("#chart-1-plot").bounding_box()
         page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.6)
         page.wait_for_selector("#vg-tooltip-element.visible", timeout=5000)
-        return page.evaluate("() => [...document.querySelectorAll("
-                             "'#vg-tooltip-element td.key')].map((t) => t.textContent)")
+        return page.evaluate(
+            "() => [...document.querySelectorAll("
+            "'#vg-tooltip-element td.key')].map((t) => t.textContent)"
+        )
 
     def test_fold_and_calculate_tooltip_lists_every_series(self):
         page = self.open([fold_chart()], 900)
         keys = self.tooltip_keys(page)
         self.assertTrue({"North", "South"} <= set(keys), keys)
-        labels = page.evaluate("() => document.querySelectorAll("
-                               "'#chart-1-plot .role-legend-label text').length")
+        labels = page.evaluate(
+            "() => document.querySelectorAll("
+            "'#chart-1-plot .role-legend-label text').length"
+        )
         self.assertEqual(labels, 2)
         page = self.open([calc_chart()], 900)
         keys = self.tooltip_keys(page)
@@ -880,16 +1092,23 @@ class LiveCharts(unittest.TestCase):
     def test_fold_series_take_slots_in_fold_order(self):
         # fold order South, North (not alphabetical): South must draw in series-1.
         # South starts at 160, North at 120, so South's first point sits higher.
-        c = fold_chart(transform=[{"fold": ["South", "North"], "as": ["series", "value"]}])
+        c = fold_chart(
+            transform=[{"fold": ["South", "North"], "as": ["series", "value"]}]
+        )
         for mode in ("light", "dark"):
-            ctx = export.get_browser().new_context(viewport={"width": 900, "height": 900},
-                                                   color_scheme=mode)
+            ctx = export.get_browser().new_context(
+                viewport={"width": 900, "height": 900}, color_scheme=mode
+            )
             self.addCleanup(ctx.close)
             page = ctx.new_page()
-            page.set_content(ap.build_page([c], "Fold Order Page"), wait_until="networkidle",
-                             timeout=45000)
-            page.wait_for_function("() => window.__chartsReady.then(() => true)",
-                                   timeout=45000)
+            page.set_content(
+                ap.build_page([c], "Fold Order Page"),
+                wait_until="networkidle",
+                timeout=45000,
+            )
+            page.wait_for_function(
+                "() => window.__chartsReady.then(() => true)", timeout=45000
+            )
             lines = page.evaluate(r"""() => [...document.querySelectorAll(
                 '#chart-1-plot g.mark-line path')].map((p) => {
                   const m = /^M\s*([-\d.]+)[ ,]([-\d.]+)/.exec(p.getAttribute('d'));
@@ -897,7 +1116,7 @@ class LiveCharts(unittest.TestCase):
                           y0: m ? parseFloat(m[2]) : null};
                 })""")
             self.assertEqual(len(lines), 2, lines)
-            top, low = sorted(lines, key=lambda d: d["y0"])     # smaller y = higher value
+            top, low = sorted(lines, key=lambda d: d["y0"])  # smaller y = higher value
             tok = palette.tokens(mode)
             self.assertEqual(top["stroke"], tok["series-1"].lower(), f"{mode}: South")
             self.assertEqual(low["stroke"], tok["series-2"].lower(), f"{mode}: North")
@@ -922,7 +1141,9 @@ class LiveCharts(unittest.TestCase):
         self.assertEqual(crowded["type"], "scroll")
 
     def test_echarts_end_labels_use_text_token(self):
-        o = self.option(self.open([stock_lines(["AAPL", "MSFT"], end_labels=True)], 900))
+        o = self.option(
+            self.open([stock_lines(["AAPL", "MSFT"], end_labels=True)], 900)
+        )
         t2 = palette.tokens("light")["text-secondary"].lower()
         self.assertEqual([c.lower() for c in o["end"]], [t2, t2])
         self.assertGreater(o["right"], 16)
@@ -934,21 +1155,44 @@ class LiveCharts(unittest.TestCase):
 def token_lines_vl():
     """Two-layer Vega-Lite line: raw series in token:text-muted (mark color),
     smoothed series in token:series-1 (value-encoded color)."""
-    rows = [{"day": i, "raw": 10 + (i * 7) % 5, "smooth": 11 + i * 0.2} for i in range(12)]
+    rows = [
+        {"day": i, "raw": 10 + (i * 7) % 5, "smooth": 11 + i * 0.2} for i in range(12)
+    ]
     x = {"field": "day", "type": "quantitative"}
-    return {"kind": "vega-lite", "title": "Raw and smoothed", "height": 300, "spec": {
-        "data": {"values": rows},
-        "layer": [
-            {"mark": {"type": "line", "color": ap.token("text-muted"), "strokeWidth": 1},
-             "encoding": {"x": x, "y": {"field": "raw", "type": "quantitative"}}},
-            {"mark": "line",
-             "encoding": {"x": x, "y": {"field": "smooth", "type": "quantitative"},
-                          "color": {"value": "token:series-1"}}}]}}
+    return {
+        "kind": "vega-lite",
+        "title": "Raw and smoothed",
+        "height": 300,
+        "spec": {
+            "data": {"values": rows},
+            "layer": [
+                {
+                    "mark": {
+                        "type": "line",
+                        "color": ap.token("text-muted"),
+                        "strokeWidth": 1,
+                    },
+                    "encoding": {"x": x, "y": {"field": "raw", "type": "quantitative"}},
+                },
+                {
+                    "mark": "line",
+                    "encoding": {
+                        "x": x,
+                        "y": {"field": "smooth", "type": "quantitative"},
+                        "color": {"value": "token:series-1"},
+                    },
+                },
+            ],
+        },
+    }
 
 
 def token_lines_echarts():
     chart = stock_lines(["Raw", "Smoothed"])
-    chart["spec"]["series"][0]["lineStyle"] = {"color": ap.token("text-muted"), "width": 1}
+    chart["spec"]["series"][0]["lineStyle"] = {
+        "color": ap.token("text-muted"),
+        "width": 1,
+    }
     chart["spec"]["series"][1]["lineStyle"] = {"color": "token:series-1"}
     return chart
 
@@ -973,7 +1217,9 @@ class TokenReferences(unittest.TestCase):
             ap.build_page([eb], "Token Check Page")
 
     def test_known_tokens_pass_through_to_payload(self):
-        html = ap.build_page([token_lines_vl(), token_lines_echarts()], "Token Check Page")
+        html = ap.build_page(
+            [token_lines_vl(), token_lines_echarts()], "Token Check Page"
+        )
         self.assertIn('"token:text-muted"', html)
         self.assertIn('"token:series-1"', html)
 
@@ -991,13 +1237,24 @@ def gray_emphasis_vl():
     """'1 hue + gray' emphasis: context series in token:gray, the highlight in token:series-1."""
     rows = [{"day": i, "ctx": 10 + (i * 7) % 5, "hi": 11 + i * 0.2} for i in range(12)]
     x = {"field": "day", "type": "quantitative"}
-    return {"kind": "vega-lite", "title": "Highlight one series", "height": 300, "spec": {
-        "data": {"values": rows},
-        "layer": [
-            {"mark": {"type": "line", "color": ap.token("gray")},
-             "encoding": {"x": x, "y": {"field": "ctx", "type": "quantitative"}}},
-            {"mark": {"type": "line", "color": ap.token("series-1")},
-             "encoding": {"x": x, "y": {"field": "hi", "type": "quantitative"}}}]}}
+    return {
+        "kind": "vega-lite",
+        "title": "Highlight one series",
+        "height": 300,
+        "spec": {
+            "data": {"values": rows},
+            "layer": [
+                {
+                    "mark": {"type": "line", "color": ap.token("gray")},
+                    "encoding": {"x": x, "y": {"field": "ctx", "type": "quantitative"}},
+                },
+                {
+                    "mark": {"type": "line", "color": ap.token("series-1")},
+                    "encoding": {"x": x, "y": {"field": "hi", "type": "quantitative"}},
+                },
+            ],
+        },
+    }
 
 
 @unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
@@ -1015,19 +1272,27 @@ class LiveTokens(unittest.TestCase):
     }"""
 
     def open(self, charts, mode):
-        ctx = export.get_browser().new_context(viewport={"width": 900, "height": 900},
-                                               color_scheme=mode)
+        ctx = export.get_browser().new_context(
+            viewport={"width": 900, "height": 900}, color_scheme=mode
+        )
         self.addCleanup(ctx.close)
         page = ctx.new_page()
-        page.set_content(ap.build_page(charts, "Token Render Page"), wait_until="networkidle",
-                         timeout=45000)
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        page.set_content(
+            ap.build_page(charts, "Token Render Page"),
+            wait_until="networkidle",
+            timeout=45000,
+        )
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
         self.assertEqual(page.evaluate("() => window.__chartsErrors"), [])
         return page
 
     def toggle(self, page):
         page.click("#theme-toggle")
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
 
     def test_vega_lite_layers_stroke_in_tokens_light_and_dark(self):
         sel = "#chart-1-plot g.mark-line path"
@@ -1039,11 +1304,15 @@ class LiveTokens(unittest.TestCase):
                 self.assertEqual(len(m["strokes"]), 2, m)
                 self.assertNotIn(None, m["raw"], m)
                 self.assertFalse(any(s.startswith("token:") for s in m["raw"]), m)
-                self.assertEqual(m["strokes"], [m["muted"], m["s1"]], f"{mode}/{step}: {m}")
+                self.assertEqual(
+                    m["strokes"], [m["muted"], m["s1"]], f"{mode}/{step}: {m}"
+                )
                 seen[step] = m["s1"]
                 if step == mode:
-                    self.toggle(page)          # theme change re-resolves the references
-            self.assertNotEqual(seen[mode], seen["toggled"], "series-1 must differ by mode")
+                    self.toggle(page)  # theme change re-resolves the references
+            self.assertNotEqual(
+                seen[mode], seen["toggled"], "series-1 must differ by mode"
+            )
             want = palette.tokens(mode)["series-1"].lower()
             self.assertEqual(seen[mode], want)
 
@@ -1055,7 +1324,9 @@ class LiveTokens(unittest.TestCase):
                 m = page.evaluate(self.STROKES, sel)
                 self.assertIn(m["muted"], m["strokes"], m)
                 self.assertIn(m["s1"], m["strokes"], m)
-                self.assertFalse(any((s or "").startswith("token:") for s in m["raw"]), m)
+                self.assertFalse(
+                    any((s or "").startswith("token:") for s in m["raw"]), m
+                )
                 colors = page.evaluate("""() => echarts.getInstanceByDom(
                     document.getElementById('chart-1-plot')).getOption().series.map(
                     (s) => s.lineStyle.color)""")
@@ -1081,8 +1352,12 @@ class LiveTokens(unittest.TestCase):
             page = self.open([gray_emphasis_vl()], mode)
             for step in (mode, "toggled"):
                 m = page.evaluate(js, sel)
-                shown = mode if step == mode else ("dark" if mode == "light" else "light")
-                self.assertEqual(m["gray"], palette.gray(shown).lower(), f"{mode}/{step}: {m}")
+                shown = (
+                    mode if step == mode else ("dark" if mode == "light" else "light")
+                )
+                self.assertEqual(
+                    m["gray"], palette.gray(shown).lower(), f"{mode}/{step}: {m}"
+                )
                 self.assertEqual(len(m["strokes"]), 2, m)
                 self.assertEqual(m["strokes"][0], m["gray"], f"{mode}/{step}: {m}")
                 self.assertNotEqual(m["strokes"][1], m["gray"], m)
@@ -1091,12 +1366,16 @@ class LiveTokens(unittest.TestCase):
 
     def test_unresolvable_token_stays_and_reports(self):
         html = ap.build_page([token_lines_vl()], "Token Render Page")
-        html = html.replace('"token:series-1"', '"token:gone-away"')    # bypass the Python check
+        html = html.replace(
+            '"token:series-1"', '"token:gone-away"'
+        )  # bypass the Python check
         ctx = export.get_browser().new_context(viewport={"width": 900, "height": 900})
         self.addCleanup(ctx.close)
         page = ctx.new_page()
         page.set_content(html, wait_until="networkidle", timeout=45000)
-        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        page.wait_for_function(
+            "() => window.__chartsReady.then(() => true)", timeout=45000
+        )
         errors = page.evaluate("() => window.__chartsErrors")
         self.assertTrue(any("gone-away" in e for e in errors), errors)
 

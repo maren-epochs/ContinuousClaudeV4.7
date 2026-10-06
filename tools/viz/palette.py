@@ -14,6 +14,7 @@ skill's references/palette.md); this module never carries a hex literal.
     palette.gray("dark")                # de-emphasis gray (1 hue + gray), --gray
     palette.css_tokens("dark")          # "--name: value;" lines, one per token
 """
+
 import copy
 import functools
 import json
@@ -52,7 +53,8 @@ def categorical(mode="light", n=None):
     if n > MAX_SERIES:
         raise ValueError(
             f"{n} series requested but the palette has {MAX_SERIES} categorical slots: "
-            "fold the smallest series into 'Other' or facet - never cycle colors")
+            "fold the smallest series into 'Other' or facet - never cycle colors"
+        )
     return slots[:n]
 
 
@@ -72,7 +74,9 @@ def ramp(hue=None):
     hue = hue or data["sequential_default"]
     ramps = data["ramps"]
     if hue not in ramps:
-        raise ValueError(f"no sequential ramp for hue {hue!r}; available: {sorted(ramps)}")
+        raise ValueError(
+            f"no sequential ramp for hue {hue!r}; available: {sorted(ramps)}"
+        )
     steps = ramps[hue]
     return {k: steps[k] for k in sorted(steps, key=int)}
 
@@ -190,6 +194,7 @@ def css_tokens(mode="light"):
 
 if __name__ == "__main__":
     import sys
+
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     for m in MODES:

@@ -90,14 +90,14 @@ class TestRunPython(unittest.TestCase):
             "print(out)\n"
         )
         r = run_harness(code)
-        self.assertIn("(3, 1)", r.stdout,
-                      f"pandas shape not in output\nstdout: {r.stdout}\nstderr: {r.stderr}")
+        self.assertIn(
+            "(3, 1)",
+            r.stdout,
+            f"pandas shape not in output\nstdout: {r.stdout}\nstderr: {r.stderr}",
+        )
 
     def test_error_output_surfaced(self):
-        code = (
-            'out = run_python("raise ValueError(12345)")\n'
-            "print(out)\n"
-        )
+        code = 'out = run_python("raise ValueError(12345)")\nprint(out)\n'
         r = run_harness(code)
         self.assertIn("ValueError", r.stdout)
         self.assertIn("12345", r.stdout)
@@ -116,11 +116,14 @@ class TestBinaryWriteFile(unittest.TestCase):
         )
         try:
             r = run_harness(code)
-            self.assertTrue(target.exists(),
-                            f"file not written\nstdout: {r.stdout}\nstderr: {r.stderr}")
+            self.assertTrue(
+                target.exists(),
+                f"file not written\nstdout: {r.stdout}\nstderr: {r.stderr}",
+            )
             data = target.read_bytes()
-            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n",
-                             f"PNG magic corrupted: {data[:8]!r}")
+            self.assertEqual(
+                data[:8], b"\x89PNG\r\n\x1a\n", f"PNG magic corrupted: {data[:8]!r}"
+            )
             self.assertEqual(len(data), 12)
         finally:
             if target.exists():
@@ -137,20 +140,27 @@ class TestDataRoots(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_denied_without_env(self):
         code = f"print(read_file('{_posix(self.csv)}'))\n"
         r = run_harness(code)
-        self.assertIn("denied", r.stdout,
-                      f"expected denial\nstdout: {r.stdout}\nstderr: {r.stderr}")
+        self.assertIn(
+            "denied",
+            r.stdout,
+            f"expected denial\nstdout: {r.stdout}\nstderr: {r.stderr}",
+        )
         self.assertNotIn("x,y", r.stdout)
 
     def test_allowed_with_env(self):
         code = f"print(read_file('{_posix(self.csv)}'))\n"
         r = run_harness(code, env_overrides={"OUROS_DATA_ROOTS": self.dir})
-        self.assertIn("x,y", r.stdout,
-                      f"CSV not readable with OUROS_DATA_ROOTS set\nstdout: {r.stdout}\nstderr: {r.stderr}")
+        self.assertIn(
+            "x,y",
+            r.stdout,
+            f"CSV not readable with OUROS_DATA_ROOTS set\nstdout: {r.stdout}\nstderr: {r.stderr}",
+        )
 
     def test_data_root_is_read_only(self):
         target = Path(self.dir) / "should-not-exist.txt"
@@ -169,6 +179,7 @@ class TestSessionDefaultLoad(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.storage, ignore_errors=True)
 
     def _args(self):
@@ -176,23 +187,29 @@ class TestSessionDefaultLoad(unittest.TestCase):
 
     def test_default_load_then_reset(self):
         # Run 1: set a variable, session gets saved.
-        r1 = run_harness("marker_var = 'alive-and-well'\nprint('run1-done')\n",
-                         *self._args())
+        r1 = run_harness(
+            "marker_var = 'alive-and-well'\nprint('run1-done')\n", *self._args()
+        )
         self.assertIn("run1-done", r1.stdout, f"stderr: {r1.stderr}")
 
         # Run 2: --session only, no --load. Must LOAD, not reset.
         r2 = run_harness("print(marker_var)\n", *self._args())
-        self.assertIn("alive-and-well", r2.stdout,
-                      f"session state lost without --load\nstdout: {r2.stdout}\nstderr: {r2.stderr}")
+        self.assertIn(
+            "alive-and-well",
+            r2.stdout,
+            f"session state lost without --load\nstdout: {r2.stdout}\nstderr: {r2.stderr}",
+        )
 
         # Run 3: --reset wipes state.
         r3 = run_harness("print('run3-done')\n", *self._args(), "--reset")
         self.assertIn("run3-done", r3.stdout, f"stderr: {r3.stderr}")
 
-        r4 = run_harness_raw("--session", self.session, "--storage", self.storage,
-                             "--list-vars")
-        self.assertNotIn("marker_var", r4.stdout,
-                         f"--reset did not wipe state\nstdout: {r4.stdout}")
+        r4 = run_harness_raw(
+            "--session", self.session, "--storage", self.storage, "--list-vars"
+        )
+        self.assertNotIn(
+            "marker_var", r4.stdout, f"--reset did not wipe state\nstdout: {r4.stdout}"
+        )
 
     def test_explicit_load_still_works(self):
         r1 = run_harness("keep_me = 41 + 1\nprint('saved')\n", *self._args())
@@ -210,15 +227,20 @@ class TestArtifactSurfacing(unittest.TestCase):
         code = f"r = write_file('{_posix(target)}', 'hello artifacts')\nprint(r)\n"
         try:
             r = run_harness(code)
-            self.assertIn("artifacts:", r.stdout,
-                          f"no artifacts section\nstdout: {r.stdout}\nstderr: {r.stderr}")
+            self.assertIn(
+                "artifacts:",
+                r.stdout,
+                f"no artifacts section\nstdout: {r.stdout}\nstderr: {r.stderr}",
+            )
             # Path printed in the artifacts section must be an absolute host path.
             lines = r.stdout.splitlines()
             start = lines.index("artifacts:")
-            artifact_lines = [l.strip() for l in lines[start + 1:] if l.strip()]
+            artifact_lines = [l.strip() for l in lines[start + 1 :] if l.strip()]
             matching = [l for l in artifact_lines if name in l]
             self.assertTrue(matching, f"artifact not listed: {artifact_lines}")
-            self.assertTrue(Path(matching[0]).is_absolute(), f"not absolute: {matching[0]}")
+            self.assertTrue(
+                Path(matching[0]).is_absolute(), f"not absolute: {matching[0]}"
+            )
         finally:
             if target.exists():
                 target.unlink()
@@ -233,8 +255,10 @@ class TestArtifactSurfacing(unittest.TestCase):
         try:
             r = run_harness(code)
             self.assertIn("wrote-relative", r.stdout, f"stderr: {r.stderr}")
-            self.assertTrue(work_dir_file.exists(),
-                            f"relative write did not land in work dir\nstdout: {r.stdout}")
+            self.assertTrue(
+                work_dir_file.exists(),
+                f"relative write did not land in work dir\nstdout: {r.stdout}",
+            )
             self.assertIn("artifacts:", r.stdout)
             self.assertIn(name, r.stdout)
         finally:

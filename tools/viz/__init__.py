@@ -10,11 +10,19 @@ importlib, because a project's own regular ``tools`` package shadows the
 namespace ``~/.claude/tools``. Intra-package imports are relative, so every
 module works under either name.
 """
+
 import importlib
 
 __version__ = "0.1.0"
 
-_SUBMODULES = ("palette", "validate_palette", "style", "recommend", "export", "artifact_page")
+_SUBMODULES = (
+    "palette",
+    "validate_palette",
+    "style",
+    "recommend",
+    "export",
+    "artifact_page",
+)
 
 
 def __getattr__(name):

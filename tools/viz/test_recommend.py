@@ -53,45 +53,107 @@ def col(name, kind, cardinality=None, **extra):
 def profile(columns, n_rows=100):
     measures = [c["name"] for c in columns if c["kind"] == "numeric"]
     dims = [c["name"] for c in columns if c["kind"] != "numeric"]
-    return {"n_rows": n_rows, "columns": columns, "measures": measures, "dimensions": dims}
+    return {
+        "n_rows": n_rows,
+        "columns": columns,
+        "measures": measures,
+        "dimensions": dims,
+    }
 
 
 # --- canonical profiles -----------------------------------------------------
 P_ONE_VALUE = profile([col("revenue", "numeric", 1)], n_rows=1)
-P_KPI_ROW = profile([col("revenue", "numeric", 1), col("users", "numeric", 1),
-                     col("churn", "numeric", 1)], n_rows=1)
-P_CAT_MEASURE = profile([col("product", "categorical", 6), col("sales", "numeric", 100)])
-P_GRID = profile([col("region", "categorical", 5), col("month", "categorical", 12),
-                  col("sales", "numeric", 60)], n_rows=60)
-P_TIME_ONE = profile([col("date", "temporal", 24, is_sorted_time=True),
-                      col("sales", "numeric", 24, scale=3)], n_rows=24)
-P_TIME_SERIES = profile([col("date", "temporal", 24, is_sorted_time=True),
-                         col("region", "categorical", 4),
-                         col("sales", "numeric", 96, scale=3)], n_rows=96)
-P_TIME_TWO_SCALES = profile([col("date", "temporal", 24, is_sorted_time=True),
-                             col("users", "numeric", 24, scale=4),
-                             col("sessions", "numeric", 24, scale=6)], n_rows=24)
-P_TIME_SAME_SCALE = profile([col("date", "temporal", 24, is_sorted_time=True),
-                             col("users", "numeric", 24, scale=4),
-                             col("signups", "numeric", 24, scale=4)], n_rows=24)
-P_BEFORE_AFTER = profile([col("period", "temporal", 2), col("team", "categorical", 6),
-                          col("score", "numeric", 12)], n_rows=12)
+P_KPI_ROW = profile(
+    [
+        col("revenue", "numeric", 1),
+        col("users", "numeric", 1),
+        col("churn", "numeric", 1),
+    ],
+    n_rows=1,
+)
+P_CAT_MEASURE = profile(
+    [col("product", "categorical", 6), col("sales", "numeric", 100)]
+)
+P_GRID = profile(
+    [
+        col("region", "categorical", 5),
+        col("month", "categorical", 12),
+        col("sales", "numeric", 60),
+    ],
+    n_rows=60,
+)
+P_TIME_ONE = profile(
+    [
+        col("date", "temporal", 24, is_sorted_time=True),
+        col("sales", "numeric", 24, scale=3),
+    ],
+    n_rows=24,
+)
+P_TIME_SERIES = profile(
+    [
+        col("date", "temporal", 24, is_sorted_time=True),
+        col("region", "categorical", 4),
+        col("sales", "numeric", 96, scale=3),
+    ],
+    n_rows=96,
+)
+P_TIME_TWO_SCALES = profile(
+    [
+        col("date", "temporal", 24, is_sorted_time=True),
+        col("users", "numeric", 24, scale=4),
+        col("sessions", "numeric", 24, scale=6),
+    ],
+    n_rows=24,
+)
+P_TIME_SAME_SCALE = profile(
+    [
+        col("date", "temporal", 24, is_sorted_time=True),
+        col("users", "numeric", 24, scale=4),
+        col("signups", "numeric", 24, scale=4),
+    ],
+    n_rows=24,
+)
+P_BEFORE_AFTER = profile(
+    [
+        col("period", "temporal", 2),
+        col("team", "categorical", 6),
+        col("score", "numeric", 12),
+    ],
+    n_rows=12,
+)
 P_TWO_MEASURES = profile([col("height", "numeric", 100), col("weight", "numeric", 100)])
-P_THREE_MEASURES = profile([col("height", "numeric", 100), col("weight", "numeric", 100),
-                            col("age", "numeric", 60)])
-P_FLOW = profile([col("source", "categorical", 4), col("target", "categorical", 5),
-                  col("count", "numeric", 20)], n_rows=20)
+P_THREE_MEASURES = profile(
+    [
+        col("height", "numeric", 100),
+        col("weight", "numeric", 100),
+        col("age", "numeric", 60),
+    ]
+)
+P_FLOW = profile(
+    [
+        col("source", "categorical", 4),
+        col("target", "categorical", 5),
+        col("count", "numeric", 20),
+    ],
+    n_rows=20,
+)
 P_GEO = profile([col("iso3", "geo", 50), col("population", "numeric", 50)], n_rows=50)
-P_MANY_SERIES = profile([col("date", "temporal", 24, is_sorted_time=True),
-                         col("product", "categorical", 12),
-                         col("sales", "numeric", 288, scale=3)], n_rows=288)
+P_MANY_SERIES = profile(
+    [
+        col("date", "temporal", 24, is_sorted_time=True),
+        col("product", "categorical", 12),
+        col("sales", "numeric", 288, scale=3),
+    ],
+    n_rows=288,
+)
 
 
 class SchemaTests(unittest.TestCase):
     def test_result_shape(self):
         out = recommend(P_CAT_MEASURE, "magnitude")
-        self.assertEqual(set(out), {"job", "job_inferred", "form", "reason",
-                                    "encoding", "warnings"})
+        self.assertEqual(
+            set(out), {"job", "job_inferred", "form", "reason", "encoding", "warnings"}
+        )
         self.assertIn(out["form"], FORMS)
         self.assertIsInstance(out["reason"], str)
         self.assertTrue(out["reason"].strip())
@@ -101,9 +163,22 @@ class SchemaTests(unittest.TestCase):
         self.assertIsInstance(out["warnings"], list)
 
     def test_jobs_enumerated(self):
-        self.assertEqual(JOBS, ("magnitude", "identity", "polarity", "headline",
-                                "change-over-time", "distribution", "relationship",
-                                "part-to-whole", "ranking", "flow", "spatial"))
+        self.assertEqual(
+            JOBS,
+            (
+                "magnitude",
+                "identity",
+                "polarity",
+                "headline",
+                "change-over-time",
+                "distribution",
+                "relationship",
+                "part-to-whole",
+                "ranking",
+                "flow",
+                "spatial",
+            ),
+        )
 
     def test_unknown_job_raises(self):
         with self.assertRaises(ValueError):
@@ -111,8 +186,17 @@ class SchemaTests(unittest.TestCase):
 
     def test_every_job_returns_named_form(self):
         for job in JOBS:
-            for prof in (P_ONE_VALUE, P_CAT_MEASURE, P_GRID, P_TIME_ONE, P_TIME_SERIES,
-                         P_TWO_MEASURES, P_FLOW, P_GEO, P_MANY_SERIES):
+            for prof in (
+                P_ONE_VALUE,
+                P_CAT_MEASURE,
+                P_GRID,
+                P_TIME_ONE,
+                P_TIME_SERIES,
+                P_TWO_MEASURES,
+                P_FLOW,
+                P_GEO,
+                P_MANY_SERIES,
+            ):
                 out = recommend(prof, job)
                 self.assertIn(out["form"], FORMS, msg=f"{job}: {out}")
 
@@ -218,7 +302,9 @@ class JobTests(unittest.TestCase):
         self.assertTrue(any("no temporal column" in w for w in out["warnings"]))
 
     def test_distribution_histogram(self):
-        out = recommend(profile([col("latency", "numeric", 1000)], n_rows=1000), "distribution")
+        out = recommend(
+            profile([col("latency", "numeric", 1000)], n_rows=1000), "distribution"
+        )
         self.assertEqual(out["form"], "histogram")
         self.assertEqual(out["encoding"]["x"], "latency")
 
@@ -239,8 +325,13 @@ class JobTests(unittest.TestCase):
         self.assertEqual(out["encoding"]["size"], "age")
 
     def test_relationship_scatter_color_caps_at_three(self):
-        prof = profile([col("height", "numeric", 100), col("weight", "numeric", 100),
-                        col("team", "categorical", 5)])
+        prof = profile(
+            [
+                col("height", "numeric", 100),
+                col("weight", "numeric", 100),
+                col("team", "categorical", 5),
+            ]
+        )
         out = recommend(prof, "relationship")
         self.assertEqual(out["form"], "small multiples")
         self.assertEqual(out["encoding"]["facet"], "team")
@@ -251,13 +342,17 @@ class JobTests(unittest.TestCase):
         self.assertEqual(out["form"], "table")
 
     def test_part_to_whole_stacked_bar(self):
-        prof = profile([col("segment", "categorical", 4), col("share", "numeric", 4)], n_rows=4)
+        prof = profile(
+            [col("segment", "categorical", 4), col("share", "numeric", 4)], n_rows=4
+        )
         out = recommend(prof, "part-to-whole")
         self.assertEqual(out["form"], "stacked bar")
         self.assertEqual(out["encoding"]["color"], "segment")
 
     def test_part_to_whole_horizontal_for_many(self):
-        prof = profile([col("segment", "categorical", 8), col("share", "numeric", 8)], n_rows=8)
+        prof = profile(
+            [col("segment", "categorical", 8), col("share", "numeric", 8)], n_rows=8
+        )
         out = recommend(prof, "part-to-whole")
         self.assertEqual(out["form"], "bar")
         self.assertEqual(out["encoding"]["orientation"], "horizontal")
@@ -315,8 +410,9 @@ class InferenceTests(unittest.TestCase):
         self.assertEqual(infer_job(P_TWO_MEASURES), "relationship")
 
     def test_one_measure_no_dims_is_distribution(self):
-        self.assertEqual(infer_job(profile([col("latency", "numeric", 1000)], 1000)),
-                         "distribution")
+        self.assertEqual(
+            infer_job(profile([col("latency", "numeric", 1000)], 1000)), "distribution"
+        )
 
     def test_category_plus_measure_is_magnitude(self):
         self.assertEqual(infer_job(P_CAT_MEASURE), "magnitude")
@@ -345,39 +441,65 @@ class RefusalTests(unittest.TestCase):
         self.assertNotIn("dual", out["form"])
 
     def test_unknown_scales_are_treated_as_different(self):
-        prof = profile([col("date", "temporal", 24), col("users", "numeric", 24),
-                        col("sessions", "numeric", 24)], n_rows=24)
+        prof = profile(
+            [
+                col("date", "temporal", 24),
+                col("users", "numeric", 24),
+                col("sessions", "numeric", 24),
+            ],
+            n_rows=24,
+        )
         out = recommend(prof, "change-over-time")
         self.assertEqual(out["form"], "small multiples")
         self.assertTrue(any(w.startswith("Dual-axis charts") for w in out["warnings"]))
 
     def test_part_to_whole_past_five_slices_is_bar_not_pie(self):
-        prof = profile([col("segment", "categorical", 6), col("share", "numeric", 6)], n_rows=6)
+        prof = profile(
+            [col("segment", "categorical", 6), col("share", "numeric", 6)], n_rows=6
+        )
         out = recommend(prof, "part-to-whole")
         self.assertEqual(out["form"], "bar")
-        self.assertTrue(any(w.startswith("A donut/pie for comparing close values")
-                            for w in out["warnings"]))
+        self.assertTrue(
+            any(
+                w.startswith("A donut/pie for comparing close values")
+                for w in out["warnings"]
+            )
+        )
 
     def test_part_to_whole_never_pie(self):
         for n in (2, 3, 5, 6, 9, 20):
-            prof = profile([col("segment", "categorical", n), col("share", "numeric", n)], n_rows=n)
+            prof = profile(
+                [col("segment", "categorical", n), col("share", "numeric", n)], n_rows=n
+            )
             out = recommend(prof, "part-to-whole")
             self.assertNotIn("pie", out["form"])
             self.assertNotIn("donut", out["form"])
 
     def test_two_slice_pie_is_a_meter(self):
-        prof = profile([col("segment", "categorical", 2), col("share", "numeric", 2)], n_rows=2)
+        prof = profile(
+            [col("segment", "categorical", 2), col("share", "numeric", 2)], n_rows=2
+        )
         out = recommend(prof, "part-to-whole")
         self.assertEqual(out["form"], "meter")
-        self.assertTrue(any(w.startswith("A one-bar bar chart, or a 2-slice pie")
-                            for w in out["warnings"]))
+        self.assertTrue(
+            any(
+                w.startswith("A one-bar bar chart, or a 2-slice pie")
+                for w in out["warnings"]
+            )
+        )
 
     def test_one_bar_chart_is_a_stat_tile(self):
-        prof = profile([col("product", "categorical", 1), col("sales", "numeric", 1)], n_rows=1)
+        prof = profile(
+            [col("product", "categorical", 1), col("sales", "numeric", 1)], n_rows=1
+        )
         out = recommend(prof, "magnitude")
         self.assertEqual(out["form"], "stat tile")
-        self.assertTrue(any(w.startswith("A one-bar bar chart, or a 2-slice pie")
-                            for w in out["warnings"]))
+        self.assertTrue(
+            any(
+                w.startswith("A one-bar bar chart, or a 2-slice pie")
+                for w in out["warnings"]
+            )
+        )
 
     def test_headline_single_value_is_not_a_chart(self):
         out = recommend(P_ONE_VALUE, "headline")
@@ -398,16 +520,28 @@ class RefusalTests(unittest.TestCase):
         self.assertIn("Cycling / generating hues past 8", " ".join(out["warnings"]))
 
     def test_grouped_bar_past_eight_series_folds(self):
-        prof = profile([col("region", "categorical", 10), col("product", "categorical", 9),
-                        col("sales", "numeric", 90)], n_rows=90)
+        prof = profile(
+            [
+                col("region", "categorical", 10),
+                col("product", "categorical", 9),
+                col("sales", "numeric", 90),
+            ],
+            n_rows=90,
+        )
         out = recommend(prof, "identity")
         self.assertEqual(out["form"], "small multiples")
         self.assertEqual(out["encoding"]["facet"], "product")
         self.assertIn("fold into Other / small multiples", " ".join(out["warnings"]))
 
     def test_grouped_bar_series_is_the_lower_cardinality_dimension(self):
-        prof = profile([col("region", "categorical", 5), col("product", "categorical", 9),
-                        col("sales", "numeric", 45)], n_rows=45)
+        prof = profile(
+            [
+                col("region", "categorical", 5),
+                col("product", "categorical", 9),
+                col("sales", "numeric", 45),
+            ],
+            n_rows=45,
+        )
         out = recommend(prof, "identity")
         self.assertEqual(out["form"], "grouped bar")
         self.assertEqual(out["encoding"]["x"], "product")
@@ -415,22 +549,37 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(out["encoding"]["label"], "direct")
 
     def test_eight_series_is_the_ceiling_not_past_it(self):
-        prof = profile([col("date", "temporal", 24), col("product", "categorical", 8),
-                        col("sales", "numeric", 192, scale=3)], n_rows=192)
+        prof = profile(
+            [
+                col("date", "temporal", 24),
+                col("product", "categorical", 8),
+                col("sales", "numeric", 192, scale=3),
+            ],
+            n_rows=192,
+        )
         out = recommend(prof, "identity")
         self.assertEqual(out["form"], "multi-line")
         self.assertNotIn("Cycling / generating hues past 8", " ".join(out["warnings"]))
 
     def test_more_than_seven_color_classes_is_a_table(self):
-        prof = profile([col("region", "categorical", 5), col("tier", "categorical", 9),
-                        col("sales", "numeric", 45)], n_rows=45)
+        prof = profile(
+            [
+                col("region", "categorical", 5),
+                col("tier", "categorical", 9),
+                col("sales", "numeric", 45),
+            ],
+            n_rows=45,
+        )
         out = recommend(prof, "part-to-whole")
         self.assertEqual(out["form"], "table")
-        self.assertIn("More than ~7 color classes carrying meaning", " ".join(out["warnings"]))
+        self.assertIn(
+            "More than ~7 color classes carrying meaning", " ".join(out["warnings"])
+        )
 
 
-P_ORDINAL = profile([col("tier", "categorical", 4, ordered=True),
-                     col("sales", "numeric", 100)])
+P_ORDINAL = profile(
+    [col("tier", "categorical", 4, ordered=True), col("sales", "numeric", 100)]
+)
 P_COUNTS = profile([col("status", "categorical", 4)], n_rows=40)
 
 
@@ -473,13 +622,16 @@ class ColorJobTests(unittest.TestCase):
 
     def test_one_series_forms_are_single_color(self):
         hist = profile([col("latency", "numeric", 1000)], n_rows=1000)
-        many = profile([col("segment", "categorical", 8), col("share", "numeric", 8)],
-                       n_rows=8)
-        cases = [(P_CAT_MEASURE, "ranking", "bar"),
-                 (P_CAT_MEASURE, "distribution", "dot plot"),
-                 (hist, "distribution", "histogram"),
-                 (many, "part-to-whole", "bar"),
-                 (P_TIME_ONE, "change-over-time", "line")]
+        many = profile(
+            [col("segment", "categorical", 8), col("share", "numeric", 8)], n_rows=8
+        )
+        cases = [
+            (P_CAT_MEASURE, "ranking", "bar"),
+            (P_CAT_MEASURE, "distribution", "dot plot"),
+            (hist, "distribution", "histogram"),
+            (many, "part-to-whole", "bar"),
+            (P_TIME_ONE, "change-over-time", "line"),
+        ]
         for prof, job, form in cases:
             out = recommend(prof, job)
             self.assertEqual(out["form"], form, job)
@@ -492,16 +644,33 @@ class ColorJobTests(unittest.TestCase):
         self.assertEqual(out["encoding"]["sort"], "-y")
 
     def test_no_return_path_value_ramps_nominal_categories(self):
-        nominal = (P_ONE_VALUE, P_KPI_ROW, P_CAT_MEASURE, P_GRID, P_TIME_ONE,
-                   P_TIME_SERIES, P_TIME_TWO_SCALES, P_TIME_SAME_SCALE, P_BEFORE_AFTER,
-                   P_TWO_MEASURES, P_THREE_MEASURES, P_FLOW, P_GEO, P_MANY_SERIES,
-                   P_COUNTS, profile([col("latency", "numeric", 1000)], n_rows=1000),
-                   {"n_rows": 0, "columns": [], "measures": [], "dimensions": []})
+        nominal = (
+            P_ONE_VALUE,
+            P_KPI_ROW,
+            P_CAT_MEASURE,
+            P_GRID,
+            P_TIME_ONE,
+            P_TIME_SERIES,
+            P_TIME_TWO_SCALES,
+            P_TIME_SAME_SCALE,
+            P_BEFORE_AFTER,
+            P_TWO_MEASURES,
+            P_THREE_MEASURES,
+            P_FLOW,
+            P_GEO,
+            P_MANY_SERIES,
+            P_COUNTS,
+            profile([col("latency", "numeric", 1000)], n_rows=1000),
+            {"n_rows": 0, "columns": [], "measures": [], "dimensions": []},
+        )
         for prof in nominal:
             for job in JOBS:
                 out = recommend(prof, job)
-                self.assertNotIn(out["encoding"].get("color"), ("sequential", "ordinal"),
-                                 f"{job}: {out}")
+                self.assertNotIn(
+                    out["encoding"].get("color"),
+                    ("sequential", "ordinal"),
+                    f"{job}: {out}",
+                )
 
     def test_sequential_is_never_a_category_color_job(self):
         # 'sequential' is reserved for a continuous measure on the color channel,
@@ -509,8 +678,9 @@ class ColorJobTests(unittest.TestCase):
         for prof in (P_ORDINAL, P_COUNTS, P_CAT_MEASURE, P_GRID, P_GEO):
             for job in JOBS:
                 out = recommend(prof, job)
-                self.assertNotEqual(out["encoding"].get("color"), "sequential",
-                                    f"{job}: {out}")
+                self.assertNotEqual(
+                    out["encoding"].get("color"), "sequential", f"{job}: {out}"
+                )
 
     def test_color_job_names_documented(self):
         doc = recommend_mod.__doc__
@@ -522,13 +692,22 @@ class ColorJobTests(unittest.TestCase):
 @unittest.skipIf(pd is None, "pandas not installed")
 class ProfileFrameTests(unittest.TestCase):
     def test_profile_frame_kinds(self):
-        df = pd.DataFrame({
-            "date": pd.date_range("2024-01-01", periods=6, freq="MS"),
-            "region": ["n", "s", "n", "s", "n", "s"],
-            "flag": [True, False, True, False, True, False],
-            "sales": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
-            "note": ["alpha one", "beta two", "gamma three", "delta four", "eps five", "zeta six"],
-        })
+        df = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=6, freq="MS"),
+                "region": ["n", "s", "n", "s", "n", "s"],
+                "flag": [True, False, True, False, True, False],
+                "sales": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+                "note": [
+                    "alpha one",
+                    "beta two",
+                    "gamma three",
+                    "delta four",
+                    "eps five",
+                    "zeta six",
+                ],
+            }
+        )
         prof = recommend_mod.profile_frame(df)
         kinds = {c["name"]: c["kind"] for c in prof["columns"]}
         self.assertEqual(kinds["date"], "temporal")
@@ -546,7 +725,9 @@ class ProfileFrameTests(unittest.TestCase):
         self.assertEqual(sales["scale"], 1)
 
     def test_profile_frame_geo_and_year(self):
-        df = pd.DataFrame({"iso3": ["USA", "CAN"], "year": [2020, 2021], "pop": [1e6, 3e7]})
+        df = pd.DataFrame(
+            {"iso3": ["USA", "CAN"], "year": [2020, 2021], "pop": [1e6, 3e7]}
+        )
         prof = recommend_mod.profile_frame(df)
         kinds = {c["name"]: c["kind"] for c in prof["columns"]}
         self.assertEqual(kinds["iso3"], "geo")
@@ -554,12 +735,17 @@ class ProfileFrameTests(unittest.TestCase):
         self.assertEqual(prof["measures"], ["pop"])
 
     def test_profile_frame_marks_ordered_categoricals(self):
-        df = pd.DataFrame({
-            "tier": pd.Categorical(["S", "M", "L", "XL"], categories=["S", "M", "L", "XL"],
-                                   ordered=True),
-            "team": ["a", "b", "c", "d"],
-            "sales": [1.0, 2.0, 3.0, 4.0],
-        })
+        df = pd.DataFrame(
+            {
+                "tier": pd.Categorical(
+                    ["S", "M", "L", "XL"],
+                    categories=["S", "M", "L", "XL"],
+                    ordered=True,
+                ),
+                "team": ["a", "b", "c", "d"],
+                "sales": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
         prof = recommend_mod.profile_frame(df)
         by = {c["name"]: c for c in prof["columns"]}
         self.assertTrue(by["tier"]["ordered"])
@@ -581,17 +767,26 @@ class CliTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
         self.csv = self.dir / "sales.csv"
-        pd.DataFrame({
-            "date": pd.date_range("2024-01-01", periods=12, freq="MS").strftime("%Y-%m-%d"),
-            "sales": range(12),
-        }).to_csv(self.csv, index=False)
+        pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=12, freq="MS").strftime(
+                    "%Y-%m-%d"
+                ),
+                "sales": range(12),
+            }
+        ).to_csv(self.csv, index=False)
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, str(MODULE), *args], check=False,
-                              capture_output=True, text=True, cwd=str(PROJECT))
+        return subprocess.run(
+            [sys.executable, str(MODULE), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT),
+        )
 
     def test_csv_text(self):
         r = self.run_cli(str(self.csv))
@@ -640,20 +835,35 @@ class CliTests(unittest.TestCase):
 
 # --- VAL-402 profiles -------------------------------------------------------
 # one row per date: 'weather' is a per-row attribute, not a series identity
-P_TIME_ATTR = profile([col("date", "temporal", 100, is_sorted_time=True),
-                       col("temp_max", "numeric", 60, scale=1),
-                       col("weather", "categorical", 5)], n_rows=100)
+P_TIME_ATTR = profile(
+    [
+        col("date", "temporal", 100, is_sorted_time=True),
+        col("temp_max", "numeric", 60, scale=1),
+        col("weather", "categorical", 5),
+    ],
+    n_rows=100,
+)
 # seattle-weather shape: four measures, three at 1e1, wind at 1e0
-P_SEATTLE = profile([col("date", "temporal", 1461, is_sorted_time=True),
-                     col("precipitation", "numeric", 111, scale=1),
-                     col("temp_max", "numeric", 67, scale=1),
-                     col("temp_min", "numeric", 55, scale=1),
-                     col("wind", "numeric", 79, scale=0),
-                     col("weather", "categorical", 5)], n_rows=1461)
+P_SEATTLE = profile(
+    [
+        col("date", "temporal", 1461, is_sorted_time=True),
+        col("precipitation", "numeric", 111, scale=1),
+        col("temp_max", "numeric", 67, scale=1),
+        col("temp_min", "numeric", 55, scale=1),
+        col("wind", "numeric", 79, scale=0),
+        col("weather", "categorical", 5),
+    ],
+    n_rows=1461,
+)
 # stocks shape: long format, several rows per date -> 'symbol' IS a series
-P_LONG = profile([col("symbol", "categorical", 5),
-                  col("date", "temporal", 123, is_sorted_time=False),
-                  col("price", "numeric", 549, scale=2)], n_rows=560)
+P_LONG = profile(
+    [
+        col("symbol", "categorical", 5),
+        col("date", "temporal", 123, is_sorted_time=False),
+        col("price", "numeric", 549, scale=2),
+    ],
+    n_rows=560,
+)
 OUT_DIR = PROJECT / "continuum" / "research" / "dataviz-suite" / "out"
 
 
@@ -678,16 +888,22 @@ class SeriesIdentityTests(unittest.TestCase):
     def test_per_row_attribute_never_colors_time_forms(self):
         for job in ("identity", "polarity", "change-over-time"):
             out = recommend(P_TIME_ATTR, job)
-            self.assertNotEqual(out["encoding"].get("color"), "weather", f"{job}: {out}")
-            self.assertTrue(any("'weather'" in w for w in out["warnings"]),
-                            f"{job}: {out['warnings']}")
+            self.assertNotEqual(
+                out["encoding"].get("color"), "weather", f"{job}: {out}"
+            )
+            self.assertTrue(
+                any("'weather'" in w for w in out["warnings"]),
+                f"{job}: {out['warnings']}",
+            )
 
     def test_seattle_shape_drops_weather_color(self):
         out = recommend(P_SEATTLE)
         self.assertEqual(out["form"], "small multiples")
         self.assertEqual(out["encoding"]["facet"], "measure")
         self.assertNotEqual(out["encoding"].get("color"), "weather")
-        self.assertTrue(any("'weather'" in w and "per-row" in w for w in out["warnings"]))
+        self.assertTrue(
+            any("'weather'" in w and "per-row" in w for w in out["warnings"])
+        )
 
     def test_long_format_category_is_still_a_series(self):
         out = recommend(P_LONG, "change-over-time")
@@ -718,9 +934,15 @@ class DualAxisScaleTests(unittest.TestCase):
             self.assertNotIn(m, listed(warns[0]), warns[0])
 
     def test_pairwise_three_measures(self):
-        prof = profile([col("date", "temporal", 24), col("a", "numeric", 24, scale=3),
-                        col("b", "numeric", 24, scale=6), col("c", "numeric", 24, scale=3)],
-                       n_rows=24)
+        prof = profile(
+            [
+                col("date", "temporal", 24),
+                col("a", "numeric", 24, scale=3),
+                col("b", "numeric", 24, scale=6),
+                col("c", "numeric", 24, scale=3),
+            ],
+            n_rows=24,
+        )
         warns = dual_axis(recommend(prof, "change-over-time"))
         self.assertEqual(len(warns), 1, warns)
         self.assertIn("b (1e6)", listed(warns[0]))
@@ -742,8 +964,14 @@ class DualAxisScaleTests(unittest.TestCase):
         self.assertTrue(any("'weather'" in w for w in out["warnings"]))
 
     def test_identity_grouped_bar_differing_scales_facets(self):
-        prof = profile([col("region", "categorical", 5), col("orders", "numeric", 5, scale=2),
-                        col("revenue", "numeric", 5, scale=5)], n_rows=5)
+        prof = profile(
+            [
+                col("region", "categorical", 5),
+                col("orders", "numeric", 5, scale=2),
+                col("revenue", "numeric", 5, scale=5),
+            ],
+            n_rows=5,
+        )
         out = recommend(prof, "identity")
         self.assertEqual(out["form"], "small multiples")
         self.assertEqual(out["encoding"]["x"], "region")
@@ -758,18 +986,36 @@ class DualAxisScaleTests(unittest.TestCase):
         self.assertEqual(out["form"], "multi-line")
         self.assertEqual(out["encoding"]["color"], "measure")
         self.assertEqual(dual_axis(out), [])
-        prof = profile([col("region", "categorical", 5), col("a", "numeric", 5, scale=3),
-                        col("b", "numeric", 5, scale=3)], n_rows=5)
+        prof = profile(
+            [
+                col("region", "categorical", 5),
+                col("a", "numeric", 5, scale=3),
+                col("b", "numeric", 5, scale=3),
+            ],
+            n_rows=5,
+        )
         out = recommend(prof, "identity")
         self.assertEqual(out["form"], "grouped bar")
         self.assertEqual(dual_axis(out), [])
 
     def test_no_job_puts_differing_scales_on_one_axis(self):
         # audit: a list-valued y is a shared axis unless the form is tiles / a table
-        mixed = profile([col("region", "categorical", 5), col("orders", "numeric", 5, scale=2),
-                         col("revenue", "numeric", 5, scale=5)], n_rows=5)
-        unknown = profile([col("date", "temporal", 24), col("users", "numeric", 24),
-                           col("sessions", "numeric", 24)], n_rows=24)
+        mixed = profile(
+            [
+                col("region", "categorical", 5),
+                col("orders", "numeric", 5, scale=2),
+                col("revenue", "numeric", 5, scale=5),
+            ],
+            n_rows=5,
+        )
+        unknown = profile(
+            [
+                col("date", "temporal", 24),
+                col("users", "numeric", 24),
+                col("sessions", "numeric", 24),
+            ],
+            n_rows=24,
+        )
         for prof in (P_SEATTLE, P_TIME_TWO_SCALES, mixed, unknown):
             for job in JOBS:
                 out = recommend(prof, job)
@@ -778,9 +1024,15 @@ class DualAxisScaleTests(unittest.TestCase):
                     self.assertIn(out["form"], ("KPI row", "table"), f"{job}: {out}")
 
     def test_same_scale_with_series_has_no_dual_axis_warning(self):
-        prof = profile([col("date", "temporal", 24), col("region", "categorical", 4),
-                        col("users", "numeric", 96, scale=4),
-                        col("signups", "numeric", 96, scale=4)], n_rows=96)
+        prof = profile(
+            [
+                col("date", "temporal", 24),
+                col("region", "categorical", 4),
+                col("users", "numeric", 96, scale=4),
+                col("signups", "numeric", 96, scale=4),
+            ],
+            n_rows=96,
+        )
         out = recommend(prof, "change-over-time")
         self.assertEqual(dual_axis(out), [])
         self.assertEqual(out["encoding"]["color"], "region")
@@ -839,7 +1091,6 @@ class RealDataTests(unittest.TestCase):
         out = recommend(prof)
         self.assertEqual(out["form"], "multi-line")
         self.assertEqual(out["encoding"]["color"], "symbol")
-
 
 
 if __name__ == "__main__":

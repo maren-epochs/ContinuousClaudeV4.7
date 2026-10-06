@@ -32,26 +32,42 @@ LEDGER = PROJECT / "tools" / "context_ledger.py"
 TS = "2026-10-06T02:12:30.511Z"
 
 
-def _assistant(ctx, out=10, label="autonomous", sidechain=False, usage=True, version="2.1.290"):
+def _assistant(
+    ctx, out=10, label="autonomous", sidechain=False, usage=True, version="2.1.290"
+):
     """One assistant entry whose context (input+cache_read+cache_creation) sums to ctx."""
     e = {
-        "type": "assistant", "isSidechain": sidechain, "timestamp": TS, "version": version,
-        "uuid": "u", "parentUuid": "p", "sessionId": "s",
+        "type": "assistant",
+        "isSidechain": sidechain,
+        "timestamp": TS,
+        "version": version,
+        "uuid": "u",
+        "parentUuid": "p",
+        "sessionId": "s",
         "message": {"role": "assistant", "model": "m", "content": []},
     }
     if label != "ABSENT":
         e["attributionSkill"] = label
     if usage:
         a = ctx // 3
-        e["message"]["usage"] = {"input_tokens": a, "cache_read_input_tokens": a,
-                                 "cache_creation_input_tokens": ctx - 2 * a,
-                                 "output_tokens": out, "service_tier": "standard"}
+        e["message"]["usage"] = {
+            "input_tokens": a,
+            "cache_read_input_tokens": a,
+            "cache_creation_input_tokens": ctx - 2 * a,
+            "output_tokens": out,
+            "service_tier": "standard",
+        }
     return e
 
 
 def _user(text="hi"):
-    return {"type": "user", "isSidechain": False, "timestamp": TS, "version": "2.1.290",
-            "message": {"role": "user", "content": text}}
+    return {
+        "type": "user",
+        "isSidechain": False,
+        "timestamp": TS,
+        "version": "2.1.290",
+        "message": {"role": "user", "content": text},
+    }
 
 
 class ContextLedgerTests(unittest.TestCase):
@@ -70,8 +86,15 @@ class ContextLedgerTests(unittest.TestCase):
         return str(p)
 
     def _run(self, *args, env=None, cwd=None):
-        proc = subprocess.run([sys.executable, str(LEDGER), *args], capture_output=True,
-                              text=True, encoding="utf-8", check=False, env=env, cwd=cwd)
+        proc = subprocess.run(
+            [sys.executable, str(LEDGER), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            env=env,
+            cwd=cwd,
+        )
         return proc.returncode, proc.stdout, proc.stderr
 
     def _json(self, *args, **kw):
@@ -81,14 +104,23 @@ class ContextLedgerTests(unittest.TestCase):
 
     # (a)
     def test_spans_totals_peak_version(self):
-        p = self._write("t.jsonl", [
-            _user(), _assistant(100, out=5, label="resume-handoff"),
-            _user(), _assistant(150, out=5, label="resume-handoff"),
-            _user(), _assistant(160, out=7, label="autonomous"),
-            _user(), _assistant(200, out=7, label="autonomous"),
-            _user(), _assistant(210, out=1, label="premortem"),
-            _user(), _assistant(230, out=1, label="autonomous"),
-        ])
+        p = self._write(
+            "t.jsonl",
+            [
+                _user(),
+                _assistant(100, out=5, label="resume-handoff"),
+                _user(),
+                _assistant(150, out=5, label="resume-handoff"),
+                _user(),
+                _assistant(160, out=7, label="autonomous"),
+                _user(),
+                _assistant(200, out=7, label="autonomous"),
+                _user(),
+                _assistant(210, out=1, label="premortem"),
+                _user(),
+                _assistant(230, out=1, label="autonomous"),
+            ],
+        )
         d = self._json(p)
         self.assertEqual(d["transcript"], p)
         self.assertEqual(d["version"], "2.1.290")
@@ -97,33 +129,70 @@ class ContextLedgerTests(unittest.TestCase):
         self.assertEqual(d["peak_context"], 230)
         self.assertEqual(d["total_output_tokens"], 26)
         self.assertEqual(d["compactions"], [])
-        self.assertEqual(d["spans"], [
-            {"label": "resume-handoff", "first_turn": 1, "last_turn": 2, "turns": 2,
-             "start_context": 100, "end_context": 150, "delta": 150},
-            {"label": "autonomous", "first_turn": 3, "last_turn": 4, "turns": 2,
-             "start_context": 160, "end_context": 200, "delta": 50},
-            {"label": "premortem", "first_turn": 5, "last_turn": 5, "turns": 1,
-             "start_context": 210, "end_context": 210, "delta": 10},
-            {"label": "autonomous", "first_turn": 6, "last_turn": 6, "turns": 1,
-             "start_context": 230, "end_context": 230, "delta": 20},
-        ])
-        self.assertEqual(d["skills"], {
-            "resume-handoff": {"delta": 150, "spans": 1, "turns": 2},
-            "autonomous": {"delta": 70, "spans": 2, "turns": 3},
-            "premortem": {"delta": 10, "spans": 1, "turns": 1},
-        })
+        self.assertEqual(
+            d["spans"],
+            [
+                {
+                    "label": "resume-handoff",
+                    "first_turn": 1,
+                    "last_turn": 2,
+                    "turns": 2,
+                    "start_context": 100,
+                    "end_context": 150,
+                    "delta": 150,
+                },
+                {
+                    "label": "autonomous",
+                    "first_turn": 3,
+                    "last_turn": 4,
+                    "turns": 2,
+                    "start_context": 160,
+                    "end_context": 200,
+                    "delta": 50,
+                },
+                {
+                    "label": "premortem",
+                    "first_turn": 5,
+                    "last_turn": 5,
+                    "turns": 1,
+                    "start_context": 210,
+                    "end_context": 210,
+                    "delta": 10,
+                },
+                {
+                    "label": "autonomous",
+                    "first_turn": 6,
+                    "last_turn": 6,
+                    "turns": 1,
+                    "start_context": 230,
+                    "end_context": 230,
+                    "delta": 20,
+                },
+            ],
+        )
+        self.assertEqual(
+            d["skills"],
+            {
+                "resume-handoff": {"delta": 150, "spans": 1, "turns": 2},
+                "autonomous": {"delta": 70, "spans": 2, "turns": 3},
+                "premortem": {"delta": 10, "spans": 1, "turns": 1},
+            },
+        )
 
     # (b)
     def test_sidechain_and_missing_usage_are_not_turns(self):
-        p = self._write("t.jsonl", [
-            _assistant(100, sidechain=True),
-            _assistant(100),
-            _assistant(500, usage=False),
-            {"type": "system", "subtype": "x"},
-            {"type": "progress", "data": {}},
-            _assistant(120),
-            _assistant(900, sidechain=True),
-        ])
+        p = self._write(
+            "t.jsonl",
+            [
+                _assistant(100, sidechain=True),
+                _assistant(100),
+                _assistant(500, usage=False),
+                {"type": "system", "subtype": "x"},
+                {"type": "progress", "data": {}},
+                _assistant(120),
+                _assistant(900, sidechain=True),
+            ],
+        )
         d = self._json(p)
         self.assertEqual(d["turns"], 2)
         self.assertEqual(d["skipped_lines"], 0)
@@ -133,13 +202,16 @@ class ContextLedgerTests(unittest.TestCase):
 
     # (c)
     def test_malformed_lines_skipped_and_counted(self):
-        p = self._write("t.jsonl", [
-            _assistant(100),
-            "not json at all",
-            '{"type": "assistant", "message": {"usage": {"input_tokens": 1',
-            "[1, 2, 3]",
-            _assistant(130),
-        ])
+        p = self._write(
+            "t.jsonl",
+            [
+                _assistant(100),
+                "not json at all",
+                '{"type": "assistant", "message": {"usage": {"input_tokens": 1',
+                "[1, 2, 3]",
+                _assistant(130),
+            ],
+        )
         d = self._json(p)
         self.assertEqual(d["skipped_lines"], 3)
         self.assertEqual(d["turns"], 2)
@@ -147,32 +219,44 @@ class ContextLedgerTests(unittest.TestCase):
 
     # (d)
     def test_absent_or_null_attribution_is_none(self):
-        p = self._write("t.jsonl", [
-            _assistant(100, label="ABSENT"),
-            _assistant(110, label=None),
-            _assistant(120, label="review"),
-            _assistant(125, label=None),
-        ])
+        p = self._write(
+            "t.jsonl",
+            [
+                _assistant(100, label="ABSENT"),
+                _assistant(110, label=None),
+                _assistant(120, label="review"),
+                _assistant(125, label=None),
+            ],
+        )
         d = self._json(p)
-        self.assertEqual([s["label"] for s in d["spans"]], ["(none)", "review", "(none)"])
+        self.assertEqual(
+            [s["label"] for s in d["spans"]], ["(none)", "review", "(none)"]
+        )
         self.assertEqual(d["spans"][0]["turns"], 2)
         self.assertEqual(d["skills"]["(none)"], {"delta": 115, "spans": 2, "turns": 3})
 
     # (e)
     def test_compaction_listed_and_excluded_from_delta(self):
-        p = self._write("t.jsonl", [
-            _assistant(100000, label="a"),
-            _assistant(150000, label="a"),
-            _assistant(160000, label="b"),
-            _assistant(200000, label="b"),
-            _assistant(50000, label="b"),   # drop 150000 -> compaction
-            _assistant(70000, label="b"),
-            _assistant(55000, label="b"),   # drop 15000 -> not a compaction (<= 20000)
-        ])
+        p = self._write(
+            "t.jsonl",
+            [
+                _assistant(100000, label="a"),
+                _assistant(150000, label="a"),
+                _assistant(160000, label="b"),
+                _assistant(200000, label="b"),
+                _assistant(50000, label="b"),  # drop 150000 -> compaction
+                _assistant(70000, label="b"),
+                _assistant(
+                    55000, label="b"
+                ),  # drop 15000 -> not a compaction (<= 20000)
+            ],
+        )
         d = self._json(p)
         self.assertEqual(d["compactions"], [{"turn": 5, "from": 200000, "to": 50000}])
         self.assertEqual(d["peak_context"], 200000)
-        self.assertEqual([s["delta"] for s in d["spans"]], [150000, 10000 + 40000 + 20000 - 15000])
+        self.assertEqual(
+            [s["delta"] for s in d["spans"]], [150000, 10000 + 40000 + 20000 - 15000]
+        )
         # invariant: sum of span deltas minus compaction drops == final context
         drops = sum(c["from"] - c["to"] for c in d["compactions"])
         self.assertEqual(sum(s["delta"] for s in d["spans"]) - drops, 55000)
@@ -180,16 +264,27 @@ class ContextLedgerTests(unittest.TestCase):
 
     # (f)
     def test_text_output_ascii_tables(self):
-        p = self._write("t.jsonl", [
-            _assistant(100000, label="resume-handoff"),
-            _assistant(150000, label="autonomous"),
-            _assistant(100, label="premortem"),
-        ])
+        p = self._write(
+            "t.jsonl",
+            [
+                _assistant(100000, label="resume-handoff"),
+                _assistant(150000, label="autonomous"),
+                _assistant(100, label="premortem"),
+            ],
+        )
         code, out, err = self._run(p)
         self.assertEqual(code, 0, err)
         self.assertTrue(all(ord(ch) < 128 for ch in out), "non-ASCII in text output")
-        for frag in ("SPANS", "SKILLS", "resume-handoff", "autonomous", "premortem",
-                     "version", "peak", "compactions"):
+        for frag in (
+            "SPANS",
+            "SKILLS",
+            "resume-handoff",
+            "autonomous",
+            "premortem",
+            "version",
+            "peak",
+            "compactions",
+        ):
             self.assertIn(frag, out)
         self.assertIn("2.1.290", out)
         self.assertIn("150000", out.replace(",", ""))
@@ -212,8 +307,12 @@ class ContextLedgerTests(unittest.TestCase):
         folder.mkdir(parents=True)
         old = folder / "11111111-aaaa-bbbb-cccc-222222222222.jsonl"
         new = folder / "33333333-aaaa-bbbb-cccc-444444444444.jsonl"
-        old.write_text(json.dumps(_assistant(100, label="old")) + "\n", encoding="utf-8")
-        new.write_text(json.dumps(_assistant(200, label="new")) + "\n", encoding="utf-8")
+        old.write_text(
+            json.dumps(_assistant(100, label="old")) + "\n", encoding="utf-8"
+        )
+        new.write_text(
+            json.dumps(_assistant(200, label="new")) + "\n", encoding="utf-8"
+        )
         t = time.time()
         os.utime(old, (t - 1000, t - 1000))
         os.utime(new, (t, t))
@@ -244,7 +343,9 @@ class ContextLedgerTests(unittest.TestCase):
     # (h)
     def test_exit_codes(self):
         self.assertEqual(self._run(str(self.dir / "nope.jsonl"))[0], 2)
-        empty = self._write("empty.jsonl", [_user(), _assistant(1, usage=False), "garbage"])
+        empty = self._write(
+            "empty.jsonl", [_user(), _assistant(1, usage=False), "garbage"]
+        )
         code, out, err = self._run(empty)
         self.assertEqual(code, 1)
         self.assertIn("no assistant usage turns", err.lower())
@@ -267,7 +368,10 @@ class ContextLedgerTests(unittest.TestCase):
                     fh.write(json.dumps(_user("x" * 200)) + "\n")
                 else:
                     ctx = ctx + 300 if i % 4001 else 30000
-                    fh.write(json.dumps(_assistant(ctx, label=labels[(i // 2000) % 4])) + "\n")
+                    fh.write(
+                        json.dumps(_assistant(ctx, label=labels[(i // 2000) % 4]))
+                        + "\n"
+                    )
         t0 = time.perf_counter()
         d = self._json(str(p))
         elapsed = time.perf_counter() - t0

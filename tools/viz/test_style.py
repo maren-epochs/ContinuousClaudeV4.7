@@ -7,6 +7,7 @@ Every backend renders one bar, one line and one scatter headlessly into a
 tempfile directory under warnings-as-errors; files must exist and be nonzero.
 Matplotlib output is read back with PIL to prove dark and light differ.
 """
+
 import contextlib
 import dataclasses
 import functools
@@ -46,22 +47,40 @@ def strict():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         for category, module, message in KNOWN_WARNINGS:
-            warnings.filterwarnings("ignore", category=category, module=module,
-                                    message=message)
+            warnings.filterwarnings(
+                "ignore", category=category, module=module, message=message
+            )
         yield
 
 
 GLYPH_MISSING = re.compile(r"Glyph .* missing")
-GENERIC_FAMILIES = {"sans-serif", "serif", "monospace", "cursive", "fantasy",
-                    "system-ui", "-apple-system"}
+GENERIC_FAMILIES = {
+    "sans-serif",
+    "serif",
+    "monospace",
+    "cursive",
+    "fantasy",
+    "system-ui",
+    "-apple-system",
+}
 # Independent of style.py's detector so a broken detector cannot skip the test.
-CJK_FAMILIES = ("Microsoft YaHei", "Yu Gothic", "Malgun Gothic", "MS Gothic",
-                "Noto Sans CJK SC", "Noto Sans CJK JP", "Source Han Sans SC",
-                "PingFang SC", "Hiragino Sans", "WenQuanYi Zen Hei")
+CJK_FAMILIES = (
+    "Microsoft YaHei",
+    "Yu Gothic",
+    "Malgun Gothic",
+    "MS Gothic",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "Hiragino Sans",
+    "WenQuanYi Zen Hei",
+)
 
 
 def installed_families():
     from matplotlib import font_manager
+
     return {f.name for f in font_manager.fontManager.ttflist}
 
 
@@ -72,6 +91,7 @@ CJK_SCRIPTS = {"han": 0x4E2D, "kana": 0x3042, "hangul": 0xD55C}
 def cjk_coverage():
     """{installed CJK_FAMILIES name: set of CJK_SCRIPTS its regular face maps}."""
     from matplotlib import font_manager
+
     installed = installed_families()
     coverage = {}
     for name in CJK_FAMILIES:
@@ -90,7 +110,7 @@ def installed_cjk_families():
 
 def hex_to_rgb(value):
     value = value.lstrip("#")
-    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def assert_file(test, path):
@@ -110,9 +130,11 @@ class StyleSource(unittest.TestCase):
             f"import sys; sys.path.insert(0, {REPO_ROOT!r}); import tools.viz.style; "
             "print(sorted(m for m in ('plotly', 'altair', 'bokeh', 'seaborn', "
             "'great_tables') "
-            "if m in sys.modules)); print('matplotlib' in sys.modules)")
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                              text=True, check=False)
+            "if m in sys.modules)); print('matplotlib' in sys.modules)"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=False
+        )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.split(), ["[]", "True"])
 
@@ -136,8 +158,9 @@ class MatplotlibStyle(unittest.TestCase):
                 tx = palette.text(mode)
                 cyc = [c["color"] for c in rc["axes.prop_cycle"]]
                 self.assertEqual(cyc, palette.categorical(mode))
-                self.assertEqual(cyc, [c["color"]
-                                       for c in matplotlib.rcParams["axes.prop_cycle"]])
+                self.assertEqual(
+                    cyc, [c["color"] for c in matplotlib.rcParams["axes.prop_cycle"]]
+                )
                 # 2px line at the 100dpi reference = 1.44pt, rounded to 1.5pt
                 self.assertGreaterEqual(rc["lines.linewidth"], style.px_to_pt(2))
                 self.assertEqual(rc["lines.linewidth"], 1.5)
@@ -186,14 +209,16 @@ class MatplotlibStyle(unittest.TestCase):
             # every installed CJK-capable candidate, in order, between the
             # palette font and DejaVu Sans
             cjk = installed_cjk_families()
-            self.assertEqual(families,
-                             list(dict.fromkeys([family, *cjk, "DejaVu Sans"])))
+            self.assertEqual(
+                families, list(dict.fromkeys([family, *cjk, "DejaVu Sans"]))
+            )
             self.assertEqual(list(style.cjk_fonts()), cjk)
             self.assertTrue(hasattr(style.cjk_fonts, "cache_info"))  # lru_cache
         self.assertEqual(style.resolve_font(["No Such Face 123"]), "DejaVu Sans")
 
     def test_mixed_script_labels_have_no_missing_glyphs(self):
         import matplotlib.pyplot as plt
+
         labels = {
             "latin": "Revenue by region",
             "greek": "Δ growth αβγ σ μ",
@@ -206,8 +231,10 @@ class MatplotlibStyle(unittest.TestCase):
         for script, text in labels.items():
             with self.subTest(script=script):
                 if script in CJK_SCRIPTS and script not in covered:
-                    self.skipTest(f"no installed font covers {script} "
-                                  f"(checked {', '.join(CJK_FAMILIES)})")
+                    self.skipTest(
+                        f"no installed font covers {script} "
+                        f"(checked {', '.join(CJK_FAMILIES)})"
+                    )
                 for mode in MODES:
                     with matplotlib.rc_context(), strict():
                         style.apply_matplotlib(mode)
@@ -238,10 +265,12 @@ class MatplotlibStyle(unittest.TestCase):
             self.assertEqual(rc["image.cmap"], "house-seq")
             seq = matplotlib.colormaps["house-seq"]
             div = matplotlib.colormaps["house-div-light"]
-            self.assertEqual(matplotlib.colors.to_hex(seq(0.0)),
-                             palette.sequential()[0])
-            self.assertEqual(matplotlib.colors.to_hex(seq(1.0)),
-                             palette.sequential()[-1])
+            self.assertEqual(
+                matplotlib.colors.to_hex(seq(0.0)), palette.sequential()[0]
+            )
+            self.assertEqual(
+                matplotlib.colors.to_hex(seq(1.0)), palette.sequential()[-1]
+            )
             low, _mid, high = palette.diverging("light")
             self.assertEqual(matplotlib.colors.to_hex(div(0.0)), low)
             self.assertEqual(matplotlib.colors.to_hex(div(1.0)), high)
@@ -251,6 +280,7 @@ class MatplotlibStyle(unittest.TestCase):
     def test_renders_both_modes_and_surfaces_differ(self):
         import matplotlib.pyplot as plt
         from PIL import Image
+
         corners = {}
         with tempfile.TemporaryDirectory() as tmp:
             for mode in MODES:
@@ -259,9 +289,11 @@ class MatplotlibStyle(unittest.TestCase):
                     bar_kw = style.bar_kwargs(mode)
                     kinds = {
                         "bar": lambda ax, kw=bar_kw: ax.bar(X, Y, **kw),
-                        "line": lambda ax: (ax.plot(X, Y, marker="o", label="a"),
-                                            ax.plot(X, Y2, marker="o", label="b"),
-                                            ax.legend()),
+                        "line": lambda ax: (
+                            ax.plot(X, Y, marker="o", label="a"),
+                            ax.plot(X, Y2, marker="o", label="b"),
+                            ax.legend(),
+                        ),
                         "scatter": lambda ax: ax.scatter(X, Y),
                     }
                     for kind, draw in kinds.items():
@@ -276,8 +308,9 @@ class MatplotlibStyle(unittest.TestCase):
                     with Image.open(os.path.join(tmp, f"bar-{mode}.png")) as im:
                         corners[mode] = im.convert("RGB").getpixel((0, 0))
                         self.assertGreater(im.width, 400)  # 4in * 144dpi minus tight
-                self.assertEqual(corners[mode],
-                                 hex_to_rgb(palette.surface(mode)["surface"]))
+                self.assertEqual(
+                    corners[mode], hex_to_rgb(palette.surface(mode)["surface"])
+                )
             with open(os.path.join(tmp, "line-light.svg"), encoding="utf-8") as fh:
                 svg = fh.read()
             self.assertIn("<text", svg)  # svg.fonttype none keeps text editable
@@ -287,17 +320,28 @@ class MatplotlibStyle(unittest.TestCase):
         with matplotlib.rc_context(), strict():
             rc = style.set_seaborn("dark")
             import seaborn as sns
+
             self.assertEqual(sns.color_palette().as_hex(), palette.categorical("dark"))
-            self.assertEqual(matplotlib.rcParams["axes.facecolor"],
-                             palette.surface("dark")["surface"])
-            self.assertEqual(matplotlib.rcParams["lines.linewidth"], rc["lines.linewidth"])
+            self.assertEqual(
+                matplotlib.rcParams["axes.facecolor"],
+                palette.surface("dark")["surface"],
+            )
+            self.assertEqual(
+                matplotlib.rcParams["lines.linewidth"], rc["lines.linewidth"]
+            )
             self.assertEqual(matplotlib.rcParams["savefig.dpi"], 144)
 
 
 class StyleCli(unittest.TestCase):
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, STYLE_PY, *args], capture_output=True,
-                              text=True, encoding="utf-8", check=False, cwd=REPO_ROOT)
+        return subprocess.run(
+            [sys.executable, STYLE_PY, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            cwd=REPO_ROOT,
+        )
 
     def test_help_prints_usage_and_exits_0(self):
         for flag in ("--help", "-h"):
@@ -315,6 +359,7 @@ class StyleCli(unittest.TestCase):
 
     def test_mode_dumps_json(self):
         import json
+
         for args in ((), ("dark",)):
             proc = self.run_cli(*args)
             self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -326,6 +371,7 @@ class StyleCli(unittest.TestCase):
 class PlotlyStyle(unittest.TestCase):
     def test_template_registered_not_default(self):
         import plotly.io as pio
+
         before = pio.templates.default
         for mode in MODES:
             with strict():
@@ -352,6 +398,7 @@ class PlotlyStyle(unittest.TestCase):
 
     def test_renders(self):
         import plotly.graph_objects as go
+
         fallback = []
         with tempfile.TemporaryDirectory() as tmp:
             for mode in MODES:
@@ -359,8 +406,12 @@ class PlotlyStyle(unittest.TestCase):
                     name = style.plotly_template(mode)
                     figs = {
                         "bar": go.Figure(go.Bar(x=X, y=Y)),
-                        "line": go.Figure([go.Scatter(x=X, y=Y, mode="lines+markers"),
-                                           go.Scatter(x=X, y=Y2, mode="lines+markers")]),
+                        "line": go.Figure(
+                            [
+                                go.Scatter(x=X, y=Y, mode="lines+markers"),
+                                go.Scatter(x=X, y=Y2, mode="lines+markers"),
+                            ]
+                        ),
                         "scatter": go.Figure(go.Scatter(x=X, y=Y, mode="markers")),
                     }
                     for kind, fig in figs.items():
@@ -371,7 +422,9 @@ class PlotlyStyle(unittest.TestCase):
                         except Exception as exc:  # noqa: BLE001 - kaleido/Chrome absent
                             path = os.path.join(tmp, f"{kind}-{mode}.html")
                             fig.write_html(path, include_plotlyjs="cdn")
-                            fallback.append(f"{kind}-{mode}: {type(exc).__name__}: {exc}")
+                            fallback.append(
+                                f"{kind}-{mode}: {type(exc).__name__}: {exc}"
+                            )
                         assert_file(self, path)
         if fallback:
             print("PLOTLY_HTML_FALLBACK", fallback, file=sys.stderr)
@@ -380,6 +433,7 @@ class PlotlyStyle(unittest.TestCase):
 class AltairStyle(unittest.TestCase):
     def test_theme_registered_not_enabled(self):
         import altair as alt
+
         before = alt.theme.active
         for mode in MODES:
             with strict():
@@ -408,6 +462,7 @@ class AltairStyle(unittest.TestCase):
         # VAL-501: range.ordinal stays inside palette.json ordinal_bounds for the
         # mode, adjacent steps >= 100 apart, passes validate_palette --ordinal.
         from tools.viz import validate_palette
+
         data = palette.load()
         full = palette.ramp()
         names = list(full)
@@ -426,9 +481,20 @@ class AltairStyle(unittest.TestCase):
             rep = validate_palette.validate(ordinal, mode=mode, ordinal=True)
             self.assertTrue(rep["ok"], (mode, rep["checks"]))
             proc = subprocess.run(
-                [sys.executable, validator, ",".join(ordinal), "--mode", mode, "--ordinal"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                check=False)
+                [
+                    sys.executable,
+                    validator,
+                    ",".join(ordinal),
+                    "--mode",
+                    mode,
+                    "--ordinal",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
             self.assertEqual(proc.returncode, 0, (mode, proc.stdout, proc.stderr))
         light = style.altair_config("light")["config"]["range"]["ordinal"]
         dark = style.altair_config("dark")["config"]["range"]["ordinal"]
@@ -437,6 +503,7 @@ class AltairStyle(unittest.TestCase):
     def test_renders(self):
         import altair as alt
         import pandas as pd
+
         df = pd.DataFrame({"x": X, "y": Y, "s": ["a", "b", "a", "b"]})
         with tempfile.TemporaryDirectory() as tmp:
             for mode in MODES:
@@ -445,8 +512,9 @@ class AltairStyle(unittest.TestCase):
                     base = alt.Chart(df)
                     charts = {
                         "bar": base.mark_bar().encode(x="x:O", y="y:Q"),
-                        "line": base.mark_line(point=True).encode(x="x:Q", y="y:Q",
-                                                                  color="s:N"),
+                        "line": base.mark_line(point=True).encode(
+                            x="x:Q", y="y:Q", color="s:N"
+                        ),
                         "scatter": base.mark_point().encode(x="x:Q", y="y:Q"),
                     }
                     with alt.theme.enable(name):
@@ -459,6 +527,7 @@ class AltairStyle(unittest.TestCase):
 class BokehStyle(unittest.TestCase):
     def test_theme_and_palette(self):
         from bokeh.themes import Theme
+
         for mode in MODES:
             with strict():
                 theme = style.bokeh_theme(mode)
@@ -469,15 +538,19 @@ class BokehStyle(unittest.TestCase):
             self.assertEqual(attrs["Plot"]["border_fill_color"], sf["surface"])
             self.assertEqual(attrs["Axis"]["axis_line_color"], sf["axis"])
             self.assertEqual(attrs["Grid"]["grid_line_color"], sf["grid"])
-            self.assertEqual(attrs["Title"]["text_color"], palette.text(mode)["primary"])
-            self.assertEqual(attrs["Legend"]["label_text_color"],
-                             palette.text(mode)["secondary"])
+            self.assertEqual(
+                attrs["Title"]["text_color"], palette.text(mode)["primary"]
+            )
+            self.assertEqual(
+                attrs["Legend"]["label_text_color"], palette.text(mode)["secondary"]
+            )
             self.assertEqual(list(style.bokeh_palette(mode)), palette.categorical(mode))
 
     def test_renders_html(self):
         from bokeh.embed import file_html
         from bokeh.plotting import figure
         from bokeh.resources import INLINE
+
         with tempfile.TemporaryDirectory() as tmp:
             for mode in MODES:
                 with strict():
@@ -490,7 +563,11 @@ class BokehStyle(unittest.TestCase):
                     line.line(X, Y2, color=pal[1], legend_label="b")
                     scatter = figure(title=f"scatter {mode}", width=400, height=300)
                     scatter.scatter(X, Y, color=pal[0])
-                    for kind, fig in (("bar", bar), ("line", line), ("scatter", scatter)):
+                    for kind, fig in (
+                        ("bar", bar),
+                        ("line", line),
+                        ("scatter", scatter),
+                    ):
                         html = file_html(fig, INLINE, title=kind, theme=theme)
                         path = os.path.join(tmp, f"{kind}-{mode}.html")
                         with open(path, "w", encoding="utf-8") as fh:
@@ -502,12 +579,16 @@ class BokehStyle(unittest.TestCase):
 def gt_table():
     import great_tables as gt
     import pandas as pd
-    frame = pd.DataFrame({"month": ["Jan", "Feb"], "temp": [8.25, 10.5],
-                          "precip": [142.0, 99.75]})
-    return (gt.GT(frame, rowname_col="month")
-            .tab_header(title="Weather", subtitle="by month")
-            .fmt_number(columns=["temp", "precip"], decimals=1)
-            .tab_source_note("Source: test"))
+
+    frame = pd.DataFrame(
+        {"month": ["Jan", "Feb"], "temp": [8.25, 10.5], "precip": [142.0, 99.75]}
+    )
+    return (
+        gt.GT(frame, rowname_col="month")
+        .tab_header(title="Weather", subtitle="by month")
+        .fmt_number(columns=["temp", "precip"], decimals=1)
+        .tab_source_note("Source: test")
+    )
 
 
 def gt_option(table, name):
@@ -535,8 +616,12 @@ class GreatTablesStyle(unittest.TestCase):
             self.assertEqual(opt("table_body_border_top_width"), "0px")
             self.assertEqual(opt("table_body_hlines_width"), hairline)
             self.assertEqual(opt("table_body_hlines_color"), sf["grid"])
-            for name in ("table_border_top", "table_border_bottom",
-                         "heading_border_bottom", "column_labels_border_top"):
+            for name in (
+                "table_border_top",
+                "table_border_bottom",
+                "heading_border_bottom",
+                "column_labels_border_top",
+            ):
                 self.assertEqual(opt(f"{name}_style"), "none", name)
             # margin around the table (container padding)
             self.assertEqual(opt("container_padding_x"), margin)
@@ -547,17 +632,25 @@ class GreatTablesStyle(unittest.TestCase):
         allowed_widths = {f"{style.HAIRLINE_PX}px", "0px"}
         for mode in MODES:
             table = style.gt_style(gt_table(), mode)
-            tokens = set(palette.surface(mode).values()) | set(palette.text(mode).values())
+            tokens = set(palette.surface(mode).values()) | set(
+                palette.text(mode).values()
+            )
             names = [f.name for f in dataclasses.fields(table._options)]
             for name in names:
                 value = gt_option(table, name)
                 if name.endswith("_width") and ("border" in name or "lines" in name):
-                    style_name = name[:-len("_width")] + "_style"
-                    hidden = style_name in names and gt_option(table, style_name) == "none"
+                    style_name = name[: -len("_width")] + "_style"
+                    hidden = (
+                        style_name in names and gt_option(table, style_name) == "none"
+                    )
                     if not hidden:
                         self.assertIn(value, allowed_widths, f"{mode} {name}={value}")
-                if (name.endswith("_color") and name != "table_font_color_light"
-                        and isinstance(value, str) and value.startswith("#")):
+                if (
+                    name.endswith("_color")
+                    and name != "table_font_color_light"
+                    and isinstance(value, str)
+                    and value.startswith("#")
+                ):
                     self.assertIn(value, tokens, f"{mode} {name}={value}")
 
     def test_rendered_html_carries_tokens_font_and_tabular_nums(self):
@@ -569,19 +662,27 @@ class GreatTablesStyle(unittest.TestCase):
             self.assertTrue(table_id, "gt_style must pin a table id for its scoped css")
             css = "\n".join(gt_option(table, "table_additional_css"))
             self.assertIn(f"#{table_id}", css)
-            self.assertRegex(css, rf"#{table_id}\s*\{{[^}}]*background-color:\s*{sf['surface']}")
-            self.assertRegex(css, r"\.gt_table_body[^{]*\{[^}]*font-variant-numeric:\s*"
-                                  r"tabular-nums")
+            self.assertRegex(
+                css, rf"#{table_id}\s*\{{[^}}]*background-color:\s*{sf['surface']}"
+            )
+            self.assertRegex(
+                css,
+                r"\.gt_table_body[^{]*\{[^}]*font-variant-numeric:\s*"
+                r"tabular-nums",
+            )
             for cls in ("gt_col_heading", "gt_subtitle", "gt_sourcenote"):
-                self.assertRegex(css, rf"\.{cls}[^{{]*\{{[^}}]*color:\s*{tx['secondary']}",
-                                 cls)
+                self.assertRegex(
+                    css, rf"\.{cls}[^{{]*\{{[^}}]*color:\s*{tx['secondary']}", cls
+                )
             self.assertIn(css.splitlines()[0], html)
             self.assertIn("Segoe UI", html)
             tokens = set(sf.values()) | set(tx.values())
             stray = re.sub(rf"#{re.escape(table_id)}\b", "", css)
             for token in tokens:
                 stray = stray.replace(token, "")
-            self.assertNotIn("#", stray, "only token hexes and the id selector in the css")
+            self.assertNotIn(
+                "#", stray, "only token hexes and the id selector in the css"
+            )
 
     def test_existing_id_kept_input_untouched_bad_mode(self):
         base = gt_table().with_id("weather")
@@ -589,8 +690,10 @@ class GreatTablesStyle(unittest.TestCase):
         self.assertEqual(gt_option(styled, "table_id"), "weather")
         self.assertIn("#weather", "\n".join(gt_option(styled, "table_additional_css")))
         self.assertIsNone(gt_option(base, "table_additional_css") or None)
-        self.assertNotEqual(gt_option(base, "table_background_color"),
-                            palette.surface("dark")["surface"])
+        self.assertNotEqual(
+            gt_option(base, "table_background_color"),
+            palette.surface("dark")["surface"],
+        )
         with self.assertRaises(ValueError):
             style.gt_style(base, "sepia")
 
