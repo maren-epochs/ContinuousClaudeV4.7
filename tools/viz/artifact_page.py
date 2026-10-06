@@ -61,7 +61,8 @@ the bridge replaces it in its per-render clone with the current value of
 --<name> and re-resolves it on every theme change, so one spec is correct in
 light and dark. token(name) returns the reference string, e.g. a raw series
 `{"mark": {"type": "line", "color": token("text-muted")}}` beside a smoothed
-series in token("series-1"). Valid names are the css_tokens names defined in
+series in token("series-1"); an emphasis chart (1 hue + gray) puts the context
+series in token("gray") and the highlighted one in token("series-1"). Valid names are the css_tokens names defined in
 both modes (TOKEN_NAMES); prepare_chart / build_page raise ValueError naming
 an unknown one (the prefix is reserved in every spec string, inline data
 included). A reference the page cannot resolve at render time stays as-is

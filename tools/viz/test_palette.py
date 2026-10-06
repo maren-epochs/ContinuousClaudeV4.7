@@ -274,11 +274,61 @@ class JsonAndPythonStayInSync(unittest.TestCase):
         data = raw_json()
         for mode in MODES:
             m = data["modes"][mode]
-            for c in m["categorical"] + list(m["status"].values()) + list(m["text"].values()):
+            for c in m["categorical"] + list(m["status"].values()) + list(m["text"].values()) \
+                    + [m["gray"]]:
                 self.assertTrue(validate_palette.is_hex_color(c), c)
         for steps in data["ramps"].values():
             for c in steps.values():
                 self.assertTrue(validate_palette.is_hex_color(c), c)
+
+
+class GrayDeemphasis(unittest.TestCase):
+    """VAL-502: neutral de-emphasis gray per mode for '1 hue + gray' (emphasis) charts."""
+
+    def documented_neutrals(self, mode):
+        """Every neutral palette.md documents for a mode (rule 6: no invented hex)."""
+        m = raw_json()["modes"][mode]
+        return set(m["text"].values()) | {m["surface"], m["surface_alt"], m["grid"], m["axis"]} \
+            | {raw_json()["diverging"][mode]["mid"]}
+
+    def test_gray_matches_json_and_is_hex(self):
+        data = raw_json()
+        for mode in MODES:
+            self.assertEqual(palette.gray(mode), data["modes"][mode]["gray"])
+            self.assertTrue(validate_palette.is_hex_color(palette.gray(mode)))
+        with self.assertRaises(ValueError):
+            palette.gray("sepia")
+
+    def test_gray_is_a_documented_neutral(self):
+        for mode in MODES:
+            self.assertIn(palette.gray(mode), self.documented_neutrals(mode))
+
+    def test_gray_clears_3_to_1_on_mode_surface(self):
+        for mode in MODES:
+            cr = validate_palette.contrast(palette.gray(mode), palette.surface(mode)["surface"])
+            self.assertGreaterEqual(cr, 3.0, f"{mode}: {cr:.2f}")
+            report = validate_palette.validate([palette.gray(mode)], mode=mode)
+            self.assertEqual(report["checks"]["Contrast vs surface"]["status"], "PASS", report)
+
+    def test_gray_reads_gray_to_the_validator(self):
+        # The chroma floor is what separates identity hues from gray; a de-emphasis
+        # token that cleared it would compete with the accent.
+        for mode in MODES:
+            report = validate_palette.validate([palette.gray(mode)], mode=mode)
+            self.assertEqual(report["checks"]["Chroma floor"]["status"], "FAIL", report)
+
+    def test_gray_separates_from_series_1_accent(self):
+        for mode in MODES:
+            g, accent = palette.gray(mode), palette.categorical(mode)[0]
+            self.assertGreaterEqual(validate_palette.deltaE(g, accent),
+                                    validate_palette.NORMAL_FLOOR, mode)
+            cvd = min(validate_palette.deltaE(g, accent, k) for k in ("protan", "deutan"))
+            self.assertGreaterEqual(cvd, validate_palette.CVD_TARGET, mode)
+
+    def test_gray_in_tokens_and_css(self):
+        for mode in MODES:
+            self.assertEqual(palette.tokens(mode)["gray"], palette.gray(mode))
+            self.assertIn(f"--gray: {palette.gray(mode)};", palette.css_tokens(mode).splitlines())
 
 
 class VendoredValidator(unittest.TestCase):

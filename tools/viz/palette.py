@@ -10,6 +10,7 @@ skill's references/palette.md); this module never carries a hex literal.
     palette.sequential()                # default hue ramp, light -> dark
     palette.ordinal("dark")             # ramp steps inside ordinal_bounds, >= 100 apart
     palette.diverging("light")          # (low, mid, high)
+    palette.gray("dark")                # de-emphasis gray (1 hue + gray), --gray
     palette.css_tokens("dark")          # "--surface-1: #1a1a19;" lines
 """
 import copy
@@ -144,6 +145,12 @@ def text(mode="light"):
     return dict(_mode(mode)["text"])
 
 
+def gray(mode="light"):
+    """De-emphasis gray for emphasis charts (1 hue + gray): the context series in gray,
+    the highlighted one in categorical slot 1. >= 3:1 on the mode surface."""
+    return _mode(mode)["gray"]
+
+
 def texture():
     return copy.deepcopy(_load_cached()["texture"])
 
@@ -163,6 +170,7 @@ def tokens(mode="light"):
     out["grid"] = sf["grid"]
     out["axis"] = sf["axis"]
     out["border"] = sf["border"]
+    out["gray"] = gray(mode)
     for i, c in enumerate(categorical(mode), start=1):
         out[f"series-{i}"] = c
     for k, v in status(mode).items():

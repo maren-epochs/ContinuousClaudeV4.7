@@ -977,6 +977,28 @@ class TokenReferences(unittest.TestCase):
         self.assertIn('"token:text-muted"', html)
         self.assertIn('"token:series-1"', html)
 
+    def test_gray_token_is_declared_both_modes(self):
+        # VAL-502: token('gray') is valid and the page declares --gray per theme scope.
+        self.assertIn("gray", ap.TOKEN_NAMES)
+        self.assertEqual(ap.token("gray"), "token:gray")
+        html = ap.build_page([gray_emphasis_vl()], "Token Check Page")
+        self.assertIn('"token:gray"', html)
+        for mode in ("light", "dark"):
+            self.assertIn(f"--gray: {palette.gray(mode)};", html)
+
+
+def gray_emphasis_vl():
+    """'1 hue + gray' emphasis: context series in token:gray, the highlight in token:series-1."""
+    rows = [{"day": i, "ctx": 10 + (i * 7) % 5, "hi": 11 + i * 0.2} for i in range(12)]
+    x = {"field": "day", "type": "quantitative"}
+    return {"kind": "vega-lite", "title": "Highlight one series", "height": 300, "spec": {
+        "data": {"values": rows},
+        "layer": [
+            {"mark": {"type": "line", "color": ap.token("gray")},
+             "encoding": {"x": x, "y": {"field": "ctx", "type": "quantitative"}}},
+            {"mark": {"type": "line", "color": ap.token("series-1")},
+             "encoding": {"x": x, "y": {"field": "hi", "type": "quantitative"}}}]}}
+
 
 @unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
 @unittest.skipUnless(CDN_OK, CDN_SKIP)
@@ -1042,6 +1064,29 @@ class LiveTokens(unittest.TestCase):
                     .trim())""")
                 self.assertEqual(colors, tok)
                 if _step == mode:
+                    self.toggle(page)
+
+    def test_gray_token_resolves_per_theme(self):
+        sel = "#chart-1-plot g.mark-line path"
+        js = r"""(sel) => {
+          const ctx = document.createElement('canvas').getContext('2d');
+          const norm = (c) => { ctx.fillStyle = '#000'; ctx.fillStyle = c; return ctx.fillStyle; };
+          const root = document.documentElement;
+          return {strokes: [...document.querySelectorAll(sel)].map(
+                    (p) => norm(p.getAttribute('stroke') || 'none')),
+                  gray: norm(getComputedStyle(root).getPropertyValue('--gray').trim()),
+                  theme: root.getAttribute('data-theme')};
+        }"""
+        for mode in ("light", "dark"):
+            page = self.open([gray_emphasis_vl()], mode)
+            for step in (mode, "toggled"):
+                m = page.evaluate(js, sel)
+                shown = mode if step == mode else ("dark" if mode == "light" else "light")
+                self.assertEqual(m["gray"], palette.gray(shown).lower(), f"{mode}/{step}: {m}")
+                self.assertEqual(len(m["strokes"]), 2, m)
+                self.assertEqual(m["strokes"][0], m["gray"], f"{mode}/{step}: {m}")
+                self.assertNotEqual(m["strokes"][1], m["gray"], m)
+                if step == mode:
                     self.toggle(page)
 
     def test_unresolvable_token_stays_and_reports(self):
