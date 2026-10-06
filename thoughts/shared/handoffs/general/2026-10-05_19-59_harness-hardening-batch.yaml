@@ -7,7 +7,7 @@ outcome: PARTIAL_PLUS
 
 # ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
 goal: Hardened harness - sandbox, guards, validator, bloks fork, handoff root; E2E /autonomous passed
-now: Push 2 local commits (GitHub 500s), user removes .claude/settings.json (fastedit denies all Edits)
+now: User removes .claude/settings.json (fastedit denies all Edits); then fix validator patch-class milestone
 test: for t in .claude/hooks/test_*.sh; do bash $t | tail -1; done; py -3.13 tools/test_ouros_policy.py; py -3.13 tools/test_validate_report.py; py -3.13 install/test_sync_global.py; py -3.13 tools/test_ouros_harness_ds.py
 
 # ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
@@ -39,18 +39,18 @@ mental_model: |
 # ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
 codebase_state:
   builds: true
-  tests_passing: all (status 35, stop-guard 31, pre-compact 22, tldr-read 21, worker-check 10, post-edit 8, ouros policy 20 [1 skip: rg absent], validator 15, installer 6, DS 10, bloks cargo 5)
+  tests_passing: "all (status 35, stop-guard 31, pre-compact 22, tldr-read 21, worker-check 10, post-edit 8, ouros policy 20 [1 skip, rg absent], validator 15, installer 6, DS 10, bloks cargo 5)"
   test_command: see statusline `test:`
   pre_existing_failures: []
   uncommitted_changes: true
-  branch: main (ahead of origin by 2 - push rejected by GitHub HTTP 500 twice at 23:58Z)
+  branch: "main, pushed (GitHub 500 twice, then succeeded)"
   dirty_files: [this handoff file]
   warnings: "LF->CRLF git warnings benign; sync dry run clean"
 
 # ── WHAT WAS DONE ────────────────────────────────────────────────
 done_this_session:
   - task: Verified harness after restart; backported windowsHide patch found only in ~/.claude
-    files: [.claude/hooks/{post-edit-diagnostics,status,tldr-read,tldr-shim}.mjs]
+    files: "[.claude/hooks/{post-edit-diagnostics,status,tldr-read,tldr-shim}.mjs]"
   - task: /analyze-data smoke test on project-A research data (user - test only, models irrelevant); fixed 3 skill-doc defects
     files: [harness/skills/analyze-data/SKILL.md, continuum/research/project-A-topic/findings.md]
   - task: post-edit timing test median-of-5; shim excluded from registration warn; shim autostart on; continuum/research tracked; .tldrignore ignored
@@ -60,7 +60,7 @@ done_this_session:
   - task: Analyst review -> continuum/research/harness-review-2026-10-05/findings.md (12 ranked items)
     files: [continuum/research/harness-review-2026-10-05/findings.md]
   - task: Fixes - ruff severity + dynamic ruff path; context meter; readiness fabricated pass; report validator + VALIDATE gate; sandbox hardening; analyze-data path; worker Stop hook + limits; centralized handoffs; hook if-filters + double-fire; stop-guard transcript fallback
-    files: [.claude/hooks/*.mjs, scripts/readiness.sh, tools/validate_report.py, tools/ouros_harness.py, tools/test_ouros_policy.py, harness/agents/worker.md, harness/skills/{create,resume}-handoff/SKILL.md, install/settings.template.json]
+    files: "[.claude/hooks/*.mjs, scripts/readiness.sh, tools/validate_report.py, tools/ouros_harness.py, tools/test_ouros_policy.py, harness/agents/worker.md, harness/skills/{create,resume}-handoff/SKILL.md, install/settings.template.json]"
   - task: E2E /autonomous run status-tests (patch) - test_status.sh 35 checks; found+fixed 3 crash bugs + NaN pct write in status.mjs; readiness backtick bug
     files: [.claude/hooks/test_status.sh, .claude/hooks/status.mjs, scripts/readiness.sh, continuum/autonomous/status-tests/]
 
@@ -75,8 +75,8 @@ decisions:
     over: [demote only, hide on any net nack]
     because: user choice; one nack hides a stale rule, 1 ack + 1 nack (0) stays
   - name: sandbox_dot_root
-    chose: "." still = cwd, but a read root resolving to home or a drive root grants nothing
-    over: [". = repo root"]
+    chose: "dot root still means cwd, but a read root resolving to home or a drive root grants nothing"
+    over: ["dot root means repo root"]
     because: installed harness must work in other projects; home-as-cwd was the .env leak
   - name: pyright_not_restored
     chose: ruff-only Python diagnostics
@@ -91,7 +91,7 @@ decisions:
 findings:
   critical:
     - Repo .claude/settings.json (fastedit-hook only) denies every Edit in sessions launched in this repo; fix = `git rm .claude/settings.json` (user action; classifier blocks the agent).
-    - 2 commits unpushed (c6f5ac8, bf75976) - GitHub 500 on push. Retry `git push origin main`.
+    - "Pushes to GitHub returned HTTP 500 twice at 23:58Z, then succeeded - retry before assuming a local problem."
     - sync --apply installs the working tree including uncommitted files from parallel agents - commit first.
     - Scripted find/replace on Windows - check EOL with `file`; CRLF files silently fail LF matches; heredoc python strings mangle \\n and regex backslashes (bit 4x this session) - prefer the Edit tool.
   useful:
@@ -139,7 +139,7 @@ questions:
   - Investigate readiness pipe hang, or accept file-redirect usage?
 
 next:
-  - git push origin main (2 commits ahead)
+  - "git status -sb - confirm even with origin"
   - User - git rm .claude/settings.json && commit (fastedit denies all Edits)
   - Fix validate_report.py to accept milestone null when complexity == patch (tools/validate_report.py validate_contract) + test
   - Investigate readiness.sh pipe hang (bash -x with output piped, capture last line)
