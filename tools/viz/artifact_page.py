@@ -51,6 +51,19 @@ two rows (more rows -> legend type 'scroll'), plus room for a y-axis name;
 end_labels=True adds series endLabel ('{a}') colored with --text-secondary at
 render time and widens grid.right to fit the longest name.
 
+Token references. Any string value of the exact form "token:<name>" anywhere
+in a spec (Vega-Lite mark color or {"value": ...} encoding, ECharts lineStyle /
+itemStyle color, Plotly line.color, ...) names a palette CSS custom property:
+the bridge replaces it in its per-render clone with the current value of
+--<name> and re-resolves it on every theme change, so one spec is correct in
+light and dark. token(name) returns the reference string, e.g. a raw series
+`{"mark": {"type": "line", "color": token("text-muted")}}` beside a smoothed
+series in token("series-1"). Valid names are the css_tokens names defined in
+both modes (TOKEN_NAMES); prepare_chart / build_page raise ValueError naming
+an unknown one (the prefix is reserved in every spec string, inline data
+included). A reference the page cannot resolve at render time stays as-is
+and adds a message to window.__chartsErrors.
+
 No colors live here - every value comes from tools/viz/palette.json.
 """
 from __future__ import annotations
@@ -94,6 +107,17 @@ DEFAULT_HEIGHT = 320
 BAR_MAX_PX = 24
 REQUIRED_CAPABILITIES = {"downloads": True}   # Download CSV -> claude.use("downloads")
 LEGEND_STROKE = {"icon": "rect", "itemWidth": 16, "itemHeight": 2}
+TOKEN_PREFIX = "token:"
+_TOKEN_RE = re.compile(r"token:(.*)", re.DOTALL)
+
+
+def _css_names(mode):
+    return [line.split(":", 1)[0].strip()[2:] for line in palette.css_tokens(mode).splitlines()
+            if line.strip().startswith("--")]
+
+
+# Names a token reference may use: declared as CSS custom properties in both modes.
+TOKEN_NAMES = tuple(n for n in _css_names("light") if n in set(_css_names("dark")))
 DUAL_AXIS_WARNING = ("Dual y-axis removed: two scales on one plot mislead. "
                      "Plot the second measure as its own chart or index both to a common base.")
 
@@ -164,6 +188,37 @@ def _mark_with(mark, **extra):
     for k, v in extra.items():
         out.setdefault(k, v)
     return out
+
+
+# --------------------------------------------------------------------------- tokens
+
+
+def token(name):
+    """Reference string for palette token `name` (e.g. 'text-muted' -> 'token:text-muted').
+
+    Use it for any color value in a spec; the page resolves it to var(--name)
+    at render time in the current theme. Raises ValueError for an unknown name.
+    """
+    name = str(name)
+    if name not in TOKEN_NAMES:
+        raise ValueError(f"unknown palette token {name!r}; known: {', '.join(TOKEN_NAMES)}")
+    return TOKEN_PREFIX + name
+
+
+def _check_tokens(obj, where):
+    """Raise ValueError for any 'token:<name>' string whose name is not a palette token."""
+    stack = [obj]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, dict):
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
+        elif isinstance(v, str) and v.startswith(TOKEN_PREFIX):
+            name = _TOKEN_RE.fullmatch(v).group(1)
+            if name not in TOKEN_NAMES:
+                raise ValueError(f"chart {where!r}: unknown palette token {name!r} in "
+                                 f"{v!r}; known: {', '.join(TOKEN_NAMES)}")
 
 
 # --------------------------------------------------------------------------- vega-lite
@@ -477,6 +532,7 @@ def prepare_chart(chart):
     if not isinstance(spec, dict):
         raise TypeError(f"chart {chart.get('title')!r}: 'spec' must be a dict")
     spec = _plain(copy.deepcopy(spec))
+    _check_tokens(spec, chart.get("title") or kind)
     warnings = []
     fit = False
     if kind == "vega-lite":
@@ -738,6 +794,36 @@ _BRIDGE_JS = r"""(function () {
   function fontStack() { return getComputedStyle(document.body).fontFamily; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
+  // "token:<name>" strings -> current value of --<name>, in place on a clone.
+  // Unknown names stay as-is and are reported once per chart.
+  var TOKEN_RE = /^token:([\s\S]*)$/;
+  var tokenMissing = {};
+  function resolveTokens(o, id) {
+    var cache = {};
+    function val(s) {
+      var m = TOKEN_RE.exec(s);
+      if (!m) { return s; }
+      if (!(m[1] in cache)) { cache[m[1]] = m[1] ? tok(m[1]) : ""; }
+      if (cache[m[1]]) { return cache[m[1]]; }
+      if (!tokenMissing[id + "|" + m[1]]) {
+        tokenMissing[id + "|" + m[1]] = true;
+        errors.push(id + ": unknown palette token \"" + m[1] + "\" left as-is");
+      }
+      return s;
+    }
+    function walk(v) {
+      if (typeof v === "string") { return val(v); }
+      if (Array.isArray(v)) {
+        for (var i = 0; i < v.length; i++) { v[i] = walk(v[i]); }
+      } else if (v && typeof v === "object") {
+        Object.keys(v).forEach(function (k) { v[k] = walk(v[k]); });
+      }
+      return v;
+    }
+    return walk(o);
+  }
+  function specOf(c) { return resolveTokens(clone(c.spec), c.id); }
+
   function vegaConfig() {
     var font = fontStack(), t2 = tok("text-secondary");
     return {
@@ -814,7 +900,7 @@ _BRIDGE_JS = r"""(function () {
   }
 
   function renderVega(el, c) {
-    return vegaEmbed(el, clone(c.spec), {actions: false, renderer: "svg",
+    return vegaEmbed(el, specOf(c), {actions: false, renderer: "svg",
                                          config: vegaConfig(), tooltip: {theme: "custom"}})
       .then(function (res) { return {dispose: function () { res.finalize(); }}; });
   }
@@ -871,11 +957,11 @@ _BRIDGE_JS = r"""(function () {
     var name = "viz-" + m;
     echarts.registerTheme(name, echartsTheme());
     var chart = echarts.init(el, name, {renderer: "svg"});
-    var opt = clone(c.spec);
+    var opt = specOf(c);
     var fitKey = fitEcharts(opt, c, el.clientWidth);
     var handle = {dispose: function () { chart.dispose(); },
                   resize: function () {
-                    var next = clone(c.spec), key = fitEcharts(next, c, el.clientWidth);
+                    var next = specOf(c), key = fitEcharts(next, c, el.clientWidth);
                     if (key && key !== fitKey) { fitKey = key; chart.setOption(next, true); }
                     chart.resize();
                   }};
@@ -889,7 +975,8 @@ _BRIDGE_JS = r"""(function () {
   }
 
   function renderPlotly(el, c) {
-    return Plotly.newPlot(el, clone(c.spec.data || []), plotlyLayout(c.spec.layout, c.height),
+    var spec = specOf(c);
+    return Plotly.newPlot(el, spec.data || [], plotlyLayout(spec.layout, c.height),
                           {responsive: true, displaylogo: false, displayModeBar: false})
       .then(function () { return {dispose: function () { Plotly.purge(el); }}; });
   }
@@ -1078,9 +1165,10 @@ def build_page(charts, title, description="", mode_default="auto", table_rows=No
     table_rows caps the rows each table view renders (default 500); the CSV
     download always carries every row. The page uses the claude.ai `downloads`
     capability when granted: publish with capabilities_for(charts)
-    (REQUIRED_CAPABILITIES is the full set). Raises ValueError on a bad title
-    (not 2-4 words), unknown kind/mode, inline data over 2 MB (aggregate
-    first) or a page over 16 MB.
+    (REQUIRED_CAPABILITIES is the full set). "token:<name>" strings in a spec
+    (see token()) resolve to the palette token in the current theme. Raises
+    ValueError on a bad title (not 2-4 words), unknown kind/mode, an unknown
+    token name, inline data over 2 MB (aggregate first) or a page over 16 MB.
     """
     if mode_default not in MODE_DEFAULTS:
         raise ValueError(f"mode_default must be one of {MODE_DEFAULTS}, got {mode_default!r}")

@@ -870,6 +870,134 @@ class LiveCharts(unittest.TestCase):
         self.assertGreater(o["right"], 16)
 
 
+# --------------------------------------------------------------------------- VAL-404 tokens
+
+
+def token_lines_vl():
+    """Two-layer Vega-Lite line: raw series in token:text-muted (mark color),
+    smoothed series in token:series-1 (value-encoded color)."""
+    rows = [{"day": i, "raw": 10 + (i * 7) % 5, "smooth": 11 + i * 0.2} for i in range(12)]
+    x = {"field": "day", "type": "quantitative"}
+    return {"kind": "vega-lite", "title": "Raw and smoothed", "height": 300, "spec": {
+        "data": {"values": rows},
+        "layer": [
+            {"mark": {"type": "line", "color": ap.token("text-muted"), "strokeWidth": 1},
+             "encoding": {"x": x, "y": {"field": "raw", "type": "quantitative"}}},
+            {"mark": "line",
+             "encoding": {"x": x, "y": {"field": "smooth", "type": "quantitative"},
+                          "color": {"value": "token:series-1"}}}]}}
+
+
+def token_lines_echarts():
+    chart = stock_lines(["Raw", "Smoothed"])
+    chart["spec"]["series"][0]["lineStyle"] = {"color": ap.token("text-muted"), "width": 1}
+    chart["spec"]["series"][1]["lineStyle"] = {"color": "token:series-1"}
+    return chart
+
+
+class TokenReferences(unittest.TestCase):
+    def test_token_helper_returns_reference(self):
+        self.assertEqual(ap.token("text-muted"), "token:text-muted")
+        self.assertEqual(ap.token("series-1"), "token:series-1")
+        self.assertIn("token(", ap.__doc__)
+        self.assertIn("token:", ap.__doc__)
+
+    def test_unknown_token_raises_naming_it(self):
+        with self.assertRaisesRegex(ValueError, "no-such-token"):
+            ap.token("no-such-token")
+        bad = token_lines_vl()
+        bad["spec"]["layer"][1]["encoding"]["color"]["value"] = "token:no-such-token"
+        with self.assertRaisesRegex(ValueError, "no-such-token"):
+            ap.build_page([bad], "Token Check Page")
+        eb = token_lines_echarts()
+        eb["spec"]["series"][0]["lineStyle"]["color"] = "token:serie-1"
+        with self.assertRaisesRegex(ValueError, "serie-1"):
+            ap.build_page([eb], "Token Check Page")
+
+    def test_known_tokens_pass_through_to_payload(self):
+        html = ap.build_page([token_lines_vl(), token_lines_echarts()], "Token Check Page")
+        self.assertIn('"token:text-muted"', html)
+        self.assertIn('"token:series-1"', html)
+
+
+@unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
+@unittest.skipUnless(CDN_OK, CDN_SKIP)
+class LiveTokens(unittest.TestCase):
+    STROKES = r"""(sel) => {
+      const ctx = document.createElement('canvas').getContext('2d');
+      const norm = (c) => { ctx.fillStyle = '#000'; ctx.fillStyle = c; return ctx.fillStyle; };
+      const tok = (n) => norm(getComputedStyle(document.documentElement)
+                                .getPropertyValue('--' + n).trim());
+      return {strokes: [...document.querySelectorAll(sel)].map(
+                (p) => norm(p.getAttribute('stroke') || 'none')),
+              muted: tok('text-muted'), s1: tok('series-1'),
+              raw: [...document.querySelectorAll(sel)].map((p) => p.getAttribute('stroke'))};
+    }"""
+
+    def open(self, charts, mode):
+        ctx = export.get_browser().new_context(viewport={"width": 900, "height": 900},
+                                               color_scheme=mode)
+        self.addCleanup(ctx.close)
+        page = ctx.new_page()
+        page.set_content(ap.build_page(charts, "Token Render Page"), wait_until="networkidle",
+                         timeout=45000)
+        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        self.assertEqual(page.evaluate("() => window.__chartsErrors"), [])
+        return page
+
+    def toggle(self, page):
+        page.click("#theme-toggle")
+        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+
+    def test_vega_lite_layers_stroke_in_tokens_light_and_dark(self):
+        sel = "#chart-1-plot g.mark-line path"
+        for mode in ("light", "dark"):
+            page = self.open([token_lines_vl()], mode)
+            seen = {}
+            for step in (mode, "toggled"):
+                m = page.evaluate(self.STROKES, sel)
+                self.assertEqual(len(m["strokes"]), 2, m)
+                self.assertNotIn(None, m["raw"], m)
+                self.assertFalse(any(s.startswith("token:") for s in m["raw"]), m)
+                self.assertEqual(m["strokes"], [m["muted"], m["s1"]], f"{mode}/{step}: {m}")
+                seen[step] = m["s1"]
+                if step == mode:
+                    self.toggle(page)          # theme change re-resolves the references
+            self.assertNotEqual(seen[mode], seen["toggled"], "series-1 must differ by mode")
+            want = palette.tokens(mode)["series-1"].lower()
+            self.assertEqual(seen[mode], want)
+
+    def test_echarts_line_style_tokens_light_and_dark(self):
+        sel = "#chart-1-plot svg path"
+        for mode in ("light", "dark"):
+            page = self.open([token_lines_echarts()], mode)
+            for _step in (mode, "toggled"):
+                m = page.evaluate(self.STROKES, sel)
+                self.assertIn(m["muted"], m["strokes"], m)
+                self.assertIn(m["s1"], m["strokes"], m)
+                self.assertFalse(any((s or "").startswith("token:") for s in m["raw"]), m)
+                colors = page.evaluate("""() => echarts.getInstanceByDom(
+                    document.getElementById('chart-1-plot')).getOption().series.map(
+                    (s) => s.lineStyle.color)""")
+                tok = page.evaluate("""() => ['text-muted', 'series-1'].map((n) =>
+                    getComputedStyle(document.documentElement).getPropertyValue('--' + n)
+                    .trim())""")
+                self.assertEqual(colors, tok)
+                if _step == mode:
+                    self.toggle(page)
+
+    def test_unresolvable_token_stays_and_reports(self):
+        html = ap.build_page([token_lines_vl()], "Token Render Page")
+        html = html.replace('"token:series-1"', '"token:gone-away"')    # bypass the Python check
+        ctx = export.get_browser().new_context(viewport={"width": 900, "height": 900})
+        self.addCleanup(ctx.close)
+        page = ctx.new_page()
+        page.set_content(html, wait_until="networkidle", timeout=45000)
+        page.wait_for_function("() => window.__chartsReady.then(() => true)", timeout=45000)
+        errors = page.evaluate("() => window.__chartsErrors")
+        self.assertTrue(any("gone-away" in e for e in errors), errors)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

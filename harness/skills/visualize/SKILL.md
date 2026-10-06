@@ -78,7 +78,8 @@ markers with a 2px surface ring, 2px surface gaps, solid hairline grid. Yours to
 <= `style.BAR_MAX_PX` (24px) thick (size the figure, see 7a), selective direct labels only.
 Dense series (> ~500 points per series) -> 1px lines. Raw + smoothed pair -> raw series in
 `palette.text(mode)["muted"]` (or `palette.surface(mode)["axis"]`), only the smoothed series in
-a categorical slot.
+a categorical slot. In an `artifact_page` spec use token references, resolved per theme: raw
+layer mark `color: artifact_page.token("text-muted")`, smoothed `token("series-1")`.
 Inspect the values: `py -3.13 tools/viz/style.py dark` prints the matplotlib rcParams, altair
 config and bokeh attrs for one mode as JSON (mode `light` default or `dark`; `--help`).
 
@@ -123,11 +124,14 @@ import sys, pathlib; sys.path.insert(0, str(next(p for p in (pathlib.Path.cwd(),
 from tools.viz import artifact_page
 charts = [artifact_page.from_altair(chart, title="Hours by team"),
           artifact_page.from_plotly(fig, title="Weekly trend")]
+# any color value may be a palette token, resolved in light and dark at render time:
+# {"mark": {"type": "line", "color": artifact_page.token("text-muted")}, ...}  (raw series)
 html = artifact_page.write_page(charts, "hours.html", title="Team Hours", description="...")
 ```
 
 CLI: `py -3.13 tools/viz/artifact_page.py charts.json out.html --title "Two Words"` (list of
-`{kind: vega-lite|plotly|echarts, spec, title, caption, rows, height, end_labels}`). Title 2-4
+`{kind: vega-lite|plotly|echarts, spec, title, caption, rows, height, end_labels}`; a spec color
+may be `"token:<name>"` = `artifact_page.token(name)`, unknown names raise). Title 2-4
 words. The page carries tokens, dark mode, hover, the legend rule, a Table toggle + CSV link per
 card, and strips dual axes with a visible warning. Vega-Lite fold color fields get legend +
 every-series tooltip, slots in fold order; calculate-derived ones keep the author's legend.
