@@ -1,0 +1,158 @@
+---
+session: general
+date: 2026-10-06
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "dataviz m5 follow-ups (VAL-501..507) shipped + review fix round + forward privacy scrub; A-D input rule in global CLAUDE.md"
+now: "Confirm user ran sync_global --apply, history purge + force push; then pick from next: (prelude chdir guard, SVG reproducibility, privacy pre-commit guard)"
+test: "for t in palette recommend style export artifact_page import; do py -3.13 tools/viz/test_$t.py; done; py -3.13 tools/test_context_ledger.py; py -3.13 install/test_sync_global.py; for t in .claude/hooks/test_*.sh; do bash $t | tail -1; done"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  Repo = public fork maren-epochs/ContinuousClaudeV4.7; ~/.claude is BUILT from it by
+  `py -3.13 install/sync_global.py --apply` (copies the working tree: commit first). The live
+  ~/.claude/tools/viz and skills are STALE until the user runs it (agent hands the command).
+  tools/viz is consumed outside the repo as `ccv_viz`: the one-line PRELUDE (visualize SKILL.md,
+  analyze-data step 5, demo.py line 1) walks cwd + parents, then ~/.claude, for
+  tools/viz/palette.json, registers that dir as package `ccv_viz` via importlib, and raises
+  ModuleNotFoundError naming sync_global when nothing is found. Reason: a user project's regular
+  tools/__init__.py beats our namespace `tools` regardless of sys.path order. style.py and
+  artifact_page.py import palette relatively (`from . import palette`) with a script-mode fallback,
+  so CLIs (`py -3.13 tools/viz/<x>.py`) and in-repo `from tools.viz import` still work.
+  palette: ordinal(mode) = bounded steps from palette.json ordinal_bounds (light 250..650 x5, dark
+  100..600 x6; more levels repeat); gray(mode) = text-muted #898781 (reference names the role, no
+  hex); emphasis highlight must be series-1 (aqua/magenta/dark red collapse vs gray under CVD).
+  style.gt_style(GT, mode): set GT(id=...) BEFORE calling it. artifact_page end_labels: True |
+  [names]; anything else warns on the page.
+  continuum/research and thoughts/shared/handoffs are TRACKED + PUBLIC: no usernames, absolute
+  user paths, other project names, session UUIDs. Write `~/...` and project-A/B labels.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "all - viz: palette 34, recommend 96, style 25, export 28, artifact_page 73, import 16; sync_global 8; context_ledger OK; 7 hook suites green; ruff clean"
+  test_command: "see statusline test:"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main, 10 commits ahead of origin (fcb7e91..this handoff) - hashes change after the user's history purge"
+  dirty_files: []
+  warnings: "LF->CRLF git warnings benign (.gitattributes text=auto); untracked install/settings.template.json.bak-20261005-reportcheck-if (user may delete); readiness.sh delta NOT measured (run was killed by Claude Code for low system memory; baseline level 3, 12/27)"
+  context: "peak 27% (270K) | resume-handoff +70K, premortem +24K, autonomous +18K"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: "Global rule: every user input via AskUserQuestion with A-D options, recommended first (all projects)"
+    files: ["~/.claude/CLAUDE.md (line 25, not in repo)"]
+  - task: "VAL-501 bounded altair ordinal range (palette.ordinal)"
+    files: ["tools/viz/palette.py", "tools/viz/style.py", "tools/viz/test_palette.py", "tools/viz/test_style.py"]
+  - task: "VAL-502 gray de-emphasis token + --gray CSS token"
+    files: ["tools/viz/palette.json", "tools/viz/palette.py", "tools/viz/artifact_page.py", "tests"]
+  - task: "VAL-503 end_labels list form + per-series opt-out with page warnings"
+    files: ["tools/viz/artifact_page.py", "tools/viz/test_artifact_page.py"]
+  - task: "VAL-504 style.gt_style great_tables house style + 16px margin in PNG export"
+    files: ["tools/viz/style.py", "tools/viz/export.py", "tests"]
+  - task: "VAL-505 ccv_viz alias prelude (tools/ shadowing fix) + review round: parent walk + readable error"
+    files: ["tools/viz/__init__.py", "tools/viz/style.py", "tools/viz/artifact_page.py", "tools/viz/test_import.py", "harness/skills/visualize/SKILL.md", "harness/skills/analyze-data/SKILL.md"]
+  - task: "VAL-506 demo regenerated (muted raw line token, gt_style table, 4 end labels); republished artifact v3"
+    files: ["continuum/research/dataviz-suite/demo.py", "continuum/research/dataviz-suite/findings.md", "continuum/research/dataviz-suite/out/*"]
+  - task: "VAL-507 docs: skill, CLAUDE.md viz table, install/README.md"
+    files: ["harness/skills/visualize/SKILL.md", "CLAUDE.md", "install/README.md"]
+  - task: "Privacy forward scrub (absolute user paths, another project's dir name, a private topic name) + private topic untracked (ignore rule in .git/info/exclude)"
+    files: ["continuum/research/harness-review-2026-10-05/decision-queue.md", "thoughts/shared/handoffs/general/*.yaml (5)", ".claude/hooks/test_tldr_read.sh"]
+  - task: "EVOLVE: 6 bloks rules (great_tables opt_css scoping, playwright canvas sliver, namespace-vs-regular package, git-bash sed CRLF, gray emphasis CVD, GT id before gt_style)"
+    files: []
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: shadowing_fix
+    chose: "consumer alias ccv_viz via importlib + relative intra-package imports"
+    over: ["add tools/__init__.py"]
+    because: "a regular `tools` package would hijack the user's own `import tools`; alias touches no user namespace"
+  - name: gray_value
+    chose: "gray aliases text-muted #898781 under its own token name"
+    over: ["invent a new neutral hex"]
+    because: "reference palette names the role without a hex and forbids inventing; only existing neutral >=3:1 on both surfaces"
+  - name: end_labels_strictness
+    chose: "only literal True means all; other non-list values warn"
+    over: ["bool() truthiness"]
+    because: "explicit page warnings; only repo caller passes a list"
+  - name: privacy
+    chose: "forward scrub + user-run history purge (filter-repo) + force push"
+    over: ["forward only", "leave"]
+    because: "user choice A; agent cannot rewrite history or force push"
+  - name: ignore_rule_location
+    chose: ".git/info/exclude"
+    over: [".gitignore"]
+    because: "a tracked .gitignore line would itself publish the private topic name"
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - "Public repo: thoughts/shared/handoffs is tracked too, not only continuum/research. Grep every tracked file for username / absolute user paths / other project names before each commit (git grep -i)."
+    - "Live ~/.claude is stale until `py -3.13 install/sync_global.py --apply`; from any non-repo cwd the prelude loads ~/.claude/tools/viz, which lacks palette.gray/ordinal and gt_style until synced."
+    - "Commit-after-worker with parallel workers: always `git add` explicit paths; continuum/autonomous is gitignored (git add of reports fails)."
+    - "Claude Code may kill long background shells under memory pressure (readiness.sh killed); do not auto-restart, report it."
+  useful:
+    - "Artifact from an earlier conversation: Artifact read url first, then publish with url; omitting capabilities carries the stored declaration forward."
+    - "validate_report.py rejects non-VAL ids in report.assertion; scrutiny reports list the reviewed VAL ids."
+    - "Prelude may need `# noqa: I001` when it is line 1 of a ruff-checked file."
+    - "SVG from matplotlib is not reproducible (dc:date + random ids); PNGs are byte-stable."
+  fyi:
+    - "Artifact: https://claude.ai/artifact/BB3VuPmVxfjuyXqhFbrzGf v3 (private, downloads)."
+    - "bloks index 87 cards."
+
+# ── APPROACHES ───────────────────────────────────────────────────
+worked:
+  - "Pre-writing worker prompt JSONs while earlier waves run; serialize workers that share a file"
+  - "Orchestrator independent probes (temp shadowing project + sync --target + HOME/USERPROFILE override) before marking passed"
+  - "Collapsing long data lines with regex to review a generated page's non-data skeleton before publish"
+  - "SendMessage to the same worker for scope extension (privacy round 2)"
+
+failed:
+  - attempted: "Probing the prelude via `py file.py` from the user project"
+    root_cause: "script mode puts the script dir, not cwd, on sys.path[0]"
+    avoid: "script-file probes for cwd-dependent imports"
+    use_instead: "`py -3.13 - < file.py` (stdin) or -c"
+  - attempted: "Reading a 226KB generated HTML whole with Read"
+    root_cause: "25K-token read cap; data lines are 40-98K chars"
+    avoid: "full reads of data-heavy pages"
+    use_instead: "regex-collapse data payloads, read the skeleton + all code lines"
+
+trajectory:
+  started_as: "resume handoff; run m4 open items as one feature-class /autonomous run"
+  evolved_to: "m5 (7 assertions) + review fix round + privacy scrub of pushed history; plus a global A-D input rule"
+  scoped_to: "all complete; history purge + push + sync are user-run commands"
+  user_approved_scope: true
+
+user_intent: |
+  World-class local Claude Code platform; quality over cost (Opus 5.5 everywhere); privacy matters
+  (public repo). Wants every needed input as A-D options with a recommendation, batched.
+
+blockers: []
+questions: []
+
+next:
+  - "Verify the user ran: sync_global --apply; history purge (git filter-repo --replace-text/--replace-message + --invert-paths on the private topic) + force push. Check `git log --all -S` for the scrubbed strings returns 0 commits."
+  - "Re-run scripts/readiness.sh for the EVOLVE delta (baseline level 3, 12/27) when memory allows"
+  - "Prelude: skip re-registration when ccv_viz already in sys.modules (chdir mixing, R5 finding 3); consider honoring a non-default --target install"
+  - "export.py: reproducible SVG (savefig metadata={'Date': None} + rcParams svg.hashsalt); findings item 14"
+  - "Pre-commit privacy guard: reject username, C:/Users/<name>, other project names in tracked files (deterministic over CLAUDE.md)"
+  - "recommend.py: return gray + series-1 tokens for the emphasis form; CLI tests for export.py/recommend.py in-repo"
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-06_16-24_viz-followups-privacy-scrub.yaml in
+  the ccv47-readme-fix repo. m5 (VAL-501..507) is done and validated
+  (continuum/autonomous/dataviz-suite/validation/m5-followups.json). First confirm the user ran
+  `py -3.13 install/sync_global.py --apply` and the history purge + force push; if not, hand them
+  the commands again. Run the statusline test: command. Then do the `next:` items as one
+  feature-class /autonomous run: prelude re-registration guard, reproducible SVG export, a
+  pre-commit privacy guard, recommend.py emphasis tokens + CLI tests. Repo is public - no
+  usernames, absolute user paths or other project names in any tracked file. Ask for input only
+  via A-D options with a recommendation.
+
+files:
+  created: ["tools/viz/test_import.py", "continuum/autonomous/dataviz-suite/plan-m5.md (ignored)", "continuum/autonomous/dataviz-suite/context/premortem-m5.yaml (ignored)", "continuum/autonomous/dataviz-suite/validation/m5-followups.json (ignored)"]
+  modified: ["tools/viz/{palette.json,palette.py,style.py,export.py,artifact_page.py,__init__.py} + tests", "harness/skills/visualize/SKILL.md", "harness/skills/analyze-data/SKILL.md", "CLAUDE.md", "install/README.md", "continuum/research/dataviz-suite/*", "continuum/research/harness-review-2026-10-05/decision-queue.md", "thoughts/shared/handoffs/general/*.yaml", ".claude/hooks/test_tldr_read.sh"]
