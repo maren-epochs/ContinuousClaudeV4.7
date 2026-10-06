@@ -233,8 +233,10 @@ def validate_contract(contract):
             if aid in ids:
                 f.error(f"{p}.id", f"duplicate id {aid}")
             ids.add(aid)
-        for k in ("text", "milestone"):
-            _expect(f, a, k, str, p)
+        _expect(f, a, "text", str, p)
+        # Patch class has no milestones (SKILL.md PATCH FAST PATH): milestone may be null.
+        if not (cx == "patch" and "milestone" in a and a["milestone"] is None):
+            _expect(f, a, "milestone", str, p)
         for k, enum in (("type", ASSERTION_TYPES), ("status", STATUSES)):
             v = _expect(f, a, k, str, p)
             if v is not None and v not in enum:

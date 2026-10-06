@@ -173,6 +173,23 @@ class ValidateReportTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("status passed without evidence", out)
 
+    def test_patch_contract_allows_null_milestone_only_for_patch(self):
+        patch = copy.deepcopy(CONTRACT)
+        patch.update(complexity="patch", milestones=[])
+        patch["assertions"][0]["milestone"] = None
+        code, out = self._run("--contract", self._write("contract.json", patch))
+        self.assertEqual(code, 0, out)
+        feature = copy.deepcopy(patch)
+        feature["complexity"] = "feature"
+        code, out = self._run("--contract", self._write("contract.json", feature))
+        self.assertEqual(code, 1)
+        self.assertIn("$.assertions[0].milestone: expected str, got null", out)
+        missing = copy.deepcopy(patch)
+        del missing["assertions"][0]["milestone"]
+        code, out = self._run("--contract", self._write("contract.json", missing))
+        self.assertEqual(code, 1)
+        self.assertIn("$.assertions[0].milestone", out)
+
 
 if __name__ == "__main__":
     unittest.main()
