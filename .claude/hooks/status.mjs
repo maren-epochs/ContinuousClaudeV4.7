@@ -26,13 +26,14 @@ function getSessionId(data) {
 function getContextInfo(data) {
   const ctx = data.context_window || {};
   const usage = ctx.current_usage;
-  const size = ctx.context_window_size || 200000;
+  const rawSize = ctx.context_window_size;
+  const size = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 200000;
   const total = typeof ctx.total_input_tokens === 'number' && ctx.total_input_tokens > 0
     ? ctx.total_input_tokens
     : usage ? (usage.input_tokens || 0)
       + (usage.cache_read_input_tokens || 0)
       + (usage.cache_creation_input_tokens || 0) : 0;
-  const native = typeof ctx.used_percentage === 'number';
+  const native = Number.isFinite(ctx.used_percentage);
   const pct = native
     ? Math.min(100, Math.floor(ctx.used_percentage))
     : Math.min(100, Math.floor(total * 100 / size));

@@ -170,6 +170,15 @@ case "$v" in MISSING) r=0;; ''|*[!0-9]*) r=1;; *) r=0;; esac
 [ "$RC" -eq 0 ] || r=1
 check "g13 wrong-typed context_window_size -> pct file integer or absent (got: $v, rc=$RC)" $r
 
+# g14: bad size/percentage fall back to 200K math: no "NaN" in the statusline, and a stale
+# prior pct is overwritten (1000/200K -> 0), not left in place.
+printf '90' > "$(pctfile sttstNaN)"
+run_hook '{"session_id":"sttstNaN0","context_window":{"context_window_size":"x","used_percentage":"y","current_usage":{"input_tokens":1000}}}'
+v=$(readpct sttstNaN)
+case "$OUT" in *NaN*) r=1;; *) r=0;; esac
+[ "$v" = "0" ] || r=1
+check "g14 bad size/pct -> no NaN in statusline, stale 90 reset to 0 (got: pct=$v out=${OUT:0:40})" $r
+
 node --check "$HOOK"
 check "syntax node --check passes" $?
 
