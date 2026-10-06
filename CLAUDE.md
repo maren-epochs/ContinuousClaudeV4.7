@@ -21,7 +21,7 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 7 hooks (+ tldr-s
 
 | Agent | Role |
 |-------|------|
-| `worker` | Executes atomic tasks — full autonomy over implementation. `model: inherit`, `effort: high`, `maxTurns: 60`; frontmatter Stop hook validates its report |
+| `worker` | Executes atomic tasks — full autonomy over implementation. `model: claude-opus-5-5` (pinned; independent of the session model), `effort: high`, `maxTurns: 60`; frontmatter Stop hook validates its report |
 | `oracle` | External research — docs, APIs, best practices |
 
 ## Hooks (all .mjs — cross-platform)

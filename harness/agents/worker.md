@@ -2,7 +2,7 @@
 name: worker
 description: Generic implementation worker — executes one bounded step from a structured JSON prompt, writes one report JSON. Full autonomy over implementation within bounds.
 tools: [Read, Edit, Write, Bash, Grep, Glob]
-model: inherit
+model: claude-opus-5-5
 effort: high
 maxTurns: 60
 hooks:
