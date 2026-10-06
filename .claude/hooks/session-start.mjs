@@ -61,7 +61,10 @@ function main() {
   let data = {};
   try { data = JSON.parse(readFileSync(0, 'utf-8')); } catch {}
   if (!data || typeof data !== 'object') data = {};
-  const cwd = typeof data.cwd === 'string' && data.cwd ? data.cwd : process.cwd();
+  // Launch dir first, matching pre-compact.mjs (CLAUDE_PROJECT_DIR), so a cd'd subdir
+  // still finds the handoff written just before compaction.
+  const cwd = process.env.CLAUDE_PROJECT_DIR
+    || (typeof data.cwd === 'string' && data.cwd ? data.cwd : process.cwd());
   const source = data.source || 'startup';
 
   let context = null;

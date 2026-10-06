@@ -75,6 +75,12 @@ run "{\"source\":\"compact\",\"cwd\":\"$P\"}" BLOKS_BIN="$BIN"
 case "$(ctx)" in *local-handoff-marker*) r=0;; *) r=1;; esac
 check "S6 project handoff root preferred over ~/.claude/handoffs" $r
 
+# --- S8: cd'd subdir: CLAUDE_PROJECT_DIR (launch dir, same key pre-compact uses) wins over cwd ---
+mkdir -p "$PROJ/deep/sub"
+run "{\"source\":\"compact\",\"cwd\":\"$(win "$PROJ/deep/sub")\"}" BLOKS_BIN="$BIN" CLAUDE_PROJECT_DIR="$P"
+case "$(ctx)" in *local-handoff-marker*) r=0;; *) r=1;; esac
+check "S8 compact from a subdir resolves handoffs via CLAUDE_PROJECT_DIR" $r
+
 # --- S7: failures fail open ---
 run "{\"source\":\"startup\",\"cwd\":\"$P\"}" BLOKS_BIN="$WORK/does-not-exist"
 [ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; check "S7a missing bloks -> {} exit 0" $?

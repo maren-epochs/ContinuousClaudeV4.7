@@ -163,7 +163,9 @@ function main() {
   const { pct, display, known } = getContextInfo(data);
   if (known && Number.isFinite(pct)) writeContextPct(pct, data);
   const git = getGitInfo(cwd);
-  const { goal, now } = getContinuityInfo(cwd);
+  // Handoffs key on the launch dir (same as pre-compact's CLAUDE_PROJECT_DIR), not a cd'd subdir.
+  const pd = (data.workspace || {}).project_dir;
+  const { goal, now } = getContinuityInfo((typeof pd === 'string' && pd) || cwd);
 
   const continuity = goal && now ? `${goal} -> ${now}` : now || goal;
   let ctx;

@@ -132,6 +132,12 @@ run_hook "$(payload sttstF6x '' "$PROJN")"
 case "$OUT" in *' -> '*|*'goal'*) r=1;; *) r=0;; esac
 check "f4 no handoffs anywhere -> no goal/now segment (got: ${OUT:0:120})" $r
 [ "$RC" -eq 0 ]; check "f5 exit 0" $?
+# f6: session cd'd into a subdir of a non-git project: handoffs still key on workspace.project_dir
+PROJX="$ROOT/sttstprojx"; mkdir -p "$PROJX/sub"
+mkhandoff "$FAKEHOME/.claude/handoffs/sttstprojx/s3" 2026-10-04_09-00_x.yaml "Launch goal" "Launch now"
+run_hook "{\"session_id\":\"sttstF6x-f6\",\"workspace\":{\"current_dir\":\"$PROJX/sub\",\"project_dir\":\"$PROJX\"}}"
+case "$OUT" in *'Launch goal -> Launch now'*) r=0;; *) r=1;; esac
+check "f6 cd'd subdir still resolves handoffs via workspace.project_dir (got: ${OUT:0:120})" $r
 
 # --- (g) garbage stdin never throws (exit 0, no stderr) ---
 # CLAUDE_SESSION_ID pins the fallback key so any write lands on a test-owned file.
