@@ -1,0 +1,147 @@
+---
+session: general
+date: 2026-10-05
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "Harness hardened end to end; review fixes + decisions D1-D8 applied, live-verified; restart point"
+now: "Fresh session - verify SessionStart(compact) + report-check hooks load; then one feature-class /autonomous run"
+test: "for t in .claude/hooks/test_*.sh; do bash $t | tail -1; done; py -3.13 tools/test_ouros_policy.py; py -3.13 tools/test_validate_report.py; py -3.13 install/test_sync_global.py; py -3.13 tools/test_ouros_harness_ds.py"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  Fork maren-epochs/ContinuousClaudeV4.7 (this repo) is source of truth; ~/.claude is built by
+  `py -3.13 install/sync_global.py --apply` (backups in ~/.claude/.ccv47-backup/). Sync copies the
+  WORKING TREE - commit (or pause parallel agents) before --apply. For a single file, install via
+  sync_global.render() (keeps path rewrites + CRLF) instead of a full sync.
+  Hook registration is hand-maintained in ~/.claude/settings.json (absolute paths, per-extension
+  `if` filters); install/settings.template.json mirrors it with relative paths. The repo has NO
+  .claude/settings.json any more (fastedit-hook denied every Edit; removed).
+  Hooks: status (statusLine; Claude Code used_percentage, handoffs via workspace.project_dir),
+  tldr-read (+shim autostart; allow inside CLAUDE_PROJECT_DIR else "ask"), post-edit-diagnostics
+  (ruff direct, E9/F63/F7/F82/invalid-syntax = error), pre-compact (auto-handoff to handoff root),
+  auto-handoff-stop (pct file else transcript_path usage), worker-report-check (settings
+  PostToolUse with if Edit(**/continuum/autonomous/*/reports/*.json) - reaches RUNNING workers,
+  verified live; worker frontmatter Stop = late backstop only), session-start (registered
+  matcher "compact" only - injects newest handoff after compaction).
+  Handoff root everywhere: project thoughts/shared/handoffs/ if it exists, else
+  ~/.claude/handoffs/<basename of launch dir>/.
+  Verified Claude Code behaviors (this build): background subagents end at handback, so a
+  SubagentStop block is recorded but does not resume them; worker FRONTMATTER PostToolUse never
+  fires (3 probes) while SETTINGS-level PostToolUse does fire inside subagents; hook
+  permissionDecision "allow" skips the prompt but deny/ask rules still apply (hooks docs).
+  ouros sandbox: run_command tokenized, shell=False, argv-prefix allowlist, path-like args go
+  through the read policy (secrets denylist incl. .env, keys, ~/.ssh, .claude.json, ADS
+  .env:x), recursive grep/rg get secret exclusions, agent_call --max-turns 25. uv run / npm run
+  still execute code by design - the denylist is a guard against mistakes, not a boundary.
+  bloks = fork maren-epochs/bloks (~\Documents\bloks; CI green Win+Linux):
+  scores in [-1,1], rules/tastes sorted by score, hidden below -0.5 (one nack hides).
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "all - status 37, stop-guard 31, tldr-read 26, pre-compact 22, session-start 16, worker-check 16, post-edit 8, ouros policy 24 (1 skip, rg absent), validator 16, installer 6, DS 10, readiness-parallel pass, bloks cargo 5"
+  test_command: "see statusline test:"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main, even with origin (pushed)"
+  dirty_files: []
+  warnings: "LF->CRLF git warnings benign; sync dry run clean"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: "Bloks fork: ack/nack scoring fixed, hide < -0.5, CI on Windows + Linux"
+    files: ["Documents/bloks src/db.rs", "src/main.rs", ".github/workflows/ci.yml"]
+  - task: "Hardening batch: ruff severity, context meter, readiness SKIP-not-pass, report validator + VALIDATE gate, sandbox hardening, worker limits, centralized handoffs, hook if-filters, stop-guard transcript fallback"
+    files: [".claude/hooks/*.mjs", "scripts/readiness.sh", "tools/ouros_harness.py", "tools/validate_report.py", "harness/agents/worker.md"]
+  - task: "E2E /autonomous patch run (status-tests) - found 3 crash bugs + NaN in status.mjs"
+    files: [".claude/hooks/test_status.sh", "continuum/autonomous/status-tests/"]
+  - task: "Correctness review fixes: run_command args obey read policy (git diff --no-index leak), ADS, stop_hook_active loop guard, handoff root from launch dir, NaN display"
+    files: ["tools/ouros_harness.py", "tools/test_ouros_policy.py", ".claude/hooks/worker-report-check.mjs", ".claude/hooks/status.mjs", ".claude/hooks/session-start.mjs"]
+  - task: "readiness.sh: await_job replaces wait (capped poll); tldr jobs fully redirected; parallel test median-of-3 with headroom"
+    files: ["scripts/readiness.sh", "scripts/test_readiness_parallel.sh"]
+  - task: "Decisions applied: D1 tldr-read allow only in project, D2 SessionStart compact, D6 report check via settings PostToolUse, D8 test timing; D3/D4/D5 deferred, D7 not needed"
+    files: ["~/.claude/settings.json", "install/settings.template.json", ".claude/hooks/tldr-read.mjs"]
+  - task: "Docs current: CLAUDE.md, README.md, install/README.md, handoff skills"
+    files: ["CLAUDE.md", "README.md", "install/README.md", "harness/skills/{create,resume}-handoff/SKILL.md"]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: session_start_compact_only
+    chose: "SessionStart registered for compact only"
+    over: ["startup+clear+compact (bloks every session)"]
+    because: "bloks context costs ~2K tokens per session; compact re-injection fixes continuity at zero steady-state cost"
+  - name: report_check_settings_level
+    chose: "worker-report-check as settings PostToolUse filtered to report JSON writes"
+    over: ["worker frontmatter PostToolUse", "Stop hook only"]
+    because: "verified live - frontmatter PostToolUse never fires; Stop is too late for background workers; settings-level reached a running worker"
+  - name: tldr_read_scoped_allow
+    chose: "allow inside CLAUDE_PROJECT_DIR, ask outside"
+    over: ["always allow", "always ask"]
+    because: "outside-project reads should prompt as a plain Read would; deny rules were never bypassed"
+  - name: deferred
+    chose: "D3 bloks view logging, D4 bloks lint gates, D5 context:fork - deferred"
+    over: ["doing them now"]
+    because: "need ack/nack data (D3), upstream code churn (D4), token savings unmeasured (D5)"
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - "SessionStart(compact) and the settings PostToolUse report check were added mid-session - confirm they load after restart (settings are read at startup)."
+    - "Never put backslashes/newlines in python-heredoc or sed patch scripts on this machine - escaping broke files 5+ times; use the Edit tool, or python with newline='' and EOL detection."
+    - "Commit before sync_global --apply; it installs the working tree."
+  useful:
+    - "Readiness original >200s hang never reproduced (0/58); mitigated, cause inferred (MSYS wait/SIGCHLD)."
+    - "WebFetch summaries can be wrong on exact semantics (claimed allow overrides deny); curl the .md docs and grep for verbatim lines."
+    - "Decision queue + rationale: continuum/research/harness-review-2026-10-05/decision-queue.md; analyst review: findings.md alongside."
+  fyi:
+    - "Settings backups: ~/.claude/settings.json.bak-20261005-hookfilters, .bak-20261005-d2d6; bloks.exe.0.1.0-upstream.bak in ~/.cargo/bin."
+    - "rg is not installed (policy test skips it)."
+
+# ── APPROACHES ───────────────────────────────────────────────────
+worked:
+  - "Background forks on disjoint files; orchestrator verifies and commits"
+  - "Fail-before/pass-after proof for every fix (git stash the fix, rerun)"
+  - "Live probes with deliberately invalid worker reports + transcript/invocation-log inspection"
+  - "Independent analyst/reviewer agents, then parent verification of top claims"
+
+failed:
+  - attempted: "Enforcing worker reports via worker frontmatter hooks"
+    root_cause: "frontmatter PostToolUse not invoked; Stop fires after a background worker handed back"
+    avoid: "relying on subagent frontmatter hooks for enforcement"
+    use_instead: "settings-level PostToolUse with an if filter + VALIDATE gate"
+  - attempted: "Deleting .claude/settings.json via the agent"
+    root_cause: "auto-mode classifier blocks self-modification"
+    avoid: "retrying via other tools"
+    use_instead: "ask the user to run it with the ! prefix"
+
+user_intent: |
+  World-class local Claude Code platform for builds, data science and delivery: fast,
+  token-efficient, reliable unattended. Prefers recommendations with verdicts and selectable
+  decisions, then "go"/"apply recommendations"; delegates broadly, including timed autonomous
+  runs with decisions queued for later. Data runs (project-A) were harness tests only.
+
+blockers: []
+questions: []
+
+next:
+  - "After restart, check hooks loaded: /hooks or settings; run the test command above."
+  - "Trigger /compact once in a long session; confirm the newest handoff is injected (session-start.mjs)."
+  - "Run one feature-class /autonomous task (multiple workers) to exercise the live report check and measure tokens for D5."
+  - "After a few sessions, review `bloks stats` to decide D3 (view logging)."
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-05_22-04_decisions-applied-restart.yaml
+  in ~\Documents\ccv47-readme-fix.
+  This is the first session after a restart: confirm the new hook registrations loaded
+  (SessionStart matcher "compact" -> session-start.mjs; PostToolUse report check with
+  if Edit(**/continuum/autonomous/*/reports/*.json)) and run the statusline `test:` command -
+  every suite should pass. Then propose one feature-class /autonomous task in this repo
+  (2-3 workers) to exercise the live report check, and measure main-context token use so we
+  can decide D5 (context: fork). Give recommendations with verdicts, not open option lists.
+
+files:
+  created: ["thoughts/shared/handoffs/general/2026-10-05_22-04_decisions-applied-restart.yaml"]
+  modified: []
