@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Chart-form recommender: the dataviz skill's choosing-a-form heuristic as code.
 
-    recommend(frame_or_profile, job=None) -> {form, reason, encoding, warnings}
+    recommend(frame_or_profile, job=None)
+        -> {job, job_inferred, form, reason, encoding, warnings}
+
+``job`` is always the job used (given, or inferred when None); ``job_inferred``
+says which.
 
 The data's job picks the form, and sometimes the right form is not a chart
 (stat tile, KPI row, meter, table).  Jobs:
@@ -14,8 +18,11 @@ kinds, cardinality, presence of a time or geo column).
 
 Refusals (each names its anti-patterns.md entry in ``warnings``):
 
-  * never a dual axis: several measures of different scale over time ->
-    small multiples (or index to a common base) on ONE axis
+  * never a dual axis: several measures of different scale (over time, or as
+    grouped bars over categories) -> small multiples by measure (or index to a
+    common base) on ONE axis.  Scales compare
+    pairwise (``scale`` = floor log10 of max |value|): the largest same-scale
+    group is the base and the warning lists only the measures outside it.
   * part-to-whole past 5 slices -> bar, never a pie/donut
   * 2 slices -> meter; a one-bar chart -> stat tile
   * categorical series past 8 -> fold into Other / small multiples
@@ -46,8 +53,17 @@ The core is pure stdlib and works on a plain-dict profile::
 
     {"n_rows": int,
      "columns": [{"name", "kind": numeric|categorical|temporal|boolean|text|geo,
-                  "cardinality", "is_sorted_time"?, "scale"?, "ordered"?}],
+                  "cardinality", "is_sorted_time"?, "scale"?, "ordered"?,
+                  "is_series"?}],
      "measures": [names], "dimensions": [names]}
+
+Series identity over time: a categorical column colors a line form only when it
+is a series key - the frame is long-format, several rows (categories) per time
+value, each category recurring across time (stocks: date x symbol).  A per-row
+attribute (one value per time value, e.g. seattle-weather ``weather``) is never
+the color; it is dropped from the encoding with a warning naming it.
+``"is_series"`` (set by profile_frame from the data) decides when present;
+otherwise the profile shape decides: n_rows > the time column's cardinality.
 
 ``profile_frame(df)`` builds that profile from a pandas DataFrame (pandas is
 imported lazily there and in the CLI only).
@@ -158,6 +174,70 @@ class _Ctx:
         return ", ".join(f"{m} (1e{self.scale(m)})" if self.scale(m) is not None else m
                          for m in measures)
 
+    def is_series(self, cat):
+        """True when ``cat`` is a series key over the first temporal column.
+
+        The profile's ``"is_series"`` decides when present.  Otherwise a series
+        needs several rows per time value (n_rows > time cardinality); one row
+        per time value makes every categorical a per-row attribute.  An unknown
+        time cardinality cannot disprove it, so the category stays a series.
+        """
+        c = self.by_name.get(cat) or {}
+        if c.get("is_series") is not None:
+            return bool(c["is_series"])
+        if not self.temporal:
+            return True
+        t_card = (self.by_name.get(self.temporal[0]) or {}).get("cardinality")
+        if t_card is None or not self.n_rows:
+            return True
+        return self.n_rows > int(t_card)
+
+    def series_split(self):
+        """(series keys, per-row attribute warnings) for the categoricals over time."""
+        series = [c for c in self.cats if self.is_series(c)]
+        t = self.temporal[0] if self.temporal else "row"
+        warns = [_attr_warning(c, t) for c in self.cats if c not in series]
+        return series, warns
+
+    def scale_groups(self, measures):
+        """Pairwise scale comparison -> (base group, off-scale, unknown-scale).
+
+        Two measures share a scale when their ``scale`` (floor log10 of max |v|)
+        is equal.  The base is the largest same-scale group (ties: the group of
+        the earliest measure); everything else with a known scale is off-scale.
+        """
+        known = [m for m in measures if self.scale(m) is not None]
+        unknown = [m for m in measures if self.scale(m) is None]
+        if not known:
+            return [], [], unknown
+        counts = {}
+        for m in known:
+            counts[self.scale(m)] = counts.get(self.scale(m), 0) + 1
+        first = {}
+        for i, m in enumerate(known):
+            first.setdefault(self.scale(m), i)
+        dominant = max(counts, key=lambda s: (counts[s], -first[s]))
+        base = [m for m in known if self.scale(m) == dominant]
+        off = [m for m in known if self.scale(m) != dominant]
+        return base, off, unknown
+
+
+def _attr_warning(cat, t):
+    return (f"'{cat}' is a per-row attribute (one value per '{t}'), not a series "
+            f"identity - a line cannot be colored by it, so it is left out of the "
+            f"encoding; facet or filter by it, or aggregate per '{t}'")
+
+
+def _dual_axis_warning(ctx, off, base, unknown):
+    parts = []
+    if off:
+        parts.append(f"{ctx.names(off)} differ in scale from {ctx.names(base)}")
+    if unknown:
+        verb = "has an unknown scale" if len(unknown) == 1 else "have unknown scales"
+        parts.append(f"{', '.join(unknown)} {verb}")
+    return (f"{AP_DUAL_AXIS}: measures {'; '.join(parts)} - small multiples, or index "
+            "them to a common base (=100 at t0) on ONE axis; never a second y-axis")
+
 
 def _out(form, reason, encoding, warnings=None):
     assert form in FORMS, form
@@ -262,6 +342,21 @@ def _magnitude(ctx, warnings=()):
                 _bar_color(ctx, xs[0], {"x": xs[0], "y": m, "sort": "-y"}), warnings)
 
 
+def _measures_on_one_axis(ctx, form, x, reason, warnings):
+    """Several measures as categorical series on ONE axis - only when they share a
+    scale.  Any off-scale (or unknown-scale) measure -> small multiples by measure
+    with the dual-axis warning; never a shared or second y-axis."""
+    base, off, unknown = ctx.scale_groups(ctx.measures)
+    if not off and not unknown:
+        return _out(form, reason, {"x": x, "y": list(ctx.measures), "color": "measure"},
+                    warnings)
+    return _out("small multiples",
+                f"choosing-a-form: a {form} of measures of different scale would need a "
+                "second axis - one panel per measure, never a dual axis.",
+                {"x": x, "y": "value", "facet": "measure"},
+                [_dual_axis_warning(ctx, off, base, unknown)] + list(warnings))
+
+
 def _identity(ctx):
     if _single_value(ctx):
         return _stat_tile(ctx, [f"{AP_ONE_NUMBER}: one value is a stat tile, not a series"])
@@ -269,18 +364,19 @@ def _identity(ctx):
               "multi-line with a categorical color job.")
     if ctx.temporal:
         x = ctx.temporal[0]
-        if ctx.cats and ctx.measures:
-            series = ctx.cats[0]
-            enc = {"x": x, "y": ctx.measures[0], "color": series}
-            return _series_fold(ctx, "multi-line", series, enc, reason, [], True)
+        series, attr_warns = ctx.series_split()
+        if series and ctx.measures:
+            enc = {"x": x, "y": ctx.measures[0], "color": series[0]}
+            return _series_fold(ctx, "multi-line", series[0], enc, reason, attr_warns,
+                                True)
         if len(ctx.measures) >= 2:
-            return _out("multi-line", reason,
-                        {"x": x, "y": list(ctx.measures), "color": "measure"})
+            return _measures_on_one_axis(ctx, "multi-line", x, reason, attr_warns)
         if ctx.measures:
             return _out("emphasis",
                         "choosing-a-form 'One series is the point, rest are context' -> "
                         "emphasis: one series in the accent hue, nothing else to tell apart.",
-                        {"x": x, "y": ctx.measures[0], "color": "1 hue + gray"})
+                        {"x": x, "y": ctx.measures[0], "color": "1 hue + gray"},
+                        attr_warns)
     xs = ctx.cats or ctx.geo
     if len(xs) >= 2 and ctx.measures:
         # the lower-cardinality dimension is the series (fewest hues); ties -> second
@@ -290,8 +386,7 @@ def _identity(ctx):
         enc = {"x": x, "y": ctx.measures[0], "color": series}
         return _series_fold(ctx, "grouped bar", series, enc, reason, [], False)
     if xs and len(ctx.measures) >= 2:
-        return _out("grouped bar", reason,
-                    {"x": xs[0], "y": list(ctx.measures), "color": "measure"})
+        return _measures_on_one_axis(ctx, "grouped bar", xs[0], reason, [])
     if xs and ctx.measures:
         return _out("emphasis",
                     "choosing-a-form 'One series is the point, rest are context' -> "
@@ -314,10 +409,12 @@ def _polarity(ctx):
     m = ctx.measures[0]
     if ctx.temporal:
         enc = {"x": ctx.temporal[0], "y": m, "color": "diverging"}
-        if ctx.cats:
-            enc["color"] = ctx.cats[0]
-            return _series_fold(ctx, "line vs baseline", ctx.cats[0], enc, reason, [], True)
-        return _out("line vs baseline", reason, enc)
+        series, attr_warns = ctx.series_split()
+        if series:
+            enc["color"] = series[0]
+            return _series_fold(ctx, "line vs baseline", series[0], enc, reason,
+                                attr_warns, True)
+        return _out("line vs baseline", reason, enc, attr_warns)
     xs = ctx.cats or ctx.geo
     if len(xs) >= 2:
         warnings = []
@@ -370,35 +467,34 @@ def _change_over_time(ctx):
                     "(1 hue, 2 shades).",
                     {"x": ctx.measures[0], "y": ctx.cats[0], "color": t,
                      "orientation": "horizontal", "sort": "-x"})
+    series, attr_warns = ctx.series_split()
     if len(ctx.measures) >= 2:
-        scales = [ctx.scale(m) for m in ctx.measures]
-        known = all(s is not None for s in scales)
-        same = known and (max(scales) - min(scales)) < 1
-        if same and not ctx.cats:
+        base, off, unknown = ctx.scale_groups(ctx.measures)
+        same = not off and not unknown
+        if same and not series:
             return _out("multi-line",
                         "choosing-a-form 'Trend over time': several measures on one "
                         "shared axis, same scale, categorical color per measure.",
-                        {"x": t, "y": list(ctx.measures), "color": "measure"})
-        why = ("differ in scale" if known else "have unknown scales")
-        warnings = [(f"{AP_DUAL_AXIS}: measures {ctx.names(ctx.measures)} {why} - "
-                     "small multiples, or index both to a common base (=100 at t0) on "
-                     "ONE axis; never a second y-axis")]
+                        {"x": t, "y": list(ctx.measures), "color": "measure"}, attr_warns)
+        warnings = [] if same else [_dual_axis_warning(ctx, off, base, unknown)]
+        warnings += attr_warns
         enc = {"x": t, "y": "value", "facet": "measure"}
-        if ctx.cats:
-            enc["color"] = ctx.cats[0]
-            if ctx.card(ctx.cats[0]) > SERIES_CEILING:
-                warnings.append(f"{AP_PAST_8}: '{ctx.cats[0]}' has "
-                                f"{ctx.card(ctx.cats[0])} series - {FOLD}")
+        if series:
+            s = series[0]
+            enc["color"] = s
+            if ctx.card(s) > SERIES_CEILING:
+                warnings.append(f"{AP_PAST_8}: '{s}' has {ctx.card(s)} series - {FOLD}")
                 enc.pop("color")
-        return _out("small multiples",
-                    "choosing-a-form 'Trend over time' with measures of different scale: "
-                    "one line per panel, never a dual axis.", enc, warnings)
+        why = ("several same-scale measures and a series dimension: one panel per "
+               "measure, one line per series" if same else
+               "measures of different scale: one line per panel, never a dual axis")
+        return _out("small multiples", f"choosing-a-form 'Trend over time' with {why}.",
+                    enc, warnings)
     m = ctx.measures[0]
-    if ctx.cats:
-        series = ctx.cats[0]
-        enc = {"x": t, "y": m, "color": series}
-        return _series_fold(ctx, "multi-line", series, enc, reason, [], True)
-    return _out("line", reason, {"x": t, "y": m, "color": "single"})
+    if series:
+        enc = {"x": t, "y": m, "color": series[0]}
+        return _series_fold(ctx, "multi-line", series[0], enc, reason, attr_warns, True)
+    return _out("line", reason, {"x": t, "y": m, "color": "single"}, attr_warns)
 
 
 def _distribution(ctx):
@@ -472,11 +568,20 @@ def _part_to_whole(ctx):
     parts = ctx.cats[0]
     value = ctx.measures[0] if ctx.measures else "count"
     n = ctx.card(parts)
-    if len(ctx.cats) >= 2 or ctx.temporal:
-        x = ctx.temporal[0] if ctx.temporal else ctx.cats[1]
-        if ctx.temporal and len(ctx.cats) >= 1:
-            parts = ctx.cats[0]
-        elif len(ctx.cats) >= 2:
+    # composition over time needs the parts to be a series per time value; a
+    # per-row attribute would give one segment per bar, so drop the time axis
+    use_time = bool(ctx.temporal) and ctx.is_series(parts)
+    pre = []
+    if ctx.temporal and not use_time:
+        t = ctx.temporal[0]
+        pre.append(f"'{parts}' is a per-row attribute (one value per '{t}'), not a "
+                   f"series over '{t}' - a stacked bar per '{t}' would hold one "
+                   "segment; showing its share of the whole instead (aggregate per "
+                   "period for composition over time)")
+    if len(ctx.cats) >= 2 or use_time:
+        if use_time:
+            x = ctx.temporal[0]
+        else:
             x, parts = ctx.cats[0], ctx.cats[1]
         n = ctx.card(parts)
         if n > COLOR_CLASS_CAP:
@@ -484,27 +589,28 @@ def _part_to_whole(ctx):
                         f"part-to-whole with {n} parts per '{x}': past ~7 classes the "
                         "segments blur - a table (or table + chart).",
                         {"x": x, "y": value, "color": parts},
-                        [(f"{AP_7_CLASSES}: '{parts}' has {n} classes - a table, or "
-                          "table + chart")])
+                        pre + [(f"{AP_7_CLASSES}: '{parts}' has {n} classes - a table, "
+                                "or table + chart")])
         return _out("stacked bar", reason,
-                    {"x": x, "y": value, "color": parts, "sort": "-y"})
+                    {"x": x, "y": value, "color": parts, "sort": "-y"}, pre)
     if n == 2:
         return _out("meter",
                     "choosing-a-form 'A single ratio against a limit' -> meter "
                     "(same-ramp track), not a pie of 2 slices.",
                     {"x": parts, "y": value},
-                    [f"{AP_ONE_BAR}: 2 slices is one ratio - a meter or the number"])
+                    pre + [f"{AP_ONE_BAR}: 2 slices is one ratio - a meter or the number"])
     if n > PIE_SLICE_CAP:
         return _out("bar",
                     f"part-to-whole with {n} parts: a sorted bar with share labels; "
                     f"past {PIE_SLICE_CAP} slices a pie cannot be read.",
                     _bar_color(ctx, parts, {"x": parts, "y": value,
                                             "orientation": "horizontal", "sort": "-y"}),
-                    [(f"{AP_PIE}: {n} slices - a bar, or the numbers "
-                      f"(part-to-whole at a glance only, <= {PIE_SLICE_CAP} segments)")])
+                    pre + [(f"{AP_PIE}: {n} slices - a bar, or the numbers "
+                            f"(part-to-whole at a glance only, <= {PIE_SLICE_CAP} "
+                            "segments)")])
     return _out("stacked bar", reason,
                 {"x": "share", "y": None, "color": parts, "orientation": "horizontal",
-                 "sort": "-y"})
+                 "sort": "-y"}, pre)
 
 
 def _ranking(ctx):
@@ -623,13 +729,17 @@ def _as_profile(frame_or_profile):
 
 
 def recommend(frame_or_profile, job=None):
-    """Return {form, reason, encoding, warnings} for the data and its job."""
+    """Return {job, job_inferred, form, reason, encoding, warnings}.
+
+    ``job`` is the job used: the one given, or the inferred one when None.
+    """
     profile = copy.deepcopy(_as_profile(frame_or_profile))
-    if job is None:
+    inferred = job is None
+    if inferred:
         job = infer_job(profile)
     if job not in _RULES:
         raise ValueError(f"unknown job {job!r}; expected one of {', '.join(JOBS)}")
-    return _RULES[job](_Ctx(profile))
+    return {"job": job, "job_inferred": inferred, **_RULES[job](_Ctx(profile))}
 
 
 # --------------------------------------------------------------------------
@@ -682,13 +792,26 @@ def _kind_of(name, series):
     return "categorical", None
 
 
+def _is_series(cat, time_key):
+    """True when ``cat`` holds several categories per time value (long format).
+
+    stocks (date x symbol): ~5 symbols per date -> series.  seattle-weather: one
+    ``weather`` value per date -> a per-row attribute, not a series.
+    """
+    per_time = cat.groupby(time_key, dropna=True).nunique(dropna=True)
+    return bool(len(per_time) and float(per_time.mean()) > 1)
+
+
 def profile_frame(df):
     """Build the plain-dict profile recommend() consumes from a pandas DataFrame."""
     columns = []
     measures, dimensions = [], []
+    time_key = None
     for name in df.columns:
         series = df[name]
         kind, parsed = _kind_of(name, series)
+        if kind == "temporal" and time_key is None:
+            time_key = (parsed if parsed is not None else series).reindex(df.index)
         col = {"name": str(name), "kind": kind,
                "cardinality": int(series.dropna().nunique())}
         if kind == "categorical" and getattr(series.dtype, "ordered", False):
@@ -704,6 +827,10 @@ def profile_frame(df):
             if kind != "text":
                 dimensions.append(str(name))
         columns.append(col)
+    if time_key is not None:
+        for col in columns:
+            if col["kind"] in ("categorical", "boolean"):
+                col["is_series"] = _is_series(df[col["name"]], time_key)
     return {"n_rows": len(df), "columns": columns,
             "measures": measures, "dimensions": dimensions}
 
@@ -753,13 +880,12 @@ def main(argv=None):
         print(f"error: could not load {path}: {exc}", file=sys.stderr)
         return 2
     profile = profile_frame(df)
-    job = args.job or infer_job(profile)
-    out = recommend(profile, job)
+    out = recommend(profile, args.job)
     if args.json:
-        payload = {"job": job, "job_inferred": args.job is None, **out, "profile": profile}
+        payload = {**out, "profile": profile}
         print(json.dumps(payload, indent=2))
     else:
-        print(_format_text(job, args.job is None, out, profile))
+        print(_format_text(out["job"], out["job_inferred"], out, profile))
     return 0
 
 

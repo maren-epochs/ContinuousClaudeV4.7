@@ -11,6 +11,9 @@ Covers:
   (d) determinism: same profile -> same output
   (e) profile_frame(df) builds the plain-dict profile (needs pandas)
   (f) CLI: csv/parquet path, --job, --json, exit codes
+  (g) VAL-402: a per-row categorical (one value per time) is never a line's
+      series color; dual-axis warning names only the off-scale measures;
+      recommend() returns the job it used
 
 Run: py -3.13 tools/viz/test_recommend.py
 """
@@ -87,7 +90,8 @@ P_MANY_SERIES = profile([col("date", "temporal", 24, is_sorted_time=True),
 class SchemaTests(unittest.TestCase):
     def test_result_shape(self):
         out = recommend(P_CAT_MEASURE, "magnitude")
-        self.assertEqual(set(out), {"form", "reason", "encoding", "warnings"})
+        self.assertEqual(set(out), {"job", "job_inferred", "form", "reason",
+                                    "encoding", "warnings"})
         self.assertIn(out["form"], FORMS)
         self.assertIsInstance(out["reason"], str)
         self.assertTrue(out["reason"].strip())
@@ -601,13 +605,17 @@ class CliTests(unittest.TestCase):
         out = json.loads(r.stdout)
         self.assertEqual(out["form"], "line")
         self.assertEqual(out["job"], "change-over-time")
+        self.assertIs(out["job_inferred"], True)
         self.assertEqual(out["encoding"]["x"], "date")
         self.assertIn("profile", out)
 
     def test_job_override(self):
         r = self.run_cli(str(self.csv), "--job", "distribution", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(r.stdout)["form"], "histogram")
+        out = json.loads(r.stdout)
+        self.assertEqual(out["form"], "histogram")
+        self.assertEqual(out["job"], "distribution")
+        self.assertIs(out["job_inferred"], False)
 
     def test_bad_job(self):
         r = self.run_cli(str(self.csv), "--job", "pie")
@@ -628,6 +636,210 @@ class CliTests(unittest.TestCase):
         r = self.run_cli(str(pq), "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout)["form"], "line")
+
+
+# --- VAL-402 profiles -------------------------------------------------------
+# one row per date: 'weather' is a per-row attribute, not a series identity
+P_TIME_ATTR = profile([col("date", "temporal", 100, is_sorted_time=True),
+                       col("temp_max", "numeric", 60, scale=1),
+                       col("weather", "categorical", 5)], n_rows=100)
+# seattle-weather shape: four measures, three at 1e1, wind at 1e0
+P_SEATTLE = profile([col("date", "temporal", 1461, is_sorted_time=True),
+                     col("precipitation", "numeric", 111, scale=1),
+                     col("temp_max", "numeric", 67, scale=1),
+                     col("temp_min", "numeric", 55, scale=1),
+                     col("wind", "numeric", 79, scale=0),
+                     col("weather", "categorical", 5)], n_rows=1461)
+# stocks shape: long format, several rows per date -> 'symbol' IS a series
+P_LONG = profile([col("symbol", "categorical", 5),
+                  col("date", "temporal", 123, is_sorted_time=False),
+                  col("price", "numeric", 549, scale=2)], n_rows=560)
+OUT_DIR = PROJECT / "continuum" / "research" / "dataviz-suite" / "out"
+
+
+def dual_axis(out):
+    return [w for w in out["warnings"] if w.startswith("Dual-axis charts")]
+
+
+def listed(warning):
+    """The measures a dual-axis warning names as off-scale (text before 'differ')."""
+    return warning.split(" differ")[0]
+
+
+class SeriesIdentityTests(unittest.TestCase):
+    """VAL-402 (a): color never maps to a per-row attribute over time."""
+
+    def test_per_row_attribute_is_not_line_color(self):
+        out = recommend(P_TIME_ATTR, "change-over-time")
+        self.assertEqual(out["form"], "line")
+        self.assertEqual(out["encoding"]["color"], "single")
+        self.assertTrue(any("'weather'" in w for w in out["warnings"]), out["warnings"])
+
+    def test_per_row_attribute_never_colors_time_forms(self):
+        for job in ("identity", "polarity", "change-over-time"):
+            out = recommend(P_TIME_ATTR, job)
+            self.assertNotEqual(out["encoding"].get("color"), "weather", f"{job}: {out}")
+            self.assertTrue(any("'weather'" in w for w in out["warnings"]),
+                            f"{job}: {out['warnings']}")
+
+    def test_seattle_shape_drops_weather_color(self):
+        out = recommend(P_SEATTLE)
+        self.assertEqual(out["form"], "small multiples")
+        self.assertEqual(out["encoding"]["facet"], "measure")
+        self.assertNotEqual(out["encoding"].get("color"), "weather")
+        self.assertTrue(any("'weather'" in w and "per-row" in w for w in out["warnings"]))
+
+    def test_long_format_category_is_still_a_series(self):
+        out = recommend(P_LONG, "change-over-time")
+        self.assertEqual(out["form"], "multi-line")
+        self.assertEqual(out["encoding"]["color"], "symbol")
+        self.assertFalse(any("per-row" in w for w in out["warnings"]))
+
+    def test_explicit_is_series_flag_wins(self):
+        prof = copy.deepcopy(P_TIME_SERIES)
+        prof["columns"][1]["is_series"] = False
+        out = recommend(prof, "change-over-time")
+        self.assertEqual(out["form"], "line")
+        self.assertEqual(out["encoding"]["color"], "single")
+        prof = copy.deepcopy(P_TIME_ATTR)
+        prof["columns"][2]["is_series"] = True
+        out = recommend(prof, "change-over-time")
+        self.assertEqual(out["encoding"]["color"], "weather")
+
+
+class DualAxisScaleTests(unittest.TestCase):
+    """VAL-402 (b): only measures outside the dominant scale group are listed."""
+
+    def test_seattle_lists_only_wind(self):
+        warns = dual_axis(recommend(P_SEATTLE, "change-over-time"))
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("wind (1e0)", listed(warns[0]))
+        for m in ("precipitation", "temp_max", "temp_min"):
+            self.assertNotIn(m, listed(warns[0]), warns[0])
+
+    def test_pairwise_three_measures(self):
+        prof = profile([col("date", "temporal", 24), col("a", "numeric", 24, scale=3),
+                        col("b", "numeric", 24, scale=6), col("c", "numeric", 24, scale=3)],
+                       n_rows=24)
+        warns = dual_axis(recommend(prof, "change-over-time"))
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("b (1e6)", listed(warns[0]))
+        self.assertNotIn("a (1e3)", listed(warns[0]))
+        self.assertNotIn("c (1e3)", listed(warns[0]))
+
+    def test_identity_seattle_is_small_multiples_not_shared_axis(self):
+        out = recommend(P_SEATTLE, "identity")
+        self.assertEqual(out["form"], "small multiples")
+        self.assertEqual(out["encoding"]["x"], "date")
+        self.assertEqual(out["encoding"]["y"], "value")
+        self.assertEqual(out["encoding"]["facet"], "measure")
+        self.assertNotEqual(out["encoding"].get("color"), "weather")
+        warns = dual_axis(out)
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("wind (1e0)", listed(warns[0]))
+        for m in ("precipitation", "temp_max", "temp_min"):
+            self.assertNotIn(m, listed(warns[0]), warns[0])
+        self.assertTrue(any("'weather'" in w for w in out["warnings"]))
+
+    def test_identity_grouped_bar_differing_scales_facets(self):
+        prof = profile([col("region", "categorical", 5), col("orders", "numeric", 5, scale=2),
+                        col("revenue", "numeric", 5, scale=5)], n_rows=5)
+        out = recommend(prof, "identity")
+        self.assertEqual(out["form"], "small multiples")
+        self.assertEqual(out["encoding"]["x"], "region")
+        self.assertEqual(out["encoding"]["facet"], "measure")
+        warns = dual_axis(out)
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("revenue (1e5)", listed(warns[0]))
+        self.assertNotIn("orders", listed(warns[0]))
+
+    def test_identity_same_scale_keeps_one_axis(self):
+        out = recommend(P_TIME_SAME_SCALE, "identity")
+        self.assertEqual(out["form"], "multi-line")
+        self.assertEqual(out["encoding"]["color"], "measure")
+        self.assertEqual(dual_axis(out), [])
+        prof = profile([col("region", "categorical", 5), col("a", "numeric", 5, scale=3),
+                        col("b", "numeric", 5, scale=3)], n_rows=5)
+        out = recommend(prof, "identity")
+        self.assertEqual(out["form"], "grouped bar")
+        self.assertEqual(dual_axis(out), [])
+
+    def test_no_job_puts_differing_scales_on_one_axis(self):
+        # audit: a list-valued y is a shared axis unless the form is tiles / a table
+        mixed = profile([col("region", "categorical", 5), col("orders", "numeric", 5, scale=2),
+                         col("revenue", "numeric", 5, scale=5)], n_rows=5)
+        unknown = profile([col("date", "temporal", 24), col("users", "numeric", 24),
+                           col("sessions", "numeric", 24)], n_rows=24)
+        for prof in (P_SEATTLE, P_TIME_TWO_SCALES, mixed, unknown):
+            for job in JOBS:
+                out = recommend(prof, job)
+                y = out["encoding"]["y"]
+                if isinstance(y, list) and len(y) > 1:
+                    self.assertIn(out["form"], ("KPI row", "table"), f"{job}: {out}")
+
+    def test_same_scale_with_series_has_no_dual_axis_warning(self):
+        prof = profile([col("date", "temporal", 24), col("region", "categorical", 4),
+                        col("users", "numeric", 96, scale=4),
+                        col("signups", "numeric", 96, scale=4)], n_rows=96)
+        out = recommend(prof, "change-over-time")
+        self.assertEqual(dual_axis(out), [])
+        self.assertEqual(out["encoding"]["color"], "region")
+
+
+class JobKeyTests(unittest.TestCase):
+    """VAL-402 (c): recommend() returns the job it used."""
+
+    def test_inferred_job_is_returned(self):
+        out = recommend(P_CAT_MEASURE)
+        self.assertEqual(out["job"], "magnitude")
+        self.assertTrue(out["job_inferred"])
+
+    def test_given_job_is_returned(self):
+        out = recommend(P_CAT_MEASURE, "ranking")
+        self.assertEqual(out["job"], "ranking")
+        self.assertFalse(out["job_inferred"])
+
+    def test_fallback_keeps_requested_job(self):
+        out = recommend(P_CAT_MEASURE, "change-over-time")
+        self.assertEqual(out["job"], "change-over-time")
+
+
+@unittest.skipIf(pd is None, "pandas not installed")
+class RealDataTests(unittest.TestCase):
+    """VAL-402 on the demo's real CSVs (continuum/research/dataviz-suite/out)."""
+
+    def setUp(self):
+        if not (OUT_DIR / "seattle-weather.csv").is_file():
+            self.skipTest("seattle-weather.csv not present")
+
+    def test_seattle_weather_profile_frame(self):
+        df = pd.read_csv(OUT_DIR / "seattle-weather.csv")
+        prof = recommend_mod.profile_frame(df)
+        by = {c["name"]: c for c in prof["columns"]}
+        self.assertIs(by["weather"]["is_series"], False)
+        out = recommend(prof)
+        self.assertEqual(out["job"], "change-over-time")
+        self.assertTrue(out["job_inferred"])
+        self.assertEqual(out["form"], "small multiples")
+        self.assertNotEqual(out["encoding"].get("color"), "weather")
+        warns = dual_axis(out)
+        self.assertEqual(len(warns), 1, warns)
+        self.assertIn("wind", listed(warns[0]))
+        for m in ("precipitation", "temp_max", "temp_min"):
+            self.assertNotIn(m, listed(warns[0]), warns[0])
+        self.assertTrue(any("'weather'" in w for w in out["warnings"]))
+
+    def test_stocks_symbol_stays_a_series(self):
+        path = OUT_DIR / "stocks.csv"
+        if not path.is_file():
+            self.skipTest("stocks.csv not present")
+        prof = recommend_mod.profile_frame(pd.read_csv(path))
+        by = {c["name"]: c for c in prof["columns"]}
+        self.assertIs(by["symbol"]["is_series"], True)
+        out = recommend(prof)
+        self.assertEqual(out["form"], "multi-line")
+        self.assertEqual(out["encoding"]["color"], "symbol")
+
 
 
 if __name__ == "__main__":
