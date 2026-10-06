@@ -10,6 +10,8 @@ First determine session folder from existing handoffs: `ls -td {H}/*/ 2>/dev/nul
 
 Create file at `{H}/{session-name}/YYYY-MM-DD_HH-MM_description.yaml` using today's date/time and brief kebab-case description.
 
+**Context ledger (fail-open):** before writing, run `py -3.13 tools/context_ledger.py --json` from the project root with no `--session` argument (the tool defaults to the newest transcript in the cwd slug folder under `~/.claude/projects/`). From the JSON take `peak_context` and `skills` (`{label: {delta, ...}}`). Peak % = `peak_context / window`, window = 1000000 if `peak_context > 200000` else 200000 (same rule as `.claude/hooks/auto-handoff-stop.mjs`); show peak tokens in K. Rank skills by `delta` descending, keep the top three, drop `(none)`. Write the result as `context:` in `codebase_state`, e.g. `context: "peak 48% (96K) | autonomous +41K, resume-handoff +22K, premortem +6K"`. If `tools/context_ledger.py` is absent (user repos), no transcript is found, or the command exits non-zero, write `context: unknown` and continue — never block the handoff on this step. Worker (subagent) tokens are not in the main transcript and are excluded. The live skill under `~/.claude/skills` is rebuilt from this file by `py -3.13 install/sync_global.py --apply` after commit.
+
 Use EXACTLY this YAML format — `goal:` and `now:` fields appear in statusline and must be named precisely:
 
 ```yaml
@@ -44,6 +46,7 @@ codebase_state:
   branch: {current branch}
   dirty_files: [{modified/staged files relevant to this work}]
   warnings: {known warnings to ignore, or "clean"}
+  context: {from context ledger step, e.g. "peak 48% (96K) | autonomous +41K, resume-handoff +22K, premortem +6K", or unknown}
 
 # ── WHAT WAS DONE ────────────────────────────────────────────────
 done_this_session:
