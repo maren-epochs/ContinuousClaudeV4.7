@@ -1,0 +1,80 @@
+{
+  "transcript": "<projects>/project-B\\405e2d7c.jsonl",
+  "version": "2.1.288",
+  "turns": 6297,
+  "skipped_lines": 0,
+  "peak_context": 881974,
+  "total_output_tokens": 4827076,
+  "compactions": [
+    {
+      "turn": 1387,
+      "from": 881649,
+      "to": 67317
+    },
+    {
+      "turn": 3006,
+      "from": 881974,
+      "to": 62697
+    },
+    {
+      "turn": 4794,
+      "from": 880192,
+      "to": 60411
+    }
+  ],
+  "spans": [
+    {
+      "label": "resume-handoff",
+      "first_turn": 1,
+      "last_turn": 24,
+      "turns": 24,
+      "start_context": 60141,
+      "end_context": 87596,
+      "delta": 87596
+    },
+    {
+      "label": "(none)",
+      "first_turn": 25,
+      "last_turn": 6266,
+      "turns": 6242,
+      "start_context": 88817,
+      "end_context": 828005,
+      "delta": 3193799
+    },
+    {
+      "label": "create-handoff",
+      "first_turn": 6267,
+      "last_turn": 6269,
+      "turns": 3,
+      "start_context": 830457,
+      "end_context": 835254,
+      "delta": 7249
+    },
+    {
+      "label": "(none)",
+      "first_turn": 6270,
+      "last_turn": 6297,
+      "turns": 28,
+      "start_context": 835691,
+      "end_context": 845155,
+      "delta": 9901
+    }
+  ],
+  "skills": {
+    "resume-handoff": {
+      "delta": 87596,
+      "spans": 1,
+      "turns": 24
+    },
+    "(none)": {
+      "delta": 3203700,
+      "spans": 2,
+      "turns": 6270
+    },
+    "create-handoff": {
+      "delta": 7249,
+      "spans": 1,
+      "turns": 3
+    }
+  }
+}

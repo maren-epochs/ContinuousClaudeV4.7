@@ -1,0 +1,62 @@
+{
+  "transcript": "<projects>/project-B\\7889085a.jsonl",
+  "version": "2.1.280",
+  "turns": 4454,
+  "skipped_lines": 0,
+  "peak_context": 881797,
+  "total_output_tokens": 5231261,
+  "compactions": [
+    {
+      "turn": 828,
+      "from": 801002,
+      "to": 0
+    },
+    {
+      "turn": 913,
+      "from": 877127,
+      "to": 64882
+    },
+    {
+      "turn": 2127,
+      "from": 881797,
+      "to": 61292
+    },
+    {
+      "turn": 3581,
+      "from": 881393,
+      "to": 64580
+    }
+  ],
+  "spans": [
+    {
+      "label": "resume-handoff",
+      "first_turn": 1,
+      "last_turn": 126,
+      "turns": 126,
+      "start_context": 60228,
+      "end_context": 205418,
+      "delta": 205418
+    },
+    {
+      "label": "(none)",
+      "first_turn": 127,
+      "last_turn": 4454,
+      "turns": 4328,
+      "start_context": 206546,
+      "end_context": 657818,
+      "delta": 3702965
+    }
+  ],
+  "skills": {
+    "resume-handoff": {
+      "delta": 205418,
+      "spans": 1,
+      "turns": 126
+    },
+    "(none)": {
+      "delta": 3702965,
+      "spans": 1,
+      "turns": 4328
+    }
+  }
+}

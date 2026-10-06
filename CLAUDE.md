@@ -33,7 +33,7 @@ Autonomous SDLC pipeline for Claude Code. 10 skills, 2 agents, 7 hooks (+ tldr-s
 | `post-edit-diagnostics.mjs` | PostToolUse:Edit\|Write\|MultiEdit\|Update | Lint after edits; Python via ruff direct (E9/F63/F7/F82/syntax = error), others via tldr |
 | `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction |
 | `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff; falls back to transcript usage when no statusline ran (headless) |
-| `worker-report-check.mjs` | PostToolUse (settings, `if` = report JSON writes) + SubagentStop (worker frontmatter) | Validates report JSON with `tools/validate_report.py`; PostToolUse feedback reaches a running worker (verified live), SubagentStop is a late second check. VALIDATE's schema gate stays binding |
+| `worker-report-check.mjs` | PostToolUse (settings, unfiltered - the hook self-filters on `reports/*.json` paths, ~80ms otherwise) + SubagentStop (worker frontmatter) | Validates report JSON with `tools/validate_report.py`; PostToolUse feedback reaches a running worker on Edit and Write (verified live; a settings `if: Edit(...)` filter matched Edit only, so it was removed), SubagentStop is a late second check. VALIDATE's schema gate stays binding |
 | `session-start.mjs` | SessionStart (registered for `compact`) | After compaction: injects the newest handoff from the handoff root. startup/clear bloks injection available but not registered (~2K tokens/session) |
 
 Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. Tests: `.claude/hooks/test_*.sh`.
@@ -58,6 +58,7 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 
 - `ouros_harness.py` — Ouros REPL bridge with exa_search, nia_search, llm_call, agent_call (`--max-turns` default 25)
 - `validate_report.py` — worker report + contract.json schema check (stdlib); VALIDATE gates on it
+- `context_ledger.py` — per-span / per-skill main-context token ledger from a session transcript (stdlib; `--json`, `--session <id>`, default = newest transcript for cwd); create-handoff writes its summary as `context:`
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
 

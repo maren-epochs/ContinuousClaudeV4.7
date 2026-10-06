@@ -1,0 +1,171 @@
+{
+  "transcript": "<projects>/project-C\\7931435e.jsonl",
+  "version": "2.1.278",
+  "turns": 1416,
+  "skipped_lines": 0,
+  "peak_context": 874523,
+  "total_output_tokens": 1447432,
+  "compactions": [
+    {
+      "turn": 999,
+      "from": 627366,
+      "to": 522098
+    },
+    {
+      "turn": 1360,
+      "from": 874523,
+      "to": 73105
+    }
+  ],
+  "spans": [
+    {
+      "label": "(none)",
+      "first_turn": 1,
+      "last_turn": 224,
+      "turns": 224,
+      "start_context": 52364,
+      "end_context": 176128,
+      "delta": 176128
+    },
+    {
+      "label": "bootup",
+      "first_turn": 225,
+      "last_turn": 229,
+      "turns": 5,
+      "start_context": 178238,
+      "end_context": 179874,
+      "delta": 3746
+    },
+    {
+      "label": "(none)",
+      "first_turn": 230,
+      "last_turn": 348,
+      "turns": 119,
+      "start_context": 180205,
+      "end_context": 238677,
+      "delta": 58803
+    },
+    {
+      "label": "autonomous",
+      "first_turn": 349,
+      "last_turn": 359,
+      "turns": 11,
+      "start_context": 244837,
+      "end_context": 250407,
+      "delta": 11730
+    },
+    {
+      "label": "(none)",
+      "first_turn": 360,
+      "last_turn": 607,
+      "turns": 248,
+      "start_context": 251106,
+      "end_context": 394077,
+      "delta": 143670
+    },
+    {
+      "label": "docx",
+      "first_turn": 608,
+      "last_turn": 705,
+      "turns": 98,
+      "start_context": 396895,
+      "end_context": 439980,
+      "delta": 45903
+    },
+    {
+      "label": "(none)",
+      "first_turn": 706,
+      "last_turn": 949,
+      "turns": 244,
+      "start_context": 441076,
+      "end_context": 582218,
+      "delta": 142238
+    },
+    {
+      "label": "research",
+      "first_turn": 950,
+      "last_turn": 968,
+      "turns": 19,
+      "start_context": 585913,
+      "end_context": 604401,
+      "delta": 22183
+    },
+    {
+      "label": "(none)",
+      "first_turn": 969,
+      "last_turn": 1050,
+      "turns": 82,
+      "start_context": 605251,
+      "end_context": 560892,
+      "delta": 61759
+    },
+    {
+      "label": "research",
+      "first_turn": 1051,
+      "last_turn": 1078,
+      "turns": 28,
+      "start_context": 563833,
+      "end_context": 589460,
+      "delta": 28568
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1079,
+      "last_turn": 1335,
+      "turns": 257,
+      "start_context": 590533,
+      "end_context": 853661,
+      "delta": 264201
+    },
+    {
+      "label": "create-handoff",
+      "first_turn": 1336,
+      "last_turn": 1346,
+      "turns": 11,
+      "start_context": 856304,
+      "end_context": 868394,
+      "delta": 14733
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1347,
+      "last_turn": 1416,
+      "turns": 70,
+      "start_context": 869434,
+      "end_context": 107065,
+      "delta": 40089
+    }
+  ],
+  "skills": {
+    "(none)": {
+      "delta": 886888,
+      "spans": 7,
+      "turns": 1244
+    },
+    "bootup": {
+      "delta": 3746,
+      "spans": 1,
+      "turns": 5
+    },
+    "autonomous": {
+      "delta": 11730,
+      "spans": 1,
+      "turns": 11
+    },
+    "docx": {
+      "delta": 45903,
+      "spans": 1,
+      "turns": 98
+    },
+    "research": {
+      "delta": 50751,
+      "spans": 2,
+      "turns": 47
+    },
+    "create-handoff": {
+      "delta": 14733,
+      "spans": 1,
+      "turns": 11
+    }
+  }
+}

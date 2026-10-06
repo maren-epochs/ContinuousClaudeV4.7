@@ -18,6 +18,10 @@ clippy -D warnings has 11 errors, fmt --check fails on existing upstream code. O
 ## D5. context: fork for /review, /premortem, /research + per-skill effort
 Saves main-context tokens (unmeasured). Changes how those skills report back. Options: (a) measure one long session first [Recommended]; (b) apply now.
 
+### D5 verdict (2026-10-05, measured)
+Measured with tools/context_ledger.py over this session plus the 3 largest transcripts on the machine (d5-measurement.md alongside, raw ledger-*.json). Do NOT fork /premortem or /research: per-invocation main-context cost is 8-29K (5-18% of a 200K-window peak, <3% on 1M-window sessions) against a >=52-64K fresh-subagent baseline plus re-reads and handback. /review has zero measured spans; default to not forking until one real run is ledgered. Unattributed orchestrator work (tool results, worker reports, file reads) dominates every transcript; forking the three skills would not move it. The per-skill-effort half of D5 is not answered by a context-side ledger. Re-open if: a /review run shows >60K in-span growth, or sessions routinely run on a 200K window above 70%.
+
+
 ## D6. Worker SubagentStop hook can't resume background workers
 Live probe (verified): hook fired, computed the correct block, transcript recorded hook_blocking_error — but the worker had already handed back and never continued. All Agent-tool workers here run in the background, so the hook is advisory; VALIDATE's schema gate is the binding check (it passed in the E2E run). Docs corrected.
 Options: (a) keep hook as-is, advisory + transcript trail [Recommended — harmless, may become binding if foreground subagents are used]; (b) remove it (simpler); (c) move enforcement to a PostToolUse hook on Write to reports/*.json so the worker sees errors while still running [worth trying; S effort].

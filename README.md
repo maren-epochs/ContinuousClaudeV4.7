@@ -18,6 +18,7 @@ tools/
   ouros_harness.py sandboxed Python REPL with external function bridge
   exa_search.py    web search bridge (requires EXA_API_KEY)
   nia_docs.py      documentation search bridge (requires NIA_API_KEY)
+  context_ledger.py per-skill main-context token ledger from a session transcript (stdlib)
 ```
 
 ## Skills

@@ -1,0 +1,73 @@
+{
+  "transcript": "<projects>/home-dir\\787e3704.jsonl",
+  "version": "2.1.289",
+  "turns": 712,
+  "skipped_lines": 0,
+  "peak_context": 488493,
+  "total_output_tokens": 661318,
+  "compactions": [],
+  "spans": [
+    {
+      "label": "(none)",
+      "first_turn": 1,
+      "last_turn": 357,
+      "turns": 357,
+      "start_context": 57232,
+      "end_context": 284899,
+      "delta": 284899
+    },
+    {
+      "label": "autonomous",
+      "first_turn": 358,
+      "last_turn": 376,
+      "turns": 19,
+      "start_context": 287304,
+      "end_context": 297112,
+      "delta": 12213
+    },
+    {
+      "label": "(none)",
+      "first_turn": 377,
+      "last_turn": 428,
+      "turns": 52,
+      "start_context": 299204,
+      "end_context": 322882,
+      "delta": 25770
+    },
+    {
+      "label": "create-handoff",
+      "first_turn": 429,
+      "last_turn": 448,
+      "turns": 20,
+      "start_context": 325589,
+      "end_context": 337698,
+      "delta": 14816
+    },
+    {
+      "label": "(none)",
+      "first_turn": 449,
+      "last_turn": 712,
+      "turns": 264,
+      "start_context": 338905,
+      "end_context": 488493,
+      "delta": 150795
+    }
+  ],
+  "skills": {
+    "(none)": {
+      "delta": 461464,
+      "spans": 3,
+      "turns": 673
+    },
+    "autonomous": {
+      "delta": 12213,
+      "spans": 1,
+      "turns": 19
+    },
+    "create-handoff": {
+      "delta": 14816,
+      "spans": 1,
+      "turns": 20
+    }
+  }
+}
