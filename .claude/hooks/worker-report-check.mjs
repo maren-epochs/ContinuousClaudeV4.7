@@ -11,7 +11,8 @@
  * continuum/autonomous/*\/reports/*.json path. Never newest-by-mtime:
  * parallel workers write sibling reports and would cross-wire.
  *
- * Loop guard: stop_hook_active -> allow; at most MAX_BLOCKS blocks per agent_id.
+ * Loop guard: at most MAX_BLOCKS blocks per agent_id. stop_hook_active is NOT an early
+ * allow: Claude Code sets it on every stop after a block, which would cap blocks at one.
  * Fail-open: missing transcript/python/validator -> allow, note on stderr.
  */
 import { readFileSync, writeFileSync, existsSync } from 'fs';
@@ -106,7 +107,6 @@ function main() {
   try { data = JSON.parse(readFileSync(0, 'utf-8')); } catch { return allow('unparseable hook input'); }
   if (!data || typeof data !== 'object') return allow('unparseable hook input');
   if (data.hook_event_name === 'PostToolUse') return onReportWrite(data);
-  if (data.stop_hook_active) return allow();
 
   const transcript = data.agent_transcript_path || data.transcript_path;
   if (!transcript) return allow('no transcript path in hook input');

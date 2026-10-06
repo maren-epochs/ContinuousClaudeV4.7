@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for .claude/hooks/worker-report-check.mjs (worker frontmatter Stop -> SubagentStop)
-#   block on invalid report; allow on valid; allow when stop_hook_active;
+#   block on invalid report; allow on valid; stop_hook_active still re-validates;
 #   allow when no report path in transcript; block when output path has no file;
 #   fail-open when python missing; output field beats a later sibling Write;
 #   loop guard caps blocks per agent_id.
@@ -64,10 +64,10 @@ printf '%s' "$VALID" > "$REPORT"
 run_hook "$(payload "$T" wrc-a2)"
 [ "$OUT" = "{}" ] && [ $RC -eq 0 ]; check "valid report allows" $?
 
-# 3. stop_hook_active -> allow even when invalid
+# 3. stop_hook_active (set on every stop after a block) still re-validates: an invalid report blocks again
 printf '%s' "$INVALID" > "$REPORT"
 run_hook "$(payload "$T" wrc-a3 true)"
-[ "$OUT" = "{}" ]; check "stop_hook_active allows" $?
+case "$OUT" in *'"decision":"block"'*) r=0;; *) r=1;; esac; check "stop_hook_active re-validates and blocks invalid report" $r
 
 # 4. no report path anywhere in transcript -> allow + note
 T2="$WORK/agent2.jsonl"
