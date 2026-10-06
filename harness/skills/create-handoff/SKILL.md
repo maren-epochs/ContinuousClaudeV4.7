@@ -4,7 +4,7 @@ description: Create handoff document for transferring work to another session
 
 Handoffs transfer mental model to fresh sessions. Cardinal sin: forcing next instance to re-discover what you know.
 
-Handoff root `{H}`: `thoughts/shared/handoffs` if that directory exists in the project, else `~/.claude/handoffs/{project-dir-basename}` (keeps user repos clean; the statusline and pre-compact use the same rule). Never create `thoughts/` in a project that lacks it.
+Handoff root `{H}`: `thoughts/shared/handoffs` if that directory exists in the project, else `~/.claude/handoffs/{basename of the launch dir, $CLAUDE_PROJECT_DIR}` (keeps user repos clean; the statusline and pre-compact use the same rule). Never create `thoughts/` in a project that lacks it.
 
 First determine session folder from existing handoffs: `ls -td {H}/*/ 2>/dev/null | head -1 | xargs basename`. Returns most recent folder name (e.g., `open-source-release`). Use this name, or `general` if none exist.
 
