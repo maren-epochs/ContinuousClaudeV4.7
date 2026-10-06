@@ -1,0 +1,65 @@
+{
+  "job": "change-over-time",
+  "job_inferred": true,
+  "form": "small multiples",
+  "reason": "choosing-a-form 'Trend over time' with measures of different scale: one line per panel, never a dual axis.",
+  "encoding": {
+    "x": "date",
+    "y": "value",
+    "facet": "measure",
+    "color": "weather"
+  },
+  "warnings": [
+    "Dual-axis charts (two y-scales on one plot): measures precipitation (1e1), temp_max (1e1), temp_min (1e1), wind (1e0) differ in scale - small multiples, or index both to a common base (=100 at t0) on ONE axis; never a second y-axis"
+  ],
+  "profile": {
+    "n_rows": 1461,
+    "columns": [
+      {
+        "name": "date",
+        "kind": "temporal",
+        "cardinality": 1461,
+        "is_sorted_time": true
+      },
+      {
+        "name": "precipitation",
+        "kind": "numeric",
+        "cardinality": 111,
+        "scale": 1
+      },
+      {
+        "name": "temp_max",
+        "kind": "numeric",
+        "cardinality": 67,
+        "scale": 1
+      },
+      {
+        "name": "temp_min",
+        "kind": "numeric",
+        "cardinality": 55,
+        "scale": 1
+      },
+      {
+        "name": "wind",
+        "kind": "numeric",
+        "cardinality": 79,
+        "scale": 0
+      },
+      {
+        "name": "weather",
+        "kind": "categorical",
+        "cardinality": 5
+      }
+    ],
+    "measures": [
+      "precipitation",
+      "temp_max",
+      "temp_min",
+      "wind"
+    ],
+    "dimensions": [
+      "date",
+      "weather"
+    ]
+  }
+}

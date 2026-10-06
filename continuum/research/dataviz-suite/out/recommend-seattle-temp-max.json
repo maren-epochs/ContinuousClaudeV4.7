@@ -1,0 +1,10 @@
+{
+  "form": "line",
+  "reason": "choosing-a-form 'Trend over time' -> line (area for a single series).",
+  "encoding": {
+    "x": "date",
+    "y": "temp_max",
+    "color": "single"
+  },
+  "warnings": []
+}
