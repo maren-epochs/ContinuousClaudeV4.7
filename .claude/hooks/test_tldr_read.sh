@@ -179,6 +179,22 @@ run_hook "$(payload "$NB_SMALL")"
 
 rm -f "$NB_FIXTURE" "$NB_SMALL"
 
+# --- VAL-501: auto-approval scoped to the launch dir (decision D1) ---
+# allow inside CLAUDE_PROJECT_DIR (case/separator-insensitive on Windows), ask outside it,
+# including a sibling dir whose name is a prefix of the file's dir.
+DP="{\"tool_name\":\"Read\",\"cwd\":\"C:/nowhere\",\"tool_input\":{\"file_path\":\"$FIXTURE\"}}"
+decision() { printf '%s' "$DP" | env -u CLAUDE_PROJECT_DIR "$@" node "$HOOK" 2>/dev/null | grep -o '"permissionDecision":"[a-z]*"'; }
+[ "$(decision CLAUDE_PROJECT_DIR='~/.claude')" = '"permissionDecision":"allow"' ]
+check "VAL-501a inside launch dir -> allow" $?
+[ "$(decision CLAUDE_PROJECT_DIR='c:\users\jamescrowell\.CLAUDE\')" = '"permissionDecision":"allow"' ]
+check "VAL-501b case/backslash variant of launch dir -> allow" $?
+[ "$(decision CLAUDE_PROJECT_DIR='~/Documents')" = '"permissionDecision":"ask"' ]
+check "VAL-501c outside launch dir -> ask" $?
+[ "$(decision CLAUDE_PROJECT_DIR='~/.cl')" = '"permissionDecision":"ask"' ]
+check "VAL-501d prefix-named sibling dir -> ask" $?
+[ "$(decision)" = '"permissionDecision":"ask"' ]
+check "VAL-501e no CLAUDE_PROJECT_DIR, cwd elsewhere -> ask" $?
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -23,7 +23,7 @@
  */
 import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { spawnSync, spawn } from 'child_process';
-import { extname, basename, dirname } from 'path';
+import { extname, basename, dirname, resolve, relative, isAbsolute } from 'path';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -202,7 +202,7 @@ async function main() {
   try {
     const cached = JSON.parse(readFileSync(cacheFile, 'utf-8'));
     if (cached.mtimeMs === stat.mtimeMs && cached.size === fileSize && typeof cached.stdout === 'string') {
-      console.log(cached.stdout);
+      console.log(scopeDecision(cached.stdout, filePath, data));
       return;
     }
   } catch { /* missing/corrupt cache -> fall through to normal path */ }
@@ -220,7 +220,20 @@ async function main() {
     renameSync(tmpFile, cacheFile);
   } catch { /* cache is best-effort */ }
 
-  console.log(output);
+  console.log(scopeDecision(output, filePath, data));
+}
+
+// The rewritten Read is auto-approved only inside the launch dir (CLAUDE_PROJECT_DIR,
+// else the session cwd); outside it the user is asked, as a plain Read would be.
+// Applied at emit time because cached outputs are keyed on the file, not the project.
+function scopeDecision(output, filePath, data) {
+  if (output === '{}') return output;
+  const root = process.env.CLAUDE_PROJECT_DIR || (typeof data.cwd === 'string' && data.cwd) || '';
+  const win = process.platform === 'win32';
+  const norm = (x) => (win ? resolve(x).toLowerCase() : resolve(x));
+  const rel = root ? relative(norm(root), norm(filePath)) : '..';
+  const inside = !rel.startsWith('..') && !isAbsolute(rel);
+  return inside ? output : output.replace('"permissionDecision":"allow"', '"permissionDecision":"ask"');
 }
 
 // Notebook outputs embed base64 blobs (matplotlib PNGs etc.) that would dump
