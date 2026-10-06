@@ -21,11 +21,29 @@ Refusals (each names its anti-patterns.md entry in ``warnings``):
   * categorical series past 8 -> fold into Other / small multiples
   * more than ~7 color classes carrying meaning -> table
 
+Color jobs (``encoding["color"]``; color-formula.md 'The four jobs'):
+
+  * ``"single"``      one color, categorical slot 1, for every mark.  Used when
+                      position/length already carries the value: a one-measure
+                      bar over nominal categories, a single line, a histogram,
+                      a dot plot.  Never a value-ramp on nominal categories
+                      (anti-patterns.md "A value-ramp on nominal categories":
+                      it double-encodes bar length as hue).
+  * ``"sequential"``  a one-hue light->dark ramp across ORDINAL categories
+                      (profile column ``"ordered": true`` - tiers, funnel
+                      stages, age bands); those bars keep their natural order
+                      (no value sort, which would scramble the ramp).  Validate
+                      the picks with validate_palette ``--ordinal``.
+  * a measure name    the color channel itself carries magnitude (heatmap
+                      cells, choropleth regions) - a sequential ramp of it.
+  * a dimension name / ``"measure"``  categorical identity, slots 1..N.
+  * ``"diverging"``, ``"1 hue + gray"``  polarity / emphasis.
+
 The core is pure stdlib and works on a plain-dict profile::
 
     {"n_rows": int,
      "columns": [{"name", "kind": numeric|categorical|temporal|boolean|text|geo,
-                  "cardinality", "is_sorted_time"?, "scale"?}],
+                  "cardinality", "is_sorted_time"?, "scale"?, "ordered"?}],
      "measures": [names], "dimensions": [names]}
 
 ``profile_frame(df)`` builds that profile from a pandas DataFrame (pandas is
@@ -128,6 +146,11 @@ class _Ctx:
         c = self.by_name.get(name) or {}
         return c.get("scale")
 
+    def ordered(self, name):
+        """True when the column is an ordinal category (profile ``"ordered": true``)."""
+        c = self.by_name.get(name) or {}
+        return bool(c.get("ordered")) and c.get("kind") in ("categorical", "boolean")
+
     def names(self, measures):
         return ", ".join(f"{m} (1e{self.scale(m)})" if self.scale(m) is not None else m
                          for m in measures)
@@ -148,6 +171,23 @@ def _single_value(ctx):
         return True
     x = (ctx.cats or ctx.temporal or ctx.geo or [None])[0]
     return x is not None and ctx.card(x) == 1 and len(ctx.measures) == 1
+
+
+def _bar_color(ctx, x, encoding):
+    """One-measure bar over ``x``: slot-1 single color, or the ordinal ramp.
+
+    Nominal categories get ONE color - bar length carries magnitude, and a
+    value-ramp would re-encode it (anti-patterns.md "A value-ramp on nominal
+    categories").  Ordinal categories take the sequential ramp in their natural
+    order, so any value sort is dropped.
+    """
+    enc = dict(encoding)
+    if ctx.ordered(x):
+        enc["color"] = "sequential"
+        enc.pop("sort", None)
+    else:
+        enc["color"] = "single"
+    return enc
 
 
 def _stat_tile(ctx, warnings=None):
@@ -195,8 +235,9 @@ def _magnitude(ctx, warnings=()):
                         {}, warnings)
         return _out("bar",
                     "choosing-a-form 'Compare magnitude, low -> high' -> bar / column "
-                    "of row counts per category (sequential, one hue).",
-                    {"x": xs[0], "y": "count", "color": "sequential", "sort": "-y"},
+                    "of row counts per category; bar length carries the count, so one "
+                    "color (ordinal categories: one-hue ramp in category order).",
+                    _bar_color(ctx, xs[0], {"x": xs[0], "y": "count", "sort": "-y"}),
                     warnings)
     m = ctx.measures[0]
     if len(ctx.cats) >= 2:
@@ -211,9 +252,11 @@ def _magnitude(ctx, warnings=()):
                     "show the table (or ask for 'distribution').",
                     {"y": m}, warnings)
     return _out("bar",
-                "choosing-a-form 'Compare magnitude, low -> high' -> bar / column with "
-                "a sequential (one hue) color job.",
-                {"x": xs[0], "y": m, "color": "sequential", "sort": "-y"}, warnings)
+                "choosing-a-form 'Compare magnitude, low -> high' -> bar / column; bar "
+                "length carries the value, so every bar takes one color (slot 1) - "
+                "no value-ramp on nominal categories (ordinal categories: one-hue "
+                "ramp in category order).",
+                _bar_color(ctx, xs[0], {"x": xs[0], "y": m, "sort": "-y"}), warnings)
 
 
 def _identity(ctx):
@@ -253,8 +296,8 @@ def _identity(ctx):
                     "bury the one bar that matters.",
                     {"x": xs[0], "y": ctx.measures[0], "color": "1 hue + gray"})
     if xs:
-        return _out("bar", "no measure: row counts per category, one hue.",
-                    {"x": xs[0], "y": "count", "color": "sequential", "sort": "-y"})
+        return _out("bar", "no measure: row counts per category, one color.",
+                    _bar_color(ctx, xs[0], {"x": xs[0], "y": "count", "sort": "-y"}))
     return _out("table", "no dimension carries identity; show the table.", {})
 
 
@@ -317,7 +360,7 @@ def _change_over_time(ctx):
     reason = "choosing-a-form 'Trend over time' -> line (area for a single series)."
     if not ctx.measures:
         return _out("line", reason + " No measure: row counts per period.",
-                    {"x": t, "y": "count", "color": "sequential"})
+                    {"x": t, "y": "count", "color": "single"})
     if ctx.card(t) == 2 and ctx.cats and len(ctx.measures) == 1:
         return _out("dumbbell",
                     "choosing-a-form 'Before -> after per item' -> dumbbell "
@@ -352,7 +395,7 @@ def _change_over_time(ctx):
         series = ctx.cats[0]
         enc = {"x": t, "y": m, "color": series}
         return _series_fold(ctx, "multi-line", series, enc, reason, [], True)
-    return _out("line", reason, {"x": t, "y": m, "color": "sequential"})
+    return _out("line", reason, {"x": t, "y": m, "color": "single"})
 
 
 def _distribution(ctx):
@@ -371,11 +414,11 @@ def _distribution(ctx):
         return _out("dot plot",
                     "distribution per category: a dot plot (one row per category, "
                     "one hue) shows spread without a hue per group.",
-                    {"x": m, "y": y, "color": "sequential", "sort": "-x"}, warnings)
+                    {"x": m, "y": y, "color": "single", "sort": "-x"}, warnings)
     return _out("histogram",
-                "distribution of a single measure: histogram (one hue, bins carry "
-                "magnitude).",
-                {"x": m, "y": "count", "color": "sequential"})
+                "distribution of a single measure: histogram (one color; bar height "
+                "carries the count).",
+                {"x": m, "y": "count", "color": "single"})
 
 
 def _relationship(ctx):
@@ -452,8 +495,8 @@ def _part_to_whole(ctx):
         return _out("bar",
                     f"part-to-whole with {n} parts: a sorted bar with share labels; "
                     f"past {PIE_SLICE_CAP} slices a pie cannot be read.",
-                    {"x": parts, "y": value, "color": "sequential",
-                     "orientation": "horizontal", "sort": "-y"},
+                    _bar_color(ctx, parts, {"x": parts, "y": value,
+                                            "orientation": "horizontal", "sort": "-y"}),
                     [(f"{AP_PIE}: {n} slices - a bar, or the numbers "
                       f"(part-to-whole at a glance only, <= {PIE_SLICE_CAP} segments)")])
     return _out("stacked bar", reason,
@@ -480,7 +523,7 @@ def _ranking(ctx):
         return _out("table", "ranking needs an item dimension; show the sorted table.",
                     {"y": m, "sort": "-y"})
     return _out("bar", reason,
-                {"x": xs[0], "y": m, "color": "sequential", "orientation": "horizontal",
+                {"x": xs[0], "y": m, "color": "single", "orientation": "horizontal",
                  "sort": "-y"})
 
 
@@ -645,6 +688,8 @@ def profile_frame(df):
         kind, parsed = _kind_of(name, series)
         col = {"name": str(name), "kind": kind,
                "cardinality": int(series.dropna().nunique())}
+        if kind == "categorical" and getattr(series.dtype, "ordered", False):
+            col["ordered"] = True
         if kind == "numeric":
             col["scale"] = _scale_of(series)
             measures.append(str(name))

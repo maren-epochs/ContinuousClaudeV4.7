@@ -5,6 +5,8 @@ Covers:
   (b) job inference from a column profile when job is None
   (c) refusals: dual-axis, pie past 5 slices, 2-slice pie, one-bar chart,
       categorical series past 8 (fold into Other / small multiples)
+  (c2) color jobs: no value-ramp on nominal categories (one color, slot 1);
+      sequential only where color carries magnitude or categories are ordinal
   (d) determinism: same profile -> same output
   (e) profile_frame(df) builds the plain-dict profile (needs pandas)
   (f) CLI: csv/parquet path, --job, --json, exit codes
@@ -130,7 +132,7 @@ class JobTests(unittest.TestCase):
         self.assertEqual(out["encoding"]["x"], "product")
         self.assertEqual(out["encoding"]["y"], "sales")
         self.assertEqual(out["encoding"]["sort"], "-y")
-        self.assertEqual(out["encoding"]["color"], "sequential")
+        self.assertEqual(out["encoding"]["color"], "single")
         self.assertIn("magnitude", out["reason"])
 
     def test_magnitude_grid_heatmap(self):
@@ -422,6 +424,85 @@ class RefusalTests(unittest.TestCase):
         self.assertIn("More than ~7 color classes carrying meaning", " ".join(out["warnings"]))
 
 
+P_ORDINAL = profile([col("tier", "categorical", 4, ordered=True),
+                     col("sales", "numeric", 100)])
+P_COUNTS = profile([col("status", "categorical", 4)], n_rows=40)
+
+
+class ColorJobTests(unittest.TestCase):
+    """anti-patterns.md 'A value-ramp on nominal categories': a single-measure bar
+    over nominal categories takes ONE color (slot 1); bar length carries magnitude.
+    'sequential' only where the color channel itself carries magnitude (heatmap,
+    choropleth - encoded as the measure name) or the categories are ordinal."""
+
+    def test_nominal_magnitude_bar_is_single_color(self):
+        out = recommend(P_CAT_MEASURE, "magnitude")
+        self.assertEqual(out["form"], "bar")
+        self.assertEqual(out["encoding"]["color"], "single")
+        self.assertNotIn("sequential", out["reason"])
+
+    def test_nominal_count_bar_is_single_color(self):
+        for job in ("magnitude", "identity"):
+            out = recommend(P_COUNTS, job)
+            self.assertEqual(out["form"], "bar", job)
+            self.assertEqual(out["encoding"]["color"], "single", job)
+
+    def test_ordinal_magnitude_bar_takes_the_ramp_in_natural_order(self):
+        out = recommend(P_ORDINAL, "magnitude")
+        self.assertEqual(out["form"], "bar")
+        self.assertEqual(out["encoding"]["color"], "sequential")
+        # a value sort would scramble the ramp; ordinal bars keep category order
+        self.assertNotIn("sort", out["encoding"])
+
+    def test_heatmap_color_carries_the_measure(self):
+        out = recommend(P_GRID, "magnitude")
+        self.assertEqual(out["form"], "heatmap")
+        self.assertEqual(out["encoding"]["color"], "sales")
+        self.assertIn("sequential", out["reason"])
+
+    def test_choropleth_color_carries_the_measure(self):
+        out = recommend(P_GEO, "spatial")
+        self.assertEqual(out["form"], "choropleth")
+        self.assertEqual(out["encoding"]["color"], "population")
+
+    def test_one_series_forms_are_single_color(self):
+        hist = profile([col("latency", "numeric", 1000)], n_rows=1000)
+        many = profile([col("segment", "categorical", 8), col("share", "numeric", 8)],
+                       n_rows=8)
+        cases = [(P_CAT_MEASURE, "ranking", "bar"),
+                 (P_CAT_MEASURE, "distribution", "dot plot"),
+                 (hist, "distribution", "histogram"),
+                 (many, "part-to-whole", "bar"),
+                 (P_TIME_ONE, "change-over-time", "line")]
+        for prof, job, form in cases:
+            out = recommend(prof, job)
+            self.assertEqual(out["form"], form, job)
+            self.assertEqual(out["encoding"]["color"], "single", f"{job}: {out}")
+
+    def test_ranking_stays_single_even_for_ordinal(self):
+        # ranking sorts by value, which would scramble an ordinal ramp
+        out = recommend(P_ORDINAL, "ranking")
+        self.assertEqual(out["encoding"]["color"], "single")
+        self.assertEqual(out["encoding"]["sort"], "-y")
+
+    def test_no_return_path_value_ramps_nominal_categories(self):
+        nominal = (P_ONE_VALUE, P_KPI_ROW, P_CAT_MEASURE, P_GRID, P_TIME_ONE,
+                   P_TIME_SERIES, P_TIME_TWO_SCALES, P_TIME_SAME_SCALE, P_BEFORE_AFTER,
+                   P_TWO_MEASURES, P_THREE_MEASURES, P_FLOW, P_GEO, P_MANY_SERIES,
+                   P_COUNTS, profile([col("latency", "numeric", 1000)], n_rows=1000),
+                   {"n_rows": 0, "columns": [], "measures": [], "dimensions": []})
+        for prof in nominal:
+            for job in JOBS:
+                out = recommend(prof, job)
+                self.assertNotEqual(out["encoding"].get("color"), "sequential",
+                                    f"{job}: {out}")
+
+    def test_color_job_names_documented(self):
+        doc = recommend_mod.__doc__
+        self.assertIn("single", doc)
+        self.assertIn("value-ramp on nominal categories", doc)
+
+
 @unittest.skipIf(pd is None, "pandas not installed")
 class ProfileFrameTests(unittest.TestCase):
     def test_profile_frame_kinds(self):
@@ -455,6 +536,22 @@ class ProfileFrameTests(unittest.TestCase):
         self.assertEqual(kinds["iso3"], "geo")
         self.assertEqual(kinds["year"], "temporal")
         self.assertEqual(prof["measures"], ["pop"])
+
+    def test_profile_frame_marks_ordered_categoricals(self):
+        df = pd.DataFrame({
+            "tier": pd.Categorical(["S", "M", "L", "XL"], categories=["S", "M", "L", "XL"],
+                                   ordered=True),
+            "team": ["a", "b", "c", "d"],
+            "sales": [1.0, 2.0, 3.0, 4.0],
+        })
+        prof = recommend_mod.profile_frame(df)
+        by = {c["name"]: c for c in prof["columns"]}
+        self.assertTrue(by["tier"]["ordered"])
+        self.assertNotIn("ordered", by["team"])
+        out = recommend(df[["tier", "sales"]], "magnitude")
+        self.assertEqual(out["encoding"]["color"], "sequential")
+        out = recommend(df[["team", "sales"]], "magnitude")
+        self.assertEqual(out["encoding"]["color"], "single")
 
     def test_recommend_accepts_frame(self):
         df = pd.DataFrame({"product": list("abcdef"), "sales": [1, 2, 3, 4, 5, 6]})
