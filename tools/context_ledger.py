@@ -28,6 +28,8 @@ Usage:
 
 slug = re.sub(r'[^A-Za-z0-9]', '-', cwd). The config root is $CLAUDE_CONFIG_DIR
 if set, else $HOME/.claude (falls back to %USERPROFILE%, then Path.home()).
+Env-derived roots must be absolute; paths are resolved (symlinks, '..') and
+a --session id must name a file inside this project's folder, else exit 2.
 
 Exit: 0 ok, 1 no assistant usage turns found, 2 transcript/session not found
 or bad arguments. Output is ASCII only.
@@ -49,12 +51,40 @@ def _int(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else 0
 
 
+class PathError(ValueError):
+    """An env- or argument-derived path is relative or escapes its expected root."""
+
+
+def contained(path, root):
+    """Resolve `path` (symlinks and '..') and require it inside resolved `root`.
+
+    Returns the resolved path; raises PathError when it lands outside."""
+    base = Path(root).resolve()
+    resolved = Path(path).resolve()
+    if not resolved.is_relative_to(base):
+        raise PathError(f"{path} resolves outside {base}")
+    return resolved
+
+
+def _absolute_env_dir(name, value):
+    """Resolved Path from env var `name`; PathError unless it is absolute."""
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        raise PathError(f"{name} must be an absolute path, got {value!r}")
+    return p.resolve()
+
+
 def config_dir():
+    """Resolved Claude config root: $CLAUDE_CONFIG_DIR, else <home>/.claude.
+
+    Env-derived roots must be absolute (a relative value would silently resolve
+    against whatever cwd the ledger runs in); raises PathError otherwise."""
     env = os.environ.get("CLAUDE_CONFIG_DIR")
     if env:
-        return Path(env)
+        return _absolute_env_dir("CLAUDE_CONFIG_DIR", env)
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
-    return (Path(home) if home else Path.home()) / ".claude"
+    base = _absolute_env_dir("HOME", home) if home else Path.home().resolve()
+    return base / ".claude"
 
 
 def slug_for(cwd):
@@ -62,7 +92,9 @@ def slug_for(cwd):
 
 
 def project_folder():
-    return config_dir() / "projects" / slug_for(os.getcwd())
+    """This cwd's transcript folder, contained under <config>/projects."""
+    projects = config_dir() / "projects"
+    return contained(projects / slug_for(os.getcwd()), projects)
 
 
 def newest_transcript(folder):
@@ -244,9 +276,18 @@ def resolve_transcript(args):
         if not p.is_file():
             return None, f"transcript not found: {p}"
         return p, None
-    folder = project_folder()
-    if args.session:
-        p = folder / f"{args.session}.jsonl"
+    try:
+        folder = project_folder()
+        # A session id is a file stem: '..', separators or an absolute path
+        # would reach transcripts of other projects or arbitrary files.
+        p = (
+            contained(folder / f"{args.session}.jsonl", folder)
+            if args.session
+            else None
+        )
+    except PathError as e:
+        return None, f"refused: {e}"
+    if p is not None:
         if not p.is_file():
             return None, f"session not found: {args.session} (looked for {p})"
         return p, None

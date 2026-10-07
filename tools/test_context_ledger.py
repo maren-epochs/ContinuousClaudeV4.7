@@ -318,12 +318,13 @@ class ContextLedgerTests(unittest.TestCase):
         os.utime(new, (t, t))
         env = self._home_env(home)
 
+        # Reported paths are resolved (8.3 short names in TEMP expand).
         d = self._json("--session", old.stem, env=env, cwd=str(cwd))
-        self.assertEqual(d["transcript"], str(old))
+        self.assertEqual(d["transcript"], str(old.resolve()))
         self.assertEqual(d["spans"][0]["label"], "old")
 
         d = self._json(env=env, cwd=str(cwd))
-        self.assertEqual(d["transcript"], str(new))
+        self.assertEqual(d["transcript"], str(new.resolve()))
         self.assertEqual(d["spans"][0]["label"], "new")
 
         code, out, err = self._run("--session", "does-not-exist", env=env, cwd=str(cwd))
@@ -381,6 +382,116 @@ class ContextLedgerTests(unittest.TestCase):
         self.assertGreater(len(d["compactions"]), 0)
         self.assertEqual(d["spans"][-1]["last_turn"], 25000)
         self.assertEqual(sum(s["turns"] for s in d["spans"]), 25000)
+
+
+def _load_ledger():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("context_ledger_under_test", LEDGER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class PathContainmentTests(unittest.TestCase):
+    """(j) env-derived config root and --session ids stay inside the projects root."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name).resolve()
+        self.home = self.dir / "home"
+        self.cwd = self.dir / "proj"
+        self.cwd.mkdir()
+        slug = re.sub(r"[^A-Za-z0-9]", "-", str(self.cwd))
+        self.projects = self.home / ".claude" / "projects"
+        self.folder = self.projects / slug
+        self.folder.mkdir(parents=True)
+        self.sid = "11111111-aaaa-bbbb-cccc-222222222222"
+        self.mine = self.folder / f"{self.sid}.jsonl"
+        self.mine.write_text(json.dumps(_assistant(100)) + "\n", encoding="utf-8")
+        # A transcript that exists but belongs elsewhere: in a sibling project and
+        # outside the config root entirely.
+        sibling = self.projects / "other-project"
+        sibling.mkdir()
+        self.sibling = sibling / "x.jsonl"
+        self.sibling.write_text(json.dumps(_assistant(5)) + "\n", encoding="utf-8")
+        self.outside = self.dir / "loose.jsonl"
+        self.outside.write_text(json.dumps(_assistant(7)) + "\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _env(self, **over):
+        env = dict(os.environ)
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
+        env.update(over)
+        return env
+
+    def _run(self, *args, env=None):
+        proc = subprocess.run(
+            [sys.executable, str(LEDGER), *args, "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            env=env or self._env(),
+            cwd=str(self.cwd),
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def test_plain_session_id_accepted(self):
+        code, out, err = self._run("--session", self.sid)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["transcript"], str(self.mine))
+
+    def test_traversal_session_ids_refused(self):
+        rel_outside = os.path.relpath(self.outside.with_suffix(""), self.folder)
+        for sid in (
+            "../other-project/x",
+            "..\\other-project\\x",
+            f"{self.sid}/../../other-project/x",
+            rel_outside,
+            str(self.outside.with_suffix("")),
+            str(self.sibling.with_suffix("")),
+        ):
+            with self.subTest(sid=sid):
+                code, out, err = self._run("--session", sid)
+                self.assertEqual(code, 2, out)
+                self.assertEqual(out, "")
+                self.assertIn("outside", err)
+
+    def test_config_dir_env_resolved(self):
+        dotted = self.home / "x" / ".." / ".claude"
+        env = self._env(CLAUDE_CONFIG_DIR=str(dotted))
+        code, out, err = self._run("--session", self.sid, env=env)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["transcript"], str(self.mine))
+
+    def test_relative_config_dir_refused(self):
+        code, out, err = self._run(env=self._env(CLAUDE_CONFIG_DIR="rel/.claude"))
+        self.assertEqual(code, 2, out)
+        self.assertIn("CLAUDE_CONFIG_DIR", err)
+        self.assertIn("absolute", err)
+
+    def test_relative_home_refused(self):
+        code, out, err = self._run(env=self._env(HOME="relhome", USERPROFILE="relhome"))
+        self.assertEqual(code, 2, out)
+        self.assertIn("HOME", err)
+        self.assertIn("absolute", err)
+
+    def test_contained_helper(self):
+        cl = _load_ledger()
+        root = self.projects
+        self.assertEqual(
+            cl.contained(root / "a" / "b.jsonl", root), root / "a" / "b.jsonl"
+        )
+        self.assertEqual(cl.contained(root / "a" / ".." / "b", root), root / "b")
+        self.assertEqual(cl.contained(root, root), root)
+        for bad in (root / "..", root / "a" / ".." / ".." / "x", self.outside):
+            with self.subTest(bad=str(bad)), self.assertRaises(cl.PathError):
+                cl.contained(bad, root)
 
 
 if __name__ == "__main__":

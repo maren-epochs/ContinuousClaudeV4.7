@@ -17,7 +17,9 @@ file never trips the guard it tests. The real OS username is derived at runtime.
 Run: py -3.13 tools/test_privacy_guard.py
 """
 
+import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,6 +33,18 @@ SYNTH_NAME = "zorb" + "laxian"
 SYNTH_TERM = "quux" + "-person"
 # Session-UUID shape built from parts so this file holds no literal id.
 SYNTH_UUID = "0f1e2d3c" + "-4b5a-6978-8a9b-" + "0c1d2e3f4a5b"
+
+
+USER_RE = re.compile(r"[A-Za-z0-9._-]{3,64}")
+
+
+def _guard_module():
+    """tools/privacy_guard.py imported by path (registered so dataclasses resolve)."""
+    spec = importlib.util.spec_from_file_location("privacy_guard_under_test", GUARD)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def home(drive_sep: str, name: str) -> str:
@@ -136,14 +150,12 @@ class TestUsername(GuardCase):
         self.assertEqual(self.run_guard(p, username="ab").returncode, 0)
 
     def test_detected_username_flagged(self):
-        real = os.environ.get("USERNAME") or os.environ.get("USER") or ""
-        try:
-            real = os.getlogin() or real
-        except OSError:
-            pass
-        if len(real) < 3:
+        # Same detection the guard runs (getlogin, USERNAME, USER); only a plain
+        # account name is written into the fixture file.
+        names = [n for n in _guard_module().detect_usernames() if USER_RE.fullmatch(n)]
+        if not names:
             self.skipTest("no OS username of length >= 3 available")
-        p = self.write("a.txt", "by " + real + " today\n")
+        p = self.write("a.txt", "by " + names[0] + " today\n")
         r = self.run_guard(p, username=None)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("OS username", r.stdout)

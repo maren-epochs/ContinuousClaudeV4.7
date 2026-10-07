@@ -970,7 +970,7 @@ class Downloads(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def open(self, absent=False, **cfg):
+    def load_page(self, absent=False, **cfg):
         import json
 
         ctx = export.get_browser().new_context(viewport={"width": 900, "height": 700})
@@ -985,7 +985,7 @@ class Downloads(unittest.TestCase):
         page.evaluate(f"() => new Promise((r) => setTimeout(r, {ms}))")
 
     def test_viewer_click_saves_csv_through_capability(self):
-        page = self.open()
+        page = self.load_page()
         page.wait_for_selector(
             'a.csv[data-save="ready"]', state="attached", timeout=15000
         )
@@ -1005,7 +1005,7 @@ class Downloads(unittest.TestCase):
         )
 
     def test_null_namespace_keeps_data_link(self):
-        page = self.open(nullns=True)
+        page = self.load_page(nullns=True)
         page.wait_for_function("() => window.__useCalls.length === 1", timeout=15000)
         self.settle(page)
         self.assertIsNone(page.get_attribute("a.csv", "data-save"))
@@ -1016,19 +1016,19 @@ class Downloads(unittest.TestCase):
         self.assertTrue(page.get_attribute("a.csv", "href").startswith("data:text/csv"))
 
     def test_no_window_claude_keeps_data_link(self):
-        page = self.open(absent=True)
+        page = self.load_page(absent=True)
         self.settle(page)
         self.assertIsNone(page.get_attribute("a.csv", "data-save"))
         self.assertTrue(page.is_visible("a.csv"))
 
     def test_unavailable_hides_button_and_declined_does_not_retry(self):
-        page = self.open(reject="unavailable")
+        page = self.load_page(reject="unavailable")
         page.wait_for_selector(
             'a.csv[data-save="ready"]', state="attached", timeout=15000
         )
         page.click("a.csv")
         page.wait_for_selector("a.csv", state="hidden", timeout=5000)
-        page = self.open(reject="declined")
+        page = self.load_page(reject="declined")
         page.wait_for_selector(
             'a.csv[data-save="ready"]', state="attached", timeout=15000
         )
@@ -1041,7 +1041,7 @@ class Downloads(unittest.TestCase):
         self.assertTrue(page.is_visible("a.csv"))
 
     def test_pending_use_does_not_block_first_paint(self):
-        page = self.open(hang=True)
+        page = self.load_page(hang=True)
         page.wait_for_function(
             "() => window.__chartsReady.then(() => true)", timeout=45000
         )
@@ -1052,7 +1052,7 @@ class Downloads(unittest.TestCase):
 @unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
 @unittest.skipUnless(CDN_OK, CDN_SKIP)
 class LiveCharts(unittest.TestCase):
-    def open(self, charts, width, title="Live Check Page"):
+    def load_page(self, charts, width, title="Live Check Page"):
         ctx = export.get_browser().new_context(
             viewport={"width": width, "height": 900}, color_scheme="light"
         )
@@ -1077,7 +1077,7 @@ class LiveCharts(unittest.TestCase):
         )
 
     def test_fold_and_calculate_tooltip_lists_every_series(self):
-        page = self.open([fold_chart()], 900)
+        page = self.load_page([fold_chart()], 900)
         keys = self.tooltip_keys(page)
         self.assertTrue({"North", "South"} <= set(keys), keys)
         labels = page.evaluate(
@@ -1085,7 +1085,7 @@ class LiveCharts(unittest.TestCase):
             "'#chart-1-plot .role-legend-label text').length"
         )
         self.assertEqual(labels, 2)
-        page = self.open([calc_chart()], 900)
+        page = self.load_page([calc_chart()], 900)
         keys = self.tooltip_keys(page)
         self.assertTrue({"Region North", "Region South"} <= set(keys), keys)
 
@@ -1131,18 +1131,18 @@ class LiveCharts(unittest.TestCase):
 
     def test_echarts_grid_top_fits_one_or_two_legend_rows(self):
         names = ["Alpha Holdings", "Beta Partners", "Gamma Group", "Delta Works"]
-        wide = self.option(self.open([stock_lines(names)], 1200))
-        narrow = self.option(self.open([stock_lines(names)], 390))
+        wide = self.option(self.load_page([stock_lines(names)], 1200))
+        narrow = self.option(self.load_page([stock_lines(names)], 390))
         self.assertEqual(wide["top"], 40)
         self.assertGreater(narrow["top"], wide["top"])
         self.assertNotEqual(narrow["type"], "scroll")
         many = [f"Company number {i}" for i in range(8)]
-        crowded = self.option(self.open([stock_lines(many)], 390))
+        crowded = self.option(self.load_page([stock_lines(many)], 390))
         self.assertEqual(crowded["type"], "scroll")
 
     def test_echarts_end_labels_use_text_token(self):
         o = self.option(
-            self.open([stock_lines(["AAPL", "MSFT"], end_labels=True)], 900)
+            self.load_page([stock_lines(["AAPL", "MSFT"], end_labels=True)], 900)
         )
         t2 = palette.tokens("light")["text-secondary"].lower()
         self.assertEqual([c.lower() for c in o["end"]], [t2, t2])
@@ -1271,7 +1271,7 @@ class LiveTokens(unittest.TestCase):
               raw: [...document.querySelectorAll(sel)].map((p) => p.getAttribute('stroke'))};
     }"""
 
-    def open(self, charts, mode):
+    def load_page(self, charts, mode):
         ctx = export.get_browser().new_context(
             viewport={"width": 900, "height": 900}, color_scheme=mode
         )
@@ -1297,7 +1297,7 @@ class LiveTokens(unittest.TestCase):
     def test_vega_lite_layers_stroke_in_tokens_light_and_dark(self):
         sel = "#chart-1-plot g.mark-line path"
         for mode in ("light", "dark"):
-            page = self.open([token_lines_vl()], mode)
+            page = self.load_page([token_lines_vl()], mode)
             seen = {}
             for step in (mode, "toggled"):
                 m = page.evaluate(self.STROKES, sel)
@@ -1319,7 +1319,7 @@ class LiveTokens(unittest.TestCase):
     def test_echarts_line_style_tokens_light_and_dark(self):
         sel = "#chart-1-plot svg path"
         for mode in ("light", "dark"):
-            page = self.open([token_lines_echarts()], mode)
+            page = self.load_page([token_lines_echarts()], mode)
             for _step in (mode, "toggled"):
                 m = page.evaluate(self.STROKES, sel)
                 self.assertIn(m["muted"], m["strokes"], m)
@@ -1349,7 +1349,7 @@ class LiveTokens(unittest.TestCase):
                   theme: root.getAttribute('data-theme')};
         }"""
         for mode in ("light", "dark"):
-            page = self.open([gray_emphasis_vl()], mode)
+            page = self.load_page([gray_emphasis_vl()], mode)
             for step in (mode, "toggled"):
                 m = page.evaluate(js, sel)
                 shown = (

@@ -991,6 +991,75 @@ def _diff_output_dir(before):
     return sorted(path for path, sig in after.items() if before.get(path) != sig)
 
 
+# Outbound endpoints llm_call may POST to. Requests go only to these hosts over
+# https; plain http only to LM Studio on loopback port 1234. _post_json checks
+# every URL against this policy before a request is built, so a tampered table
+# entry (or a future configurable base URL) cannot redirect the API key or the
+# prompt to another host.
+LLM_ENDPOINTS = {
+    "local": "http://localhost:1234/v1/chat/completions",
+    "anthropic": "https://api.anthropic.com/v1/messages",
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+}
+_LLM_HTTPS_HOSTS = frozenset({"api.anthropic.com", "api.openai.com", "openrouter.ai"})
+_LLM_LOOPBACK_HTTP = frozenset({("localhost", 1234), ("127.0.0.1", 1234)})
+_LLM_KEY_VARS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+
+
+class UrlRefused(ValueError):
+    """An outbound URL failed the scheme/host allowlist."""
+
+
+def _check_url_allowed(url):
+    """(allowed, reason) for an outbound llm_call URL: https to an allowlisted
+    host on the default port, or http to LM Studio on loopback:1234. No userinfo."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError as e:
+        return False, f"unparseable URL ({e})"
+    if parts.username is not None or parts.password is not None:
+        return False, "credentials in URL"
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "https":
+        if host not in _LLM_HTTPS_HOSTS:
+            return False, f"host '{host}' not in allowlist"
+        if port not in (None, 443):
+            return False, f"port {port} not allowed"
+        return True, ""
+    if parts.scheme == "http":
+        if (host, port) in _LLM_LOOPBACK_HTTP:
+            return True, ""
+        return False, "plain http is allowed only to localhost:1234"
+    return False, f"scheme '{parts.scheme}' not allowed (https only)"
+
+
+def _post_json(url, body, headers, timeout):
+    """POST `body` as JSON to an allowlisted `url`; return the parsed reply.
+
+    Raises UrlRefused before any request is built if the URL fails policy."""
+    import urllib.request
+
+    allowed, reason = _check_url_allowed(url)
+    if not allowed:
+        raise UrlRefused(f"llm_call refused URL {url!r}: {reason}")
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        headers={**headers, "content-type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return json.loads(raw)
+
+
 def _call_llm(
     prompt,
     model="claude-haiku-4-5-20251001",
@@ -1018,100 +1087,42 @@ def _call_llm(
     Returns:
         str: The model's text response
     """
-    import urllib.request
-
-    messages = [{"role": "user", "content": prompt}]
-
-    if backend == "local":
-        body = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
+    if backend not in LLM_ENDPOINTS:
+        return {
+            "error": f"Unknown backend: {backend}. Use 'local', 'anthropic', 'openai', or 'openrouter'."
         }
-        req = urllib.request.Request(
-            "http://localhost:1234/v1/chat/completions",
-            data=json.dumps(body).encode(),
-            headers={"content-type": "application/json"},
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
-        return resp["choices"][0]["message"]["content"]
-
-    elif backend == "anthropic":
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    headers = {}
+    key_var = _LLM_KEY_VARS.get(backend)
+    if key_var:
+        api_key = os.environ.get(key_var)
         if not api_key:
-            return {"error": "ANTHROPIC_API_KEY not set"}
-        body = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-        }
+            return {"error": f"{key_var} not set"}
+        if backend == "anthropic":
+            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        else:
+            headers = {"Authorization": f"Bearer {api_key}"}
+
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }
+    if backend != "anthropic":
+        body["temperature"] = temperature
+    else:
         if system:
             body["system"] = system
         if temperature > 0:
             body["temperature"] = temperature
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=json.dumps(body).encode(),
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
+
+    timeout = 60 if backend == "local" else 120
+    try:
+        resp = _post_json(LLM_ENDPOINTS[backend], body, headers, timeout)
+    except UrlRefused as e:
+        return {"error": str(e)}
+    if backend == "anthropic":
         return resp["content"][0]["text"]
-
-    elif backend == "openai":
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            return {"error": "OPENAI_API_KEY not set"}
-        body = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=json.dumps(body).encode(),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
-        return resp["choices"][0]["message"]["content"]
-
-    elif backend == "openrouter":
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            return {"error": "OPENROUTER_API_KEY not set"}
-        body = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
-            data=json.dumps(body).encode(),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
-        return resp["choices"][0]["message"]["content"]
-
-    else:
-        return {
-            "error": f"Unknown backend: {backend}. Use 'local', 'anthropic', 'openai', or 'openrouter'."
-        }
-
-    return {
-        "error": "No LLM backend available. Start LM Studio or set ANTHROPIC_API_KEY / OPENAI_API_KEY."
-    }
+    return resp["choices"][0]["message"]["content"]
 
 
 def _call_agent(
