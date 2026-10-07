@@ -6,8 +6,10 @@ Covers:
       C--Users-<name>- form; placeholders (<...>, x, user, name, you) pass
   (b) the current OS username as a whole word, case-insensitive, min length 3
   (c) session-UUID-shaped ids
-  (d) terms from the untracked privacy-terms file (explicit path and the
-      `git rev-parse --git-path info/privacy-terms` default)
+  (d) private terms from the union of CCV_PRIVACY_TERMS (newline/comma list),
+      ~/.claude/privacy-terms (via Path.home()) and the untracked per-clone
+      `git rev-parse --git-path info/privacy-terms` file (or --terms-file);
+      a stderr warning, not a failure, when no source supplies any term
   (e) .privacy-allow regexes suppress reviewed hits
   (f) binary files are skipped; output is file:line: reason, private text redacted
 
@@ -25,12 +27,19 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PROJECT = Path(__file__).resolve().parent.parent
 GUARD = PROJECT / "tools" / "privacy_guard.py"
 
 SYNTH_NAME = "zorb" + "laxian"
 SYNTH_TERM = "quux" + "-person"
+ENV_TERMS = "CCV_PRIVACY_TERMS"
+NO_TERMS_WARNING = (
+    "privacy-guard: no private-terms list found (CCV_PRIVACY_TERMS, "
+    "~/.claude/privacy-terms, .git/info/privacy-terms) - only paths/username/"
+    "session ids are checked"
+)
 # Session-UUID shape built from parts so this file holds no literal id.
 SYNTH_UUID = "0f1e2d3c" + "-4b5a-6978-8a9b-" + "0c1d2e3f4a5b"
 
@@ -62,6 +71,15 @@ class GuardCase(unittest.TestCase):
         )
         self.allow = self.tmp / "allow"
         self.allow.write_text("", encoding="utf-8")
+        # Hermetic: no real env terms, a fake home, no git repo discovery above tmp.
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.env = {k: v for k, v in os.environ.items() if k != ENV_TERMS}
+        self.env.update(
+            HOME=str(self.home),
+            USERPROFILE=str(self.home),
+            GIT_CEILING_DIRECTORIES=str(self.tmp),
+        )
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -72,15 +90,24 @@ class GuardCase(unittest.TestCase):
         return p
 
     def run_guard(
-        self, *paths: Path, username: str | None = SYNTH_NAME, extra=(), cwd=None
+        self,
+        *paths: Path,
+        username: str | None = SYNTH_NAME,
+        extra=(),
+        cwd=None,
+        terms_file: bool = True,
     ):
-        cmd = [sys.executable, str(GUARD), "--terms-file", str(self.terms)]
+        cmd = [sys.executable, str(GUARD)]
+        if terms_file:
+            cmd += ["--terms-file", str(self.terms)]
         cmd += ["--allow-file", str(self.allow)]
         if username is not None:
             cmd += ["--username", username]
         # Relative paths, as pre-commit passes them (the temp dir itself may sit under a home dir).
         cmd += list(extra) + [os.path.relpath(p, cwd or self.tmp) for p in paths]
-        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or self.tmp)
+        return subprocess.run(
+            cmd, capture_output=True, text=True, cwd=cwd or self.tmp, env=self.env
+        )
 
 
 class TestHomePaths(GuardCase):
@@ -206,9 +233,11 @@ class TestPrivateTerms(GuardCase):
         f = repo / "doc.md"
         f.write_text("by " + SYNTH_TERM + "\n", encoding="utf-8")
         cmd = [sys.executable, str(GUARD), "--username", SYNTH_NAME, "doc.md"]
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo, env=self.env)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("private term", r.stdout)
+        self.assertNotIn(SYNTH_TERM, r.stdout + r.stderr)
+        self.assertNotIn("no private-terms list", r.stderr)
 
     def test_term_in_file_path(self):
         p = self.write("notes-" + SYNTH_TERM + ".md", "clean\n")
@@ -257,6 +286,132 @@ class TestAllowAndBinary(GuardCase):
     def test_missing_file_skipped(self):
         r = self.run_guard(self.tmp / "gone.txt")
         self.assertEqual(r.returncode, 0)
+
+
+# Synthetic per-source terms, assembled at runtime.
+ENV_A = "glim" + "-env-one"
+ENV_B = "glim" + "-env-two"
+ENV_C = "glim" + "-env-three"
+USER_T = "frob" + "-user-term"
+CLONE_T = "wib" + "-clone-term"
+SHARED_T = "zed" + "-shared-term"
+
+
+class TestTermSources(GuardCase):
+    """VAL-704: env var + ~/.claude/privacy-terms + per-clone file, unioned."""
+
+    def user_file(self, text: str) -> Path:
+        d = self.home / ".claude"
+        d.mkdir(exist_ok=True)
+        f = d / "privacy-terms"
+        f.write_text(text, encoding="utf-8")
+        return f
+
+    def test_env_var_newline_and_comma_separated(self):
+        self.terms.unlink()
+        self.env[ENV_TERMS] = ENV_A + ", " + ENV_B + "\n# a comment\n\n" + ENV_C
+        for i, t in enumerate((ENV_A, ENV_B, ENV_C)):
+            p = self.write(f"e{i}.md", "x " + t.upper() + " y\n")
+            r = self.run_guard(p)
+            self.assertEqual(r.returncode, 1, (t, r.stdout, r.stderr))
+            self.assertIn("private term", r.stdout)
+            self.assertNotIn(t.upper(), r.stdout + r.stderr)
+            self.assertNotIn("no private-terms list", r.stderr)
+
+    def test_env_var_comment_entry_is_not_a_term(self):
+        self.terms.unlink()
+        self.env[ENV_TERMS] = "# a comment," + ENV_A
+        p = self.write("a.md", "a comment here\n")
+        self.assertEqual(self.run_guard(p).returncode, 0)
+
+    def test_user_file_via_home(self):
+        self.terms.unlink()
+        self.user_file("# shared by every clone\n\n" + USER_T + "\n")
+        p = self.write("a.md", "by " + USER_T + "\n")
+        r = self.run_guard(p)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("private term", r.stdout)
+        self.assertNotIn(USER_T, r.stdout + r.stderr)
+        self.assertNotIn("no private-terms list", r.stderr)
+
+    def test_user_file_resolved_via_path_home(self):
+        mod = _guard_module()
+        self.user_file(USER_T + "\n")
+        with mock.patch.object(mod.Path, "home", return_value=self.home):
+            want = self.home / ".claude" / "privacy-terms"
+            self.assertEqual(mod.user_terms_file(), want)
+            terms = mod.load_terms(None, env={})
+        self.assertEqual([t for t, _ in terms], [USER_T])
+
+    def test_per_clone_file_still_read(self):
+        self.terms.write_text(CLONE_T + "\n", encoding="utf-8")
+        p = self.write("a.md", CLONE_T + "\n")
+        r = self.run_guard(p)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn(CLONE_T, r.stdout + r.stderr)
+
+    def test_union_of_all_sources_deduplicated(self):
+        self.env[ENV_TERMS] = ENV_A + "," + SHARED_T
+        self.user_file(USER_T + "\n" + SHARED_T.upper() + "\n")
+        self.terms.write_text(CLONE_T + "\n" + SHARED_T + "\n", encoding="utf-8")
+        mod = _guard_module()
+        with mock.patch.object(mod.Path, "home", return_value=self.home):
+            terms = mod.load_terms(self.terms, env=self.env)
+        got = sorted(t.lower() for t, _ in terms)
+        self.assertEqual(got, sorted([ENV_A, SHARED_T, USER_T, CLONE_T]))
+        # end to end: one hit per term occurrence, never one per source
+        p = self.write("a.md", f"{ENV_A}\n{USER_T}\n{CLONE_T}\n{SHARED_T}\n")
+        r = self.run_guard(p)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(len(r.stdout.strip().splitlines()), 4, r.stdout)
+        for t in (ENV_A, USER_T, CLONE_T, SHARED_T):
+            self.assertNotIn(t, r.stdout + r.stderr)
+
+    def test_no_source_warns_once_but_passes(self):
+        self.terms.unlink()
+        p = self.write("a.md", "plain text\n")
+        r = self.run_guard(p)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stderr.strip().splitlines(), [NO_TERMS_WARNING])
+        self.assertEqual(r.stdout, "")
+
+    def test_no_source_without_terms_file_flag(self):
+        # no --terms-file, no repo (ceiling at tmp), empty home, no env var
+        p = self.write("a.md", "plain text\n")
+        r = self.run_guard(p, terms_file=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stderr.strip().splitlines(), [NO_TERMS_WARNING])
+
+    def test_no_source_still_checks_other_rules(self):
+        self.terms.unlink()
+        p = self.write("a.yaml", "id " + SYNTH_UUID + "\n")
+        r = self.run_guard(p)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(NO_TERMS_WARNING, r.stderr)
+
+    def test_empty_sources_count_as_none(self):
+        self.terms.write_text("# only a comment\n\n", encoding="utf-8")
+        self.user_file("\n# nothing\n")
+        self.env[ENV_TERMS] = " , \n"
+        p = self.write("a.md", "plain\n")
+        r = self.run_guard(p)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stderr.strip().splitlines(), [NO_TERMS_WARNING])
+
+    def test_reason_never_names_the_term(self):
+        self.env[ENV_TERMS] = ENV_A
+        self.user_file(USER_T + "\n")
+        for t in (ENV_A, USER_T, SYNTH_TERM):
+            p = self.write("n-" + t + ".md", "x " + t + "\n")
+            r = self.run_guard(p)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("file path", r.stdout)
+            # the path is echoed (pre-commit names the file); the reason never is the term
+            reasons = [ln.rsplit(": ", 1)[1] for ln in r.stdout.splitlines()]
+            self.assertEqual(len(reasons), 2, r.stdout)
+            for reason in reasons:
+                self.assertNotIn(t, reason)
+            self.assertNotIn(t, r.stderr)
 
 
 if __name__ == "__main__":

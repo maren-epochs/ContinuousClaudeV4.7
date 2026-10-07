@@ -294,6 +294,19 @@ class ToolsInstall(unittest.TestCase):
             ],
         )
 
+    def test_user_privacy_terms_never_planned(self) -> None:
+        """VAL-704: the sync only writes mapped subtrees, never ~/.claude/privacy-terms."""
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            (target / "privacy-terms").write_text("sentinel\n", encoding="utf-8")
+            plan = _sync.build_plan(target, rewrites(target.as_posix(), "py"), "\n")
+            self.assertTrue(plan, "fresh target must plan installs")
+            mapped = {dst for _, dst in _sync.MAPPINGS}
+            for _, dst, _, _ in plan:
+                rel = dst.relative_to(target)
+                self.assertNotEqual(dst.name, "privacy-terms", rel)
+                self.assertIn(rel.parts[0], mapped, rel)
+
 
 class UpdateDiffBackup(unittest.TestCase):
     """VAL-612 characterization of main(): update/new listing, --diff output,

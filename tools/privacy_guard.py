@@ -12,9 +12,14 @@ Rejects, per line of each text file (and in the file path itself):
   (b) the current OS username (os.getlogin(), USERNAME, USER) as a whole word,
       case-insensitive, length >= 3;
   (c) session-UUID-shaped ids (8-4-4-4-12 hex);
-  (d) every non-empty, non-# line of the UNTRACKED private-terms file
-      (default: `git rev-parse --git-path info/privacy-terms`), matched as a
-      case-insensitive substring.
+  (d) private terms, matched as case-insensitive substrings: the union
+      (de-duplicated, case-insensitive) of
+        1. env var CCV_PRIVACY_TERMS (newline- or comma-separated; CI/cloud),
+        2. ~/.claude/privacy-terms (user-level, shared by every clone),
+        3. the UNTRACKED per-clone file (--terms-file, default
+           `git rev-parse --git-path info/privacy-terms`);
+      blank and #-comment entries are ignored. When no source yields a term,
+      one warning line goes to stderr; that alone never fails the run.
 
 A hit is suppressed when its matched text fully matches a regex (one per
 non-empty, non-# line) in the tracked, reviewed allowlist `.privacy-allow` at
@@ -32,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +61,12 @@ UUID_RE = re.compile(
     re.IGNORECASE,
 )
 BINARY_SNIFF = 8192
+ENV_TERMS = "CCV_PRIVACY_TERMS"
+NO_TERMS_WARNING = (
+    "privacy-guard: no private-terms list found (CCV_PRIVACY_TERMS, "
+    "~/.claude/privacy-terms, .git/info/privacy-terms) - only paths/username/"
+    "session ids are checked"
+)
 
 
 @dataclass
@@ -96,6 +108,41 @@ def default_terms_file() -> Path | None:
     return Path(p) if p else None
 
 
+def user_terms_file() -> Path:
+    """User-level ~/.claude/privacy-terms, shared by every clone on this machine."""
+    return Path.home() / ".claude" / "privacy-terms"
+
+
+def _env_terms(env: Mapping[str, str]) -> list[str]:
+    """Entries of CCV_PRIVACY_TERMS split on newlines and commas; blanks/# dropped."""
+    out = []
+    for part in re.split(r"[,\r\n]", env.get(ENV_TERMS, "")):
+        s = part.strip()
+        if s and not s.startswith("#"):
+            out.append(s)
+    return out
+
+
+def load_terms(
+    terms_file: Path | None, env: Mapping[str, str] | None = None
+) -> list[tuple[str, str]]:
+    """(term, source label) from env var, user file and per-clone file, de-duplicated."""
+    env = os.environ if env is None else env
+    sources = [
+        (ENV_TERMS, _env_terms(env)),
+        ("~/.claude/privacy-terms", _lines(user_terms_file())),
+        (".git/info/privacy-terms", _lines(terms_file) if terms_file else []),
+    ]
+    seen: set[str] = set()
+    out = []
+    for label, terms in sources:
+        for i, t in enumerate(terms, 1):
+            if t.lower() not in seen:
+                seen.add(t.lower())
+                out.append((t, f"{label} entry {i}"))
+    return out
+
+
 def default_allow_file() -> Path:
     """`.privacy-allow` at the repo root (cwd when git cannot report the root)."""
     top = _git("rev-parse", "--show-toplevel")
@@ -122,7 +169,10 @@ class Guard:
     """Compiled privacy rules: home paths, usernames, UUIDs, terms, allowlist."""
 
     def __init__(
-        self, usernames: list[str], terms: list[str], allow: list[re.Pattern[str]]
+        self,
+        usernames: list[str],
+        terms: list[tuple[str, str]],
+        allow: list[re.Pattern[str]],
     ):
         """Compile whole-word username and substring term patterns (names >= 3 chars)."""
         seen: dict[str, str] = {}
@@ -134,7 +184,7 @@ class Guard:
             for n in seen.values()
         ]
         self.term_res = [
-            (i, re.compile(re.escape(t), re.IGNORECASE)) for i, t in enumerate(terms, 1)
+            (label, re.compile(re.escape(t), re.IGNORECASE)) for t, label in terms
         ]
         self.allow = allow
 
@@ -159,9 +209,9 @@ class Guard:
             hits.append(
                 Hit(m.group(0), f"session-UUID-shaped id ({m.group(0)[:4]}...)")
             )
-        for i, pat in self.term_res:
+        for label, pat in self.term_res:
             for m in pat.finditer(text):
-                hits.append(Hit(m.group(0), f"private term (privacy-terms entry {i})"))
+                hits.append(Hit(m.group(0), f"private term ({label})"))
         return [h for h in hits if not self._allowed(h.text)]
 
     def check_file(self, arg: str) -> list[str]:
@@ -218,8 +268,9 @@ def _load_allow(allow_file: Path) -> list[re.Pattern[str]] | None:
 
 def _build_guard(args: argparse.Namespace) -> Guard | None:
     """Guard from the CLI overrides or the git/OS defaults; None on a bad allowlist."""
-    terms_file = args.terms_file or default_terms_file()
-    terms = _lines(terms_file) if terms_file else []
+    terms = load_terms(args.terms_file or default_terms_file())
+    if not terms:
+        print(NO_TERMS_WARNING, file=sys.stderr)
     allow = _load_allow(args.allow_file or default_allow_file())
     if allow is None:
         return None
