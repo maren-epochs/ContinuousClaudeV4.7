@@ -223,136 +223,141 @@ def _call_nia_package_grep_sync(*args, **kwargs):
     return asyncio.run(_call_nia_package_grep(*args, **kwargs))
 
 
+# nia_help table: function name -> description/args/returns. _call_nia_help
+# hands out a deep copy so a caller mutating its result never changes this.
+_NIA_HELP = {
+    "research_package": {
+        "description": "ALL-IN-ONE: Research a package for building a context block. Runs nia_search + nia_package + nia_package_grep + exa_search, filters noise, returns compact structured data. USE THIS FIRST.",
+        "args": {
+            "package": "Package name, e.g. 'express' (required)",
+            "version": "Version string, e.g. '5.1.0' (optional, improves search)",
+            "registry": "'npm', 'py_pi', 'crates_io', 'go_modules' (default 'npm')",
+            "max_results": "Max results per search call (default 3)",
+            "max_chars": "Max chars per result content (default 600)",
+        },
+        "returns": "dict with sections: nia_answer, official_docs, source_patterns, deprecations, guides",
+    },
+    "nia_search": {
+        "description": "Search indexed docs and repositories. Returns answer + ranked results.",
+        "args": {
+            "query": "Search query (required)",
+            "repositories": "List of repo identifiers (optional)",
+            "data_sources": "List of doc source IDs (optional)",
+            "search_mode": "'unified' (default, all sources), 'repositories', 'data_sources'",
+            "include_sources": "Include source metadata (default True)",
+        },
+        "returns": "dict with 'answer' (synthesized markdown), 'results' (ranked docs with content, score, source)",
+    },
+    "nia_universal": {
+        "description": "Search all 10k+ public indexed sources. Broader than nia_search.",
+        "args": {
+            "query": "Search query (required)",
+            "limit": "Max results (default 10)",
+        },
+    },
+    "nia_web": {
+        "description": "Web search via Nia.",
+        "args": {
+            "query": "Search query (required)",
+            "category": "Filter category (optional)",
+            "time_range": "Time filter (optional)",
+        },
+    },
+    "nia_package": {
+        "description": "Semantic search WITHIN a specific package's source code.",
+        "args": {
+            "package": "Package name, e.g. 'express' (required)",
+            "query": "What to search for (required)",
+            "registry": "'npm', 'py_pi', 'crates_io', 'go_modules' (default 'npm')",
+            "limit": "Max results (default 10)",
+        },
+    },
+    "nia_package_grep": {
+        "description": "Regex search WITHIN a specific package's source code.",
+        "args": {
+            "package": "Package name (required)",
+            "pattern": "Regex pattern (required)",
+            "registry": "'npm', 'py_pi', 'crates_io', 'go_modules' (default 'npm')",
+            "limit": "Max results (default 10)",
+        },
+    },
+    "exa_search": {
+        "description": "Semantic web search via Exa AI. Good for blogs, guides, broader coverage.",
+        "args": {
+            "query": "Search query (required)",
+            "num_results": "Number of results (default 5)",
+            "category": "Filter: 'research paper', 'github', 'news', etc. (optional)",
+            "domains": "List of domains to restrict to (optional)",
+            "with_text": "Include full page text (default False)",
+            "start_date": "Filter: published after YYYY-MM-DD (optional)",
+        },
+    },
+    "llm_call": {
+        "description": "Call an LM as a sub-query (RLM recursive call). You choose the backend explicitly. Returns text.",
+        "args": {
+            "prompt": "Text prompt to send (required)",
+            "model": "Model ID — depends on backend. Anthropic: claude-haiku-4-5-20251001, claude-sonnet-4-6. OpenAI: gpt-4o-mini. LM Studio: whatever is loaded. OpenRouter: anthropic/claude-sonnet-4-6, etc.",
+            "max_tokens": "Max response tokens (default 1000)",
+            "system": "Optional system prompt",
+            "temperature": "Sampling temperature (default 0.0)",
+            "backend": "'anthropic' (default), 'openai', 'local' (LM Studio), 'openrouter'",
+        },
+        "returns": "str — the model's text response",
+    },
+    "agent_call": {
+        "description": "Spawn a headless agent with full tool access (RLM recursive call). The agent can read/write files, run commands, iterate. Returns final output.",
+        "args": {
+            "prompt": "Task description for the agent (required)",
+            "agent": "'claude-code' (default) or 'codex'",
+            "model": "Model override: 'sonnet', 'opus', 'haiku' (optional)",
+            "max_turns": "Max agent turns (default 25; claude-code only)",
+            "timeout": "Max seconds to wait (default 600 = 10 min)",
+            "cwd": "Working directory for the agent (optional)",
+        },
+        "returns": "str — the agent's final text output",
+    },
+    "read_file": {
+        "description": "Read a file from the host filesystem (subject to security policy).",
+        "args": {"path": "File path (required)"},
+    },
+    "write_file": {
+        "description": "Write content to a file (subject to security policy). Binary-safe: content may be str (UTF-8) or bytes.",
+        "args": {
+            "path": "File path (required)",
+            "content": "str or bytes content (required)",
+        },
+    },
+    "glob_files": {
+        "description": "Find files matching a glob pattern (root and results filtered by the read policy; secrets never returned).",
+        "args": {
+            "pattern": "Glob pattern (required)",
+            "path": "Base directory (default '.')",
+        },
+    },
+    "run_command": {
+        "description": "Run an allowlisted command WITHOUT a shell: tldr, grep, rg, wc, echo, git log/diff/show/blame, cargo build/test/clippy, npm test/run, python -m pytest, uv run python. No pipes, chaining, redirection or substitution.",
+        "args": {
+            "cmd": "Command string or argv list (required)",
+            "timeout": "Timeout in seconds (default 30)",
+        },
+    },
+    "run_python": {
+        "description": "Execute Python on the HOST CPython (py -3.13, full DS stack: pandas, numpy, matplotlib, polars, duckdb, sklearn...). Use for numerics the sandbox cannot do (import pandas is impossible in-sandbox). cwd is the per-session work dir under the sandbox output root; relative savefig()/to_csv() outputs are surfaced as artifacts. print() inside the code to get data back.",
+        "args": {
+            "code": "Python source to execute on the host (required)",
+            "timeout": "Seconds before the process tree is killed (default 60, max 600)",
+        },
+        "returns": "str — combined stdout+stderr, last ~8KB, '[truncated]' marker when capped, '[exit code: N]' on failure",
+    },
+    "nia_help": {
+        "description": "Show this help text.",
+    },
+}
+
+
 def _call_nia_help():
-    """Return help text describing all available nia functions."""
-    return {
-        "research_package": {
-            "description": "ALL-IN-ONE: Research a package for building a context block. Runs nia_search + nia_package + nia_package_grep + exa_search, filters noise, returns compact structured data. USE THIS FIRST.",
-            "args": {
-                "package": "Package name, e.g. 'express' (required)",
-                "version": "Version string, e.g. '5.1.0' (optional, improves search)",
-                "registry": "'npm', 'py_pi', 'crates_io', 'go_modules' (default 'npm')",
-                "max_results": "Max results per search call (default 3)",
-                "max_chars": "Max chars per result content (default 600)",
-            },
-            "returns": "dict with sections: nia_answer, official_docs, source_patterns, deprecations, guides",
-        },
-        "nia_search": {
-            "description": "Search indexed docs and repositories. Returns answer + ranked results.",
-            "args": {
-                "query": "Search query (required)",
-                "repositories": "List of repo identifiers (optional)",
-                "data_sources": "List of doc source IDs (optional)",
-                "search_mode": "'unified' (default, all sources), 'repositories', 'data_sources'",
-                "include_sources": "Include source metadata (default True)",
-            },
-            "returns": "dict with 'answer' (synthesized markdown), 'results' (ranked docs with content, score, source)",
-        },
-        "nia_universal": {
-            "description": "Search all 10k+ public indexed sources. Broader than nia_search.",
-            "args": {
-                "query": "Search query (required)",
-                "limit": "Max results (default 10)",
-            },
-        },
-        "nia_web": {
-            "description": "Web search via Nia.",
-            "args": {
-                "query": "Search query (required)",
-                "category": "Filter category (optional)",
-                "time_range": "Time filter (optional)",
-            },
-        },
-        "nia_package": {
-            "description": "Semantic search WITHIN a specific package's source code.",
-            "args": {
-                "package": "Package name, e.g. 'express' (required)",
-                "query": "What to search for (required)",
-                "registry": "'npm', 'py_pi', 'crates_io', 'go_modules' (default 'npm')",
-                "limit": "Max results (default 10)",
-            },
-        },
-        "nia_package_grep": {
-            "description": "Regex search WITHIN a specific package's source code.",
-            "args": {
-                "package": "Package name (required)",
-                "pattern": "Regex pattern (required)",
-                "registry": "'npm', 'py_pi', 'crates_io', 'go_modules' (default 'npm')",
-                "limit": "Max results (default 10)",
-            },
-        },
-        "exa_search": {
-            "description": "Semantic web search via Exa AI. Good for blogs, guides, broader coverage.",
-            "args": {
-                "query": "Search query (required)",
-                "num_results": "Number of results (default 5)",
-                "category": "Filter: 'research paper', 'github', 'news', etc. (optional)",
-                "domains": "List of domains to restrict to (optional)",
-                "with_text": "Include full page text (default False)",
-                "start_date": "Filter: published after YYYY-MM-DD (optional)",
-            },
-        },
-        "llm_call": {
-            "description": "Call an LM as a sub-query (RLM recursive call). You choose the backend explicitly. Returns text.",
-            "args": {
-                "prompt": "Text prompt to send (required)",
-                "model": "Model ID — depends on backend. Anthropic: claude-haiku-4-5-20251001, claude-sonnet-4-6. OpenAI: gpt-4o-mini. LM Studio: whatever is loaded. OpenRouter: anthropic/claude-sonnet-4-6, etc.",
-                "max_tokens": "Max response tokens (default 1000)",
-                "system": "Optional system prompt",
-                "temperature": "Sampling temperature (default 0.0)",
-                "backend": "'anthropic' (default), 'openai', 'local' (LM Studio), 'openrouter'",
-            },
-            "returns": "str — the model's text response",
-        },
-        "agent_call": {
-            "description": "Spawn a headless agent with full tool access (RLM recursive call). The agent can read/write files, run commands, iterate. Returns final output.",
-            "args": {
-                "prompt": "Task description for the agent (required)",
-                "agent": "'claude-code' (default) or 'codex'",
-                "model": "Model override: 'sonnet', 'opus', 'haiku' (optional)",
-                "max_turns": "Max agent turns (default 25; claude-code only)",
-                "timeout": "Max seconds to wait (default 600 = 10 min)",
-                "cwd": "Working directory for the agent (optional)",
-            },
-            "returns": "str — the agent's final text output",
-        },
-        "read_file": {
-            "description": "Read a file from the host filesystem (subject to security policy).",
-            "args": {"path": "File path (required)"},
-        },
-        "write_file": {
-            "description": "Write content to a file (subject to security policy). Binary-safe: content may be str (UTF-8) or bytes.",
-            "args": {
-                "path": "File path (required)",
-                "content": "str or bytes content (required)",
-            },
-        },
-        "glob_files": {
-            "description": "Find files matching a glob pattern (root and results filtered by the read policy; secrets never returned).",
-            "args": {
-                "pattern": "Glob pattern (required)",
-                "path": "Base directory (default '.')",
-            },
-        },
-        "run_command": {
-            "description": "Run an allowlisted command WITHOUT a shell: tldr, grep, rg, wc, echo, git log/diff/show/blame, cargo build/test/clippy, npm test/run, python -m pytest, uv run python. No pipes, chaining, redirection or substitution.",
-            "args": {
-                "cmd": "Command string or argv list (required)",
-                "timeout": "Timeout in seconds (default 30)",
-            },
-        },
-        "run_python": {
-            "description": "Execute Python on the HOST CPython (py -3.13, full DS stack: pandas, numpy, matplotlib, polars, duckdb, sklearn...). Use for numerics the sandbox cannot do (import pandas is impossible in-sandbox). cwd is the per-session work dir under the sandbox output root; relative savefig()/to_csv() outputs are surfaced as artifacts. print() inside the code to get data back.",
-            "args": {
-                "code": "Python source to execute on the host (required)",
-                "timeout": "Seconds before the process tree is killed (default 60, max 600)",
-            },
-            "returns": "str — combined stdout+stderr, last ~8KB, '[truncated]' marker when capped, '[exit code: N]' on failure",
-        },
-        "nia_help": {
-            "description": "Show this help text.",
-        },
-    }
+    """Return help text describing all available nia functions (a fresh copy)."""
+    return json.loads(json.dumps(_NIA_HELP))
 
 
 def _call_research_package(
@@ -376,7 +381,9 @@ def _call_research_package(
         deprecations, guides, plus metadata (package, version_indexed, sources_used)
     """
     version_str = f" v{version}" if version else ""
-    major = version.split(".")[0] if version else ""
+    major = (
+        version.split(".")[0] if version else ""
+    )  # unused; kept so a non-str version still raises
 
     output = {
         "package": package,
@@ -391,86 +398,94 @@ def _call_research_package(
     docs = _call_nia_search_sync(
         f"{package}{version_str} API breaking changes migration guide"
     )
-    answer = docs.get("answer", "")
-    if answer:
-        output["sections"]["nia_answer"] = answer
-        output["sources_used"] += 1
-
-    # Filter to trusted sources only
-    official_docs = []
-    for r in docs.get("results", [])[:max_results]:
-        src = r.get("source", {})
-        display = src.get("display_name", "").lower()
-        # Skip obvious noise (other packages, unrelated sites)
-        if package.lower() not in display and display not in [
-            "github.com",
-            "npmjs.com",
-            "pypi.org",
-        ]:
-            continue
-        official_docs.append(
-            {
-                "source": src.get("display_name", ""),
-                "doc": src.get("document_name", ""),
-                "content": r.get("content", "")[:max_chars],
-            }
-        )
-    if official_docs:
-        output["sections"]["official_docs"] = official_docs
-        output["sources_used"] += len(official_docs)
+    _add_section(output, "nia_answer", docs.get("answer", ""), count=1)
+    official_docs = _official_docs(docs, package, max_results, max_chars)
+    _add_section(output, "official_docs", official_docs)
 
     # 2. Source code patterns via nia_package
     pkg = _call_nia_package_sync(
-        package, f"API usage patterns middleware routing", registry=registry
+        package, "API usage patterns middleware routing", registry=registry
     )
     output["version_indexed"] = pkg.get("version_used", "unknown")
-    source_patterns = []
-    for r in pkg.get("results", [])[:max_results]:
-        code = r.get("document", "")
-        if code:
-            source_patterns.append(code[:max_chars])
-    if source_patterns:
-        output["sections"]["source_patterns"] = source_patterns
-        output["sources_used"] += len(source_patterns)
+    patterns = _source_patterns(pkg, max_results, max_chars)
+    _add_section(output, "source_patterns", patterns)
 
-    # 3. Deprecations via nia_package_grep
+    # 3. Deprecations via nia_package_grep (twice the hits of other sections)
     grep = _call_nia_package_grep_sync(package, "deprecat", registry=registry)
-    deprecations = []
-    for hit in grep.get("results", [])[: max_results * 2]:  # more hits for deprecations
-        res = hit.get("result", hit)
-        content = res.get("content", "")
-        file_path = res.get("file_path", "")
-        line = res.get("start_line", "")
-        if content:
-            deprecations.append(
-                {
-                    "file": file_path,
-                    "line": line,
-                    "content": content[:200],
-                }
-            )
-    if deprecations:
-        output["sections"]["deprecations"] = deprecations
-        output["sources_used"] += len(deprecations)
+    _add_section(output, "deprecations", _deprecations(grep, max_results * 2))
 
     # 4. Broader coverage via exa_search
     exa = _call_exa_search_sync(
         f"{package}{version_str} migration guide best practices breaking changes",
         num_results=max_results,
     )
-    guides = []
-    for r in exa.get("results", []):
-        guides.append(
-            {
-                "title": r.get("title", ""),
-                "summary": r.get("summary", "")[:300],
-            }
-        )
-    if guides:
-        output["sections"]["guides"] = guides
-        output["sources_used"] += len(guides)
+    _add_section(output, "guides", _guides(exa))
 
     return output
+
+
+# nia_search sources kept even when the package name is not in display_name.
+_TRUSTED_DOC_HOSTS = ("github.com", "npmjs.com", "pypi.org")
+
+
+def _add_section(output, name, value, count=None):
+    """Store a non-empty section; add `count` (default len(value)) to sources_used."""
+    if value:
+        output["sections"][name] = value
+        output["sources_used"] += len(value) if count is None else count
+
+
+def _official_docs(docs, package, max_results, max_chars):
+    """nia_search hits from the package's own or a trusted source, content truncated."""
+    official = []
+    for r in docs.get("results", [])[:max_results]:
+        src = r.get("source", {})
+        display = src.get("display_name", "").lower()
+        # Skip obvious noise (other packages, unrelated sites)
+        if package.lower() not in display and display not in _TRUSTED_DOC_HOSTS:
+            continue
+        official.append(
+            {
+                "source": src.get("display_name", ""),
+                "doc": src.get("document_name", ""),
+                "content": r.get("content", "")[:max_chars],
+            }
+        )
+    return official
+
+
+def _source_patterns(pkg, max_results, max_chars):
+    """Non-empty source documents from nia_package hits, truncated to max_chars."""
+    return [
+        code[:max_chars]
+        for r in pkg.get("results", [])[:max_results]
+        if (code := r.get("document", ""))
+    ]
+
+
+def _deprecations(grep, limit):
+    """file/line/200-char content of the first `limit` grep hits that have content."""
+    found = []
+    for hit in grep.get("results", [])[:limit]:
+        res = hit.get("result", hit)
+        content = res.get("content", "")
+        if content:
+            found.append(
+                {
+                    "file": res.get("file_path", ""),
+                    "line": res.get("start_line", ""),
+                    "content": content[:200],
+                }
+            )
+    return found
+
+
+def _guides(exa):
+    """Title and 300-char summary of every exa_search result."""
+    return [
+        {"title": r.get("title", ""), "summary": r.get("summary", "")[:300]}
+        for r in exa.get("results", [])
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -941,14 +956,9 @@ def _call_run_python(code, timeout=60):
     surfaced as artifacts. Output: stdout+stderr combined, last ~8KB with a
     '[truncated]' marker, exit code appended when nonzero.
     """
-    import subprocess
-
     if not isinstance(code, str) or not code.strip():
         return {"error": "run_python requires a non-empty code string"}
-    try:
-        timeout = min(float(timeout), SECURITY_POLICY["run_python"]["max_timeout_s"])
-    except (TypeError, ValueError):
-        timeout = SECURITY_POLICY["run_python"]["default_timeout_s"]
+    timeout = _run_python_timeout(timeout)
 
     if not _RUN_PYTHON_LOCK.acquire(blocking=False):
         return {
@@ -956,44 +966,67 @@ def _call_run_python(code, timeout=60):
             "progress (max_concurrent: 1)"
         }
     try:
-        work_dir = _SESSION_WORK_DIR or (SANDBOX_OUTPUT_ROOT / "default")
-        work_dir.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
-        proc = subprocess.Popen(
-            _host_python_cmd() + ["-c", code],
-            cwd=str(work_dir),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        timed_out = False
-        try:
-            out, _ = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_process_tree(proc)
-            try:
-                out, _ = proc.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                out = ""
-        out = out or ""
-        cap = SECURITY_POLICY["run_python"]["output_cap_bytes"]
-        if len(out) > cap:
-            out = "[truncated]\n" + out[-cap:]
-        if timed_out:
-            out += f"\n[run_python timed out after {timeout:g}s — process tree killed]"
-        elif proc.returncode:
-            out += f"\n[exit code: {proc.returncode}]"
-        return out
+        out, returncode, timed_out = _run_host_python(code, timeout)
+        return _format_run_output(out, returncode, timed_out, timeout)
     except Exception as e:
         return {"error": f"run_python failed: {e}"}
     finally:
         _RUN_PYTHON_LOCK.release()
+
+
+def _run_python_timeout(timeout):
+    """Requested timeout as float, capped at max_timeout_s; the default if not numeric."""
+    try:
+        return min(float(timeout), SECURITY_POLICY["run_python"]["max_timeout_s"])
+    except (TypeError, ValueError):
+        return SECURITY_POLICY["run_python"]["default_timeout_s"]
+
+
+def _run_host_python(code, timeout):
+    """Run `code` on the host interpreter in the session work dir.
+
+    Returns (output, returncode, timed_out); on timeout the process tree is
+    killed and whatever it printed within a further 10s is kept.
+    """
+    import subprocess
+
+    work_dir = _SESSION_WORK_DIR or (SANDBOX_OUTPUT_ROOT / "default")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    proc = subprocess.Popen(
+        _host_python_cmd() + ["-c", code],
+        cwd=str(work_dir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        try:
+            out, _ = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out = ""
+        return out or "", proc.returncode, True
+    return out or "", proc.returncode, False
+
+
+def _format_run_output(out, returncode, timed_out, timeout):
+    """Cap output to its last output_cap_bytes chars, then append the timeout/exit marker."""
+    cap = SECURITY_POLICY["run_python"]["output_cap_bytes"]
+    if len(out) > cap:
+        out = "[truncated]\n" + out[-cap:]
+    if timed_out:
+        out += f"\n[run_python timed out after {timeout:g}s — process tree killed]"
+    elif returncode:
+        out += f"\n[exit code: {returncode}]"
+    return out
 
 
 def _snapshot_output_dir():
@@ -1056,17 +1089,30 @@ def _check_url_allowed(url):
     if parts.username is not None or parts.password is not None:
         return False, "credentials in URL"
     host = (parts.hostname or "").lower()
-    if parts.scheme == "https":
-        if host not in _LLM_HTTPS_HOSTS:
-            return False, f"host '{host}' not in allowlist"
-        if port not in (None, 443):
-            return False, f"port {port} not allowed"
+    check = _URL_SCHEME_CHECKS.get(parts.scheme)
+    if check is None:
+        return False, f"scheme '{parts.scheme}' not allowed (https only)"
+    return check(host, port)
+
+
+def _check_https_target(host, port):
+    """(allowed, reason) for https: allowlisted host on the default port (443)."""
+    if host not in _LLM_HTTPS_HOSTS:
+        return False, f"host '{host}' not in allowlist"
+    if port not in (None, 443):
+        return False, f"port {port} not allowed"
+    return True, ""
+
+
+def _check_http_target(host, port):
+    """(allowed, reason) for plain http: only LM Studio on loopback port 1234."""
+    if (host, port) in _LLM_LOOPBACK_HTTP:
         return True, ""
-    if parts.scheme == "http":
-        if (host, port) in _LLM_LOOPBACK_HTTP:
-            return True, ""
-        return False, "plain http is allowed only to localhost:1234"
-    return False, f"scheme '{parts.scheme}' not allowed (https only)"
+    return False, "plain http is allowed only to localhost:1234"
+
+
+# URL scheme -> (host, port) check; any other scheme is refused.
+_URL_SCHEME_CHECKS = {"https": _check_https_target, "http": _check_http_target}
 
 
 def _post_json(url, body, headers, timeout):
@@ -1119,29 +1165,16 @@ def _call_llm(
         return {
             "error": f"Unknown backend: {backend}. Use 'local', 'anthropic', 'openai', or 'openrouter'."
         }
-    headers = {}
-    key_var = _LLM_KEY_VARS.get(backend)
-    if key_var:
-        api_key = os.environ.get(key_var)
-        if not api_key:
-            return {"error": f"{key_var} not set"}
-        if backend == "anthropic":
-            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-        else:
-            headers = {"Authorization": f"Bearer {api_key}"}
+    headers, error = _llm_headers(backend)
+    if error:
+        return error
 
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
-    if backend != "anthropic":
-        body["temperature"] = temperature
-    else:
-        if system:
-            body["system"] = system
-        if temperature > 0:
-            body["temperature"] = temperature
+    _apply_llm_sampling(body, backend, system, temperature)
 
     timeout = 60 if backend == "local" else 120
     try:
@@ -1151,6 +1184,31 @@ def _call_llm(
     if backend == "anthropic":
         return resp["content"][0]["text"]
     return resp["choices"][0]["message"]["content"]
+
+
+def _llm_headers(backend):
+    """(auth headers, error) for `backend`; error is a dict when its API key is unset."""
+    key_var = _LLM_KEY_VARS.get(backend)
+    if not key_var:
+        return {}, None
+    api_key = os.environ.get(key_var)
+    if not api_key:
+        return {}, {"error": f"{key_var} not set"}
+    if backend == "anthropic":
+        return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}, None
+    return {"Authorization": f"Bearer {api_key}"}, None
+
+
+def _apply_llm_sampling(body, backend, system, temperature):
+    """Add system/temperature to `body`: Anthropic only when set/positive,
+    other backends always send temperature and never a system prompt."""
+    if backend != "anthropic":
+        body["temperature"] = temperature
+        return
+    if system:
+        body["system"] = system
+    if temperature > 0:
+        body["temperature"] = temperature
 
 
 def _call_agent(
@@ -1327,42 +1385,76 @@ def execute_in_sandbox(
 
     global _SESSION_WORK_DIR
     sm = _create_manager(storage_dir)
-    ext_funcs = list(EXTERNAL_FUNCTIONS.keys())
     sid = session_id or "default"
 
     # Per-session work dir for run_python cwd and artifact surfacing
     _SESSION_WORK_DIR = SANDBOX_OUTPUT_ROOT / sid
     output_snapshot = _snapshot_output_dir()
 
-    # Saved sessions live at {storage_dir}/{name}.bin
-    has_saved = bool(
+    _open_session(sm, session_id, storage_dir, load_session, reset_session)
+    session = ouros.Session(manager=sm, session_id=sid)
+    result, stdout = _run_bridged(session, code)
+
+    # Save session
+    if session_id and storage_dir:
+        try:
+            sm.save_session(session_id=sid, name=session_id)
+        except Exception:
+            pass
+
+    result = dict(result)
+    result["stdout"] = stdout
+    # New/changed files under the sandbox output root — absolute host paths
+    result["artifacts"] = _diff_output_dir(output_snapshot)
+    return result
+
+
+def _has_saved_session(session_id, storage_dir):
+    """True if {storage_dir}/{session_id}.bin exists (where saved sessions live)."""
+    return bool(
         session_id
         and storage_dir
         and (Path(storage_dir) / f"{session_id}.bin").exists()
     )
 
-    # Load saved session (default when one exists), reset, or create fresh
+
+def _open_session(sm, session_id, storage_dir, load_session, reset_session):
+    """Load the saved session (default when one exists), else create or reset it."""
+    ext_funcs = list(EXTERNAL_FUNCTIONS.keys())
+    sid = session_id or "default"
+    has_saved = _has_saved_session(session_id, storage_dir)
     if session_id and not reset_session and (load_session or has_saved):
-        try:
-            sm.load_session(name=session_id, session_id=sid)
-            sm.register_external_functions(ext_funcs, session_id=sid)
-        except Exception as e:
-            print(
-                f"Warning: could not load session '{session_id}': {e}", file=sys.stderr
-            )
-            sm.create_session(sid, external_functions=ext_funcs)
+        _load_saved_session(sm, session_id, ext_funcs)
     else:
-        existing = [s["id"] for s in sm.list_sessions()]
-        if sid not in existing:
-            sm.create_session(sid, external_functions=ext_funcs)
-        else:
-            sm.reset(session_id=sid, external_functions=ext_funcs)
+        _fresh_session(sm, sid, ext_funcs)
 
-    session = ouros.Session(manager=sm, session_id=sid)
 
-    # Each execute()/resume() returns only the stdout produced since the previous
-    # pause. Collect every segment; keeping only the last one silently drops
-    # anything printed before a later external-function call.
+def _load_saved_session(sm, session_id, ext_funcs):
+    """Load `session_id` from storage; on failure warn on stderr and create it fresh."""
+    try:
+        sm.load_session(name=session_id, session_id=session_id)
+        sm.register_external_functions(ext_funcs, session_id=session_id)
+    except Exception as e:
+        print(f"Warning: could not load session '{session_id}': {e}", file=sys.stderr)
+        sm.create_session(session_id, external_functions=ext_funcs)
+
+
+def _fresh_session(sm, sid, ext_funcs):
+    """Create session `sid`, or reset it in place when the manager already has it."""
+    existing = [s["id"] for s in sm.list_sessions()]
+    if sid not in existing:
+        sm.create_session(sid, external_functions=ext_funcs)
+    else:
+        sm.reset(session_id=sid, external_functions=ext_funcs)
+
+
+def _run_bridged(session, code):
+    """Execute `code`, serving each external-function pause; (final result, stdout).
+
+    Each execute()/resume() returns only the stdout produced since the previous
+    pause. Collect every segment; keeping only the last one silently drops
+    anything printed before a later external-function call.
+    """
     chunks = []
 
     def _collect(r):
@@ -1379,39 +1471,23 @@ def execute_in_sandbox(
         progress = result.get("progress", {})
         if progress.get("status") != "function_call":
             break
-
-        func_name = progress["function_name"]
         call_id = progress["call_id"]
-        args = progress.get("args", [])
-        kwargs = progress.get("kwargs", {})
+        result = _collect(session.resume(call_id, _dispatch_external(progress)))
+    return result, "".join(chunks)
 
-        # Call real API
-        handler = EXTERNAL_FUNCTIONS.get(func_name)
-        if not handler:
-            result = _collect(
-                session.resume(call_id, {"error": f"Unknown function: {func_name}"})
-            )
-            continue
 
-        try:
-            api_result = handler(*args, **kwargs)
-        except Exception as e:
-            api_result = {"error": f"{func_name} failed: {e}"}
-
-        result = _collect(session.resume(call_id, api_result))
-
-    # Save session
-    if session_id and storage_dir:
-        try:
-            sm.save_session(session_id=sid, name=session_id)
-        except Exception:
-            pass
-
-    result = dict(result)
-    result["stdout"] = "".join(chunks)
-    # New/changed files under the sandbox output root — absolute host paths
-    result["artifacts"] = _diff_output_dir(output_snapshot)
-    return result
+def _dispatch_external(progress):
+    """Call the real handler for a paused call; failures return {"error": ...}."""
+    func_name = progress["function_name"]
+    args = progress.get("args", [])
+    kwargs = progress.get("kwargs", {})
+    handler = EXTERNAL_FUNCTIONS.get(func_name)
+    if not handler:
+        return {"error": f"Unknown function: {func_name}"}
+    try:
+        return handler(*args, **kwargs)
+    except Exception as e:
+        return {"error": f"{func_name} failed: {e}"}
 
 
 def list_variables(session_id, storage_dir):
@@ -1461,6 +1537,7 @@ def fork_session(source_id, new_id, storage_dir):
 
 
 def parse_args():
+    """Parse the harness CLI: code source, session/storage, and session commands."""
     p = argparse.ArgumentParser(
         description="Ouros Harness — sandboxed code execution with external function bridge"
     )
@@ -1493,68 +1570,95 @@ def parse_args():
 
 
 def main():
+    """CLI entry: run a session command or execute code, print stdout and artifacts.
+
+    Exits 1 on conflicting flags, a session command without --session, or no code.
+    """
     _load_env()
     _apply_data_roots()
     args = parse_args()
     storage = args.storage or "thoughts/shared/dives"
 
     if args.reset and args.load:
-        print("Error: --reset and --load are mutually exclusive", file=sys.stderr)
-        sys.exit(1)
+        _fail("--reset and --load are mutually exclusive")
 
-    if args.list_vars:
-        if not args.session:
-            print("Error: --list-vars requires --session", file=sys.stderr)
-            sys.exit(1)
-        list_variables(args.session, storage)
+    if _run_session_command(args, storage):
         return
-
-    if args.get_var:
-        if not args.session:
-            print("Error: --get-var requires --session", file=sys.stderr)
-            sys.exit(1)
-        get_variable(args.session, args.get_var, storage)
-        return
-
-    if args.fork:
-        if not args.session:
-            print("Error: --fork requires --session", file=sys.stderr)
-            sys.exit(1)
-        fork_session(args.session, args.fork, storage)
-        return
-
-    # Code execution
-    code = None
-    if args.code:
-        code = args.code
-    elif args.file:
-        code = Path(args.file).read_text()
-    elif not sys.stdin.isatty():
-        code = sys.stdin.read()
-
-    if not code:
-        print("Error: provide code via --code, --file, or stdin", file=sys.stderr)
-        sys.exit(1)
 
     result = execute_in_sandbox(
-        code=code,
+        code=_require_code(args),
         session_id=args.session,
         storage_dir=storage,
         load_session=args.load,
         reset_session=args.reset,
     )
+    _print_result(result)
 
+
+def _require_code(args):
+    """Sandbox code from _read_code; exits 1 when no source provided any."""
+    code = _read_code(args)
+    if not code:
+        _fail("provide code via --code, --file, or stdin")
+    return code
+
+
+def _print_result(result):
+    """Print the run's stdout as-is, then new/changed artifact paths (absolute host paths)."""
     if result.get("stdout"):
         print(result["stdout"], end="")
+    _print_artifacts(result.get("artifacts") or [])
 
-    # Surface new/changed files in the sandbox output dir (absolute host paths)
-    artifacts = result.get("artifacts") or []
-    if artifacts:
-        print("artifacts:")
-        for a in artifacts[:10]:
-            print(f"  {a}")
-        if len(artifacts) > 10:
-            print(f"  ... and {len(artifacts) - 10} more")
+
+def _fail(message):
+    """Print 'Error: <message>' to stderr and exit with status 1."""
+    print(f"Error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _run_session_command(args, storage):
+    """Run --list-vars, --get-var or --fork (first one given wins); True if one ran.
+
+    Each requires --session; without it the CLI exits 1.
+    """
+    commands = (
+        ("list_vars", "--list-vars", lambda: list_variables(args.session, storage)),
+        (
+            "get_var",
+            "--get-var",
+            lambda: get_variable(args.session, args.get_var, storage),
+        ),
+        ("fork", "--fork", lambda: fork_session(args.session, args.fork, storage)),
+    )
+    for attr, flag, run in commands:
+        if getattr(args, attr):
+            if not args.session:
+                _fail(f"{flag} requires --session")
+            run()
+            return True
+    return False
+
+
+def _read_code(args):
+    """Sandbox code from --code, else --file, else piped stdin; None if none given."""
+    if args.code:
+        return args.code
+    if args.file:
+        return Path(args.file).read_text()
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return None
+
+
+def _print_artifacts(artifacts):
+    """Print up to 10 artifact paths under an 'artifacts:' header, then a remainder count."""
+    if not artifacts:
+        return
+    print("artifacts:")
+    for a in artifacts[:10]:
+        print(f"  {a}")
+    if len(artifacts) > 10:
+        print(f"  ... and {len(artifacts) - 10} more")
 
 
 if __name__ == "__main__":
