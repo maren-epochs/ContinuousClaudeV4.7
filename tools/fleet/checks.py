@@ -32,7 +32,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -147,6 +147,27 @@ def _blocks(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if not isinstance(content, list):
         return []
     return [b for b in content if isinstance(b, Mapping)]
+
+
+def _record(raw: str) -> Mapping[str, Any] | None:
+    """The JSON object on a transcript line; None for invalid JSON or a non-object."""
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        return None
+    return record if isinstance(record, Mapping) else None
+
+
+def _done_notes(raw: str) -> Iterator[tuple[str, str]]:
+    """(tool use id, notification) per id of each non-running task notification."""
+    if "<task-notification>" not in raw:
+        return
+    for note in _NOTIFICATION.findall(raw.replace("\\n", "\n")):
+        status = _STATUS.search(note)
+        if status and status.group(1).strip() == "running":
+            continue
+        for tool_id in _TOOL_USE_ID.findall(note):
+            yield tool_id.strip(), note
 
 
 # --- transcript scan ---

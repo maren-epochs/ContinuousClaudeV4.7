@@ -31,9 +31,10 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
+
+from sync_global import write_atomic  # sibling script: install/ is sys.path[0]
 
 MIN_NODE = 18
 GUARD, AUDIT, STOP = "harness-guard.mjs", "fleet-audit.mjs", "auto-handoff-stop.mjs"
@@ -170,19 +171,6 @@ def backup_path(path: Path) -> Path:
     return cand
 
 
-def write_atomic(path: Path, data: bytes) -> None:
-    """Temp file in the same dir + os.replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
 def run(args: argparse.Namespace) -> int:
     """Check Node and hook files, then register (or diff); raises Refused."""
     major = node_major()
@@ -228,7 +216,8 @@ def run(args: argparse.Namespace) -> int:
         bak = backup_path(settings)
         shutil.copy2(settings, bak)
         print(f"backup: {bak}")
-    write_atomic(settings, new_text.encode("utf-8"))
+    # sync_global.write_atomic writes text with newline="\n": EOLs are kept as-is.
+    write_atomic(settings, new_text)
     print(f"wrote {settings}; restart Claude Code sessions to load the hooks")
     return 0
 

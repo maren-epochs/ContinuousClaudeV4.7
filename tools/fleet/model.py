@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import time
@@ -40,60 +41,87 @@ class _Bad(Exception):
     """A value does not fit its declared type; the caller uses the default."""
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise _Bad
+    return value
+
+
+def _coerce_union(tp: Any, value: Any) -> Any:
+    args = typing.get_args(tp)
+    if value is None and type(None) in args:
+        return None
+    for arg in args:
+        if arg is type(None):
+            continue
+        try:
+            return _coerce(arg, value)
+        except _Bad:
+            pass
+    raise _Bad
+
+
+def _coerce_list(tp: Any, value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise _Bad
+    (item_tp,) = typing.get_args(tp) or (Any,)
+    out = []
+    for item in value:
+        try:
+            out.append(_coerce(item_tp, item))
+        except _Bad:
+            pass
+    return out
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise _Bad
+
+
+def _coerce_int(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    raise _Bad
+
+
+def _coerce_float(value: Any) -> float:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    raise _Bad
+
+
+def _coerce_str(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    raise _Bad
+
+
+_SCALARS: dict[Any, Any] = {
+    bool: _coerce_bool,
+    int: _coerce_int,
+    float: _coerce_float,
+    str: _coerce_str,
+}
+
+
 def _coerce(tp: Any, value: Any) -> Any:
     if tp is Any:
         return value
     origin = typing.get_origin(tp)
     if origin is types.UnionType or origin is typing.Union:
-        args = typing.get_args(tp)
-        if value is None and type(None) in args:
-            return None
-        for arg in args:
-            if arg is type(None):
-                continue
-            try:
-                return _coerce(arg, value)
-            except _Bad:
-                pass
-        raise _Bad
+        return _coerce_union(tp, value)
     if origin is list:
-        if not isinstance(value, list):
-            raise _Bad
-        (item_tp,) = typing.get_args(tp) or (Any,)
-        out = []
-        for item in value:
-            try:
-                out.append(_coerce(item_tp, item))
-            except _Bad:
-                pass
-        return out
+        return _coerce_list(tp, value)
     if origin is dict:
-        if not isinstance(value, Mapping):
-            raise _Bad
-        return dict(value)
+        return dict(_mapping(value))
     if isinstance(tp, type) and issubclass(tp, Record):
-        if not isinstance(value, Mapping):
-            raise _Bad
-        return tp.from_dict(value)
-    if tp is bool:
-        if isinstance(value, bool):
-            return value
-        raise _Bad
-    if tp is int:
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-        if isinstance(value, float) and value.is_integer():
-            return int(value)
-        raise _Bad
-    if tp is float:
-        if isinstance(value, int | float) and not isinstance(value, bool):
-            return float(value)
-        raise _Bad
-    if tp is str:
-        if isinstance(value, str):
-            return value
-        raise _Bad
-    return value
+        return tp.from_dict(_mapping(value))
+    scalar = _SCALARS.get(tp)
+    return value if scalar is None else scalar(value)
 
 
 def _plain(value: Any) -> Any:
@@ -324,14 +352,18 @@ class Proposal(Record):
 
 
 def home_dir(env: Mapping[str, str] | None = None, platform: str | None = None) -> Path:
-    """User home: USERPROFILE then HOME on win32, HOME then USERPROFILE elsewhere."""
+    """User home: USERPROFILE then HOME on win32, HOME then USERPROFILE elsewhere.
+
+    The env value is normalized (``os.path.normpath``: ``a/../b`` -> ``b``) before
+    use, so a ``..`` segment in HOME never survives into the derived ~/.claude paths.
+    """
     env = os.environ if env is None else env
     platform = sys.platform if platform is None else platform
     order = ("USERPROFILE", "HOME") if platform == "win32" else ("HOME", "USERPROFILE")
     for key in order:
         value = env.get(key)
         if value:
-            return Path(value)
+            return Path(os.path.normpath(value))
     return Path.home()
 
 
@@ -422,6 +454,34 @@ def write_atomic(path: Path, text: str) -> Path:
     return path
 
 
+def run_git(repo: str, *args: str, timeout: float) -> str | None:
+    """Stripped stdout of ``git -C repo <args>``; None on a nonzero exit or failure."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def parse_audit_lines(text: str) -> list[AuditEvent]:
+    """AuditEvents of every JSON-object line in text; blank/invalid lines skipped."""
+    events = []
+    for line in text.splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, Mapping):
+            events.append(AuditEvent.from_dict(data))
+    return events
+
+
 def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -463,15 +523,19 @@ def list_proposals(directory: Path | None = None) -> list[Proposal]:
     directory = directory or inbox_dir()
     if not directory.is_dir():
         return []
-    out = []
-    for p in directory.glob("*.json"):
-        data = _load_json(p)
-        if not isinstance(data, Mapping):
-            continue
-        proposal = Proposal.from_dict(data)
-        if proposal.id == p.stem and is_safe_proposal_id(proposal.id):
-            out.append(proposal)
+    out = [pr for pr in map(_proposal_file, directory.glob("*.json")) if pr]
     return sorted(out, key=lambda pr: (pr.created_at or "", pr.id or ""))
+
+
+def _proposal_file(path: Path) -> Proposal | None:
+    """The proposal in path when its stored id is safe and matches the file stem."""
+    data = _load_json(path)
+    if not isinstance(data, Mapping):
+        return None
+    proposal = Proposal.from_dict(data)
+    if proposal.id == path.stem and is_safe_proposal_id(proposal.id):
+        return proposal
+    return None
 
 
 def append_audit(event: AuditEvent, path: Path | None = None) -> Path:
@@ -493,14 +557,5 @@ def read_audit(path: Path | None = None, limit: int | None = None) -> list[Audit
         text = path.read_text(encoding="utf-8")
     except OSError:
         return []
-    events = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            data = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(data, Mapping):
-            events.append(AuditEvent.from_dict(data))
+    events = parse_audit_lines(text)
     return events[-limit:] if limit else events

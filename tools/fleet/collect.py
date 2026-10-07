@@ -32,16 +32,17 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import checks, model
+from .checks import _blocks, _done_notes, _record
 from .model import (
     Alert,
     AuditEvent,
@@ -71,9 +72,6 @@ EXPECTED_SESSION_KEYS = (
 )
 AGENT_TOOLS = frozenset({"Agent", "Task"})
 HANDOFF_SUFFIXES = (".yaml", ".yml", ".md")
-_NOTIFICATION = re.compile(r"<task-notification>.*?</task-notification>", re.DOTALL)
-_TOOL_USE_ID = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
-_STATUS = re.compile(r"<status>([^<]+)</status>")
 PCT_FRESH_S = 600
 PCT_SKEW_S = 5
 _PCT_TEXT = re.compile(r"\d{1,6}")
@@ -364,87 +362,103 @@ def transcript_path(
     return best[1] if best else None
 
 
-def _blocks(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+@dataclass
+class _Tally:
+    """Running totals of one transcript tail (parse_transcript)."""
+
+    model: str | None = None
+    pct: float | None = None
+    last: str | None = None
+    spawned: set[str] = field(default_factory=set)
+    finished: set[str] = field(default_factory=set)
+    parsed: int = 0
+    typed: int = 0
+    assistants: int = 0
+    with_usage: int = 0
+
+    def result(self) -> dict[str, Any]:
+        issues = []
+        if self.parsed and not self.typed:
+            issues.append("transcript records lack 'type'")
+        if self.assistants and not self.with_usage:
+            issues.append("assistant records lack message.usage")
+        return {
+            "model": self.model,
+            "context_pct": self.pct,
+            "last_activity": self.last,
+            "agents_running": len(self.spawned - self.finished),
+            "issues": issues,
+        }
+
+
+def _agent_ids(record: Mapping[str, Any]) -> list[str]:
+    return [
+        b["id"]
+        for b in _blocks(record)
+        if b.get("type") == "tool_use"
+        and b.get("name") in AGENT_TOOLS
+        and isinstance(b.get("id"), str)
+    ]
+
+
+def _result_ids(record: Mapping[str, Any]) -> list[str]:
+    return [
+        b["tool_use_id"]
+        for b in _blocks(record)
+        if b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str)
+    ]
+
+
+def _async_launch(record: Mapping[str, Any]) -> bool:
+    result = record.get("toolUseResult")
+    return isinstance(result, Mapping) and (
+        result.get("status") == "async_launched" or result.get("isAsync") is True
+    )
+
+
+def _tally_assistant(
+    tally: _Tally, record: Mapping[str, Any], env: Mapping[str, str]
+) -> None:
+    tally.assistants += 1
     message = record.get("message")
-    content = message.get("content") if isinstance(message, Mapping) else None
-    if not isinstance(content, list):
-        return []
-    return [b for b in content if isinstance(b, Mapping)]
+    message = message if isinstance(message, Mapping) else {}
+    name = message.get("model")
+    if isinstance(name, str) and name and not name.startswith("<"):
+        tally.model = name
+    usage = message.get("usage")
+    if isinstance(usage, Mapping):
+        tally.with_usage += 1
+        tally.pct = context_pct(usage, env)
+    tally.spawned.update(_agent_ids(record))
+
+
+def _tally_record(
+    tally: _Tally, record: Mapping[str, Any], env: Mapping[str, str]
+) -> None:
+    tally.parsed += 1
+    kind = record.get("type")
+    if isinstance(kind, str):
+        tally.typed += 1
+    stamp = record.get("timestamp")
+    if isinstance(stamp, str) and (tally.last is None or stamp > tally.last):
+        tally.last = stamp
+    if record.get("isSidechain") is True:
+        return
+    if kind == "assistant":
+        _tally_assistant(tally, record, env)
+    elif kind == "user" and not _async_launch(record):
+        tally.finished.update(_result_ids(record))
 
 
 def parse_transcript(path: Path, env: Mapping[str, str]) -> dict[str, Any]:
     """Model, context %, last activity, running agents and schema issues of a tail."""
-    model_name: str | None = None
-    pct: float | None = None
-    last: str | None = None
-    spawned: set[str] = set()
-    finished: set[str] = set()
-    parsed = typed = assistants = with_usage = 0
+    tally = _Tally()
     for line in read_tail(path, TAIL_BYTES).splitlines():
-        if "<task-notification>" in line:
-            for note in _NOTIFICATION.findall(line.replace("\\n", "\n")):
-                status = _STATUS.search(note)
-                if status and status.group(1).strip() == "running":
-                    continue
-                finished.update(i.strip() for i in _TOOL_USE_ID.findall(note))
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(record, Mapping):
-            continue
-        parsed += 1
-        kind = record.get("type")
-        if isinstance(kind, str):
-            typed += 1
-        stamp = record.get("timestamp")
-        if isinstance(stamp, str) and (last is None or stamp > last):
-            last = stamp
-        if record.get("isSidechain") is True:
-            continue
-        if kind == "assistant":
-            assistants += 1
-            message = record.get("message")
-            message = message if isinstance(message, Mapping) else {}
-            name = message.get("model")
-            if isinstance(name, str) and name and not name.startswith("<"):
-                model_name = name
-            usage = message.get("usage")
-            if isinstance(usage, Mapping):
-                with_usage += 1
-                pct = context_pct(usage, env)
-            for block in _blocks(record):
-                tool_id = block.get("id")
-                if (
-                    block.get("type") == "tool_use"
-                    and block.get("name") in AGENT_TOOLS
-                    and isinstance(tool_id, str)
-                ):
-                    spawned.add(tool_id)
-        elif kind == "user":
-            result = record.get("toolUseResult")
-            launched = isinstance(result, Mapping) and (
-                result.get("status") == "async_launched"
-                or result.get("isAsync") is True
-            )
-            if launched:
-                continue
-            for block in _blocks(record):
-                tool_id = block.get("tool_use_id")
-                if block.get("type") == "tool_result" and isinstance(tool_id, str):
-                    finished.add(tool_id)
-    issues = []
-    if parsed and not typed:
-        issues.append("transcript records lack 'type'")
-    if assistants and not with_usage:
-        issues.append("assistant records lack message.usage")
-    return {
-        "model": model_name,
-        "context_pct": pct,
-        "last_activity": last,
-        "agents_running": len(spawned - finished),
-        "issues": issues,
-    }
+        tally.finished.update(tool_id for tool_id, _note in _done_notes(line))
+        record = _record(line)
+        if record is not None:
+            _tally_record(tally, record, env)
+    return tally.result()
 
 
 # --- handoffs ---
@@ -502,20 +516,8 @@ def newest_handoff(root: Path, now: float) -> Handoff | None:
 
 def git_head(repo: str) -> str | None:
     """``git rev-parse HEAD`` of repo; None outside git or on any failure."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", repo, "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    sha = proc.stdout.strip()
-    return (
-        sha if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
-    )
+    sha = model.run_git(repo, "rev-parse", "HEAD", timeout=3)
+    return sha if sha is not None and re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
 
 
 def harness_info(warnings: list[str]) -> Harness:
@@ -546,15 +548,7 @@ def inbox_count() -> int:
 
 def audit_recent(path: Path) -> list[AuditEvent]:
     """Last ``AUDIT_RECENT`` events from the last ``AUDIT_TAIL_BYTES`` of the log."""
-    events = []
-    for line in read_tail(path, AUDIT_TAIL_BYTES).splitlines():
-        try:
-            data = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(data, Mapping):
-            events.append(AuditEvent.from_dict(data))
-    return events[-AUDIT_RECENT:]
+    return model.parse_audit_lines(read_tail(path, AUDIT_TAIL_BYTES))[-AUDIT_RECENT:]
 
 
 def rotate_audit(path: Path, warnings: list[str]) -> None:

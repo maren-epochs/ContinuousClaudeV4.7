@@ -80,18 +80,10 @@ def content_hash(text: str) -> str:
 def _git_terms_path(repo: Path) -> Path | None:
     if not repo.is_dir():
         return None
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "--git-path", "info/privacy-terms"],
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    out = proc.stdout.strip()
-    if proc.returncode != 0 or not out:
+    out = model.run_git(
+        str(repo), "rev-parse", "--git-path", "info/privacy-terms", timeout=GIT_TIMEOUT
+    )
+    if not out:
         return None
     path = Path(out)
     return path if path.is_absolute() else repo / path
