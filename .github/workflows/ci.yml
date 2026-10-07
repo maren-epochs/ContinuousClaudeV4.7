@@ -1,5 +1,6 @@
 # CI: pre-commit (ruff + privacy guard) and the full pytest run (unit + integration,
-# incl. the .claude/hooks/test_*.sh suites) on Linux and Windows, Python 3.13.
+# incl. the .claude/hooks/test_*.sh suites) on Linux and Windows, Python 3.13, with tldr
+# installed (cargo, pinned commit, binaries cached in ~/.cargo/bin).
 # Dependencies come from requirements.lock (exact pins); plotly-resampler is installed
 # with --no-deps because 0.11.1 declares plotly<7 (see pyproject.toml).
 name: CI
@@ -23,15 +24,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Pinned images, so a runner-image migration never changes CI silently.
+        os: [ubuntu-24.04, windows-2025]
     defaults:
       run:
         shell: bash  # Git Bash on Windows
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: "1"
+      # tldr (parcadei/tldr-code) at the commit the dev machine runs (`tldr --version`
+      # = 0.4.0). The tldr-dependent tests (test_tldr_read.sh nav-map/cache/shim/
+      # launch-dir groups, readiness tech_debt, ouros grep) run against it.
+      TLDR_REPO: https://github.com/parcadei/tldr-code
+      TLDR_REV: 6c4011a72e83e2577e68a807ffe4be5f5872d6b2
+      TLDR_VERSION: tldr 0.4.0
     steps:
       - uses: actions/checkout@v5
+
+      - name: Cache tldr binaries
+        id: tldr-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/tldr*
+          key: tldr-${{ runner.os }}-${{ matrix.os }}-${{ env.TLDR_REV }}
+
+      - name: Install tldr (cargo, cache miss only)
+        if: steps.tldr-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked --git "$TLDR_REPO" --rev "$TLDR_REV" tldr-cli
+
+      - name: Check tldr
+        run: |
+          command -v tldr tldr-mcp
+          v="$(tldr --version)"
+          echo "$v"
+          [ "$v" = "$TLDR_VERSION" ] || { echo "::error::tldr version '$v', want '$TLDR_VERSION'"; exit 1; }
 
       - uses: actions/setup-python@v6
         with:
@@ -61,4 +87,6 @@ jobs:
         run: python -m pre_commit run --all-files --show-diff-on-failure
 
       - name: pytest (unit + integration)
+        env:
+          CCV_REQUIRE_TLDR: "1"  # tldr-dependent groups fail instead of skipping
         run: python -m pytest -q

@@ -15,28 +15,61 @@ HOOK="$(cd "$(dirname "$0")" && pwd)/tldr-read.mjs"
 # Home dir derived at runtime (no username in the repo): forward-slash form, and
 # the JSON-escaped backslash form for the real ~/.claude/hooks/status.mjs.
 HOME_FWD="$(node -e "console.log(require('os').homedir().replace(/\\\\/g,'/'))")"
-HOME_LC_BS="$(node -e "console.log(require('os').homedir().replace(/\//g,'\\\\').toLowerCase())")"
-FIXTURE="$HOME_FWD/.claude/tools/ouros_harness.py"
+# Repo root in the form node expects (Git Bash `pwd -W` gives C:/...; POSIX pwd elsewhere).
+REPO_FWD="$(cd "$(dirname "$0")/../.." && { pwd -W 2>/dev/null || pwd; })"
+FIXTURE_DIR="$REPO_FWD/tests/fixtures/tldr"
+FIXTURE="$FIXTURE_DIR/nav_fixture.py"  # in-repo, >1500B, not a bypass pattern
+PLATFORM="$(node -p process.platform)"
 BS_FIXTURE="$(node -e "console.log(JSON.stringify(require('path').win32.join(require('os').homedir(),'.claude','hooks','status.mjs')).slice(1,-1))")"  # real, >1500B, backslashes
 CACHE_DIR="$(node -e "console.log(require('os').tmpdir().replace(/\\\\/g,'/'))")/tldr-read-cache"
 TMPWIN="${CACHE_DIR%/tldr-read-cache}"
 
 # The nav-map, shim and launch-dir cases need the tldr binary (same lookup as the
-# hook: ~/.cargo/bin/tldr, else PATH) and a large .py inside ~/.claude (the live
-# install's ouros_harness.py). Without either (e.g. CI) they are SKIPPED, not
-# failed; the bypass and .ipynb cases are pure JS and always run.
+# hook: ~/.cargo/bin/tldr, else PATH; CI installs it) and read the in-repo fixture.
+# Without tldr they are SKIPPED, not failed; the bypass and .ipynb cases are pure
+# JS and always run.
 TLDR_OK=0; TLDR_SKIP=""
 if [ -x "$HOME_FWD/.cargo/bin/tldr" ] || [ -x "$HOME_FWD/.cargo/bin/tldr.exe" ] \
    || command -v tldr >/dev/null 2>&1; then
-  if [ -f "$FIXTURE" ]; then TLDR_OK=1; else TLDR_SKIP="no ~/.claude/tools/ouros_harness.py (live install)"; fi
+  if [ -f "$FIXTURE" ]; then TLDR_OK=1; else TLDR_SKIP="fixture missing: $FIXTURE"; fi
 else
   TLDR_SKIP="tldr not installed"
 fi
-SKIPPED=0
-skip_group() { echo "SKIP: $1 ($TLDR_SKIP)"; SKIPPED=$((SKIPPED+1)); }
 
+# no_tldr <cmd...>: run with tldr unreachable (empty home, so no ~/.cargo/bin/tldr,
+# and PATH = node's dir only). The hook then yields {} unless the output comes
+# from its cache or a live shim, which makes cache misses and shim use observable
+# without timing thresholds (a Linux tldr spawn can be well under 1s).
+NODE_BIN="$(command -v node)"
+NO_TLDR_HOME="$(mktemp -d)"
+no_tldr() {
+  env HOME="$NO_TLDR_HOME" USERPROFILE="$(cd "$NO_TLDR_HOME" && { pwd -W 2>/dev/null || pwd; })" \
+    PATH="$(dirname "$NODE_BIN")" "$@"
+}
+# Guard: tldr must really be unreachable there (it could share node's dir).
+if no_tldr "$NODE_BIN" -e "process.exit(require('child_process').spawnSync('tldr',['--version']).error ? 0 : 1)"; then
+  NO_TLDR_OK=1
+else
+  NO_TLDR_OK=0
+fi
+# hook_no_tldr <payload> [extra env...] — sets OUT
+hook_no_tldr() { local p="$1"; shift; OUT=$(printf '%s' "$p" | no_tldr "$@" "$NODE_BIN" "$HOOK"); }
+SKIPPED=0
 PASS=0
 FAIL=0
+# CCV_REQUIRE_TLDR=1 (set in CI, which installs tldr): a group that would be
+# skipped FAILS instead, so CI cannot silently lose tldr coverage.
+skip_group() {
+  if [ "${CCV_REQUIRE_TLDR:-}" = 1 ]; then
+    echo "FAIL: $1 not run ($TLDR_SKIP) but CCV_REQUIRE_TLDR=1"; FAIL=$((FAIL+1))
+  else
+    echo "SKIP: $1 ($TLDR_SKIP)"; SKIPPED=$((SKIPPED+1))
+  fi
+}
+skip_check() { # <name>: a check that cannot run here (same CCV_REQUIRE_TLDR rule)
+  if [ "${CCV_REQUIRE_TLDR:-}" = 1 ]; then echo "FAIL: $1 not run"; FAIL=$((FAIL+1));
+  else echo "SKIP: $1"; fi
+}
 
 # run_hook <payload> [threshold_ms] — sets OUT (stdout) and MS (wall ms).
 # With a threshold: best-of-5, MS = minimum. Windows node process start spikes
@@ -102,13 +135,24 @@ WARM_MS="$MS"
 [ "$OUT" = "$COLD_OUT" ]; check "VAL-001b warm output byte-identical to cold" $?
 [ "$WARM_MS" -lt 400 ]; check "VAL-001b warm run <400ms (got ${WARM_MS}ms; cold was ${COLD_MS}ms)" $?
 
-# --- VAL-001c: touching the file invalidates the cache (re-spawns tldr, >1s) ---
+# --- VAL-001c: touching the file invalidates the cache ---
+# With tldr unreachable, a cache hit still returns the Nav Map and a miss returns {}.
 TMP_PY="$TMPWIN/tldr_cache_probe_$$.py"  # name must not hit test-file bypass patterns
 cp "$FIXTURE" "$TMP_PY"
 run_hook "$(payload "$TMP_PY")"   # cold: populates cache
-touch "$TMP_PY"                   # new mtime -> cache must miss
-run_hook "$(payload "$TMP_PY")"
-[ "$MS" -gt 1000 ]; check "VAL-001c mtime change invalidates cache (re-run took ${MS}ms, want >1000ms)" $?
+PROBE_OUT="$OUT"
+if [ "$NO_TLDR_OK" -eq 1 ]; then
+  hook_no_tldr "$(payload "$TMP_PY")"
+  [ "$OUT" = "$PROBE_OUT" ] && [ "$OUT" != "{}" ]
+  check "VAL-001c unchanged file is served from cache without tldr" $?
+  touch -d '+5 seconds' "$TMP_PY" 2>/dev/null || { sleep 1; touch "$TMP_PY"; }  # new mtime -> cache must miss
+  hook_no_tldr "$(payload "$TMP_PY")"
+  [ "$OUT" = "{}" ]; check "VAL-001c mtime change invalidates cache (miss without tldr -> {}, got: ${OUT:0:40})" $?
+  run_hook "$(payload "$TMP_PY")"
+  [ "$OUT" = "$PROBE_OUT" ]; check "VAL-001c re-extract after mtime change matches original output" $?
+else
+  skip_check "VAL-001c (tldr reachable from node's dir; cannot hide it)"
+fi
 rm -f "$TMP_PY"
 
 # --- VAL-201: persistent tldr-mcp shim (tldr-shim.mjs) — additive assertions ---
@@ -137,14 +181,23 @@ run_hook "$(payload "$FIXTURE")"
 [ "$OUT" = "$COLD_OUT" ]; check "VAL-201d stale port file falls back to spawnSync, identical output (${MS}ms)" $?
 rm -f "$SHIM_PORT_FILE"
 
-# --- VAL-201e: TLDR_READ_SHIM=0 ignores a live shim (spawnSync path, >1s) ---
+# --- VAL-201e: TLDR_READ_SHIM=0 ignores a live shim (spawnSync path) ---
+# tldr hidden from the hook: the live shim still serves the Nav Map (proves the
+# shim is the source), and with TLDR_READ_SHIM=0 the hook must not use it -> {}.
 node "$SHIM" start > /dev/null 2>&1
+if [ "$NO_TLDR_OK" -eq 1 ]; then
+  rm -rf "$CACHE_DIR"
+  hook_no_tldr "$(payload "$FIXTURE")"
+  [ "$OUT" = "$COLD_OUT" ]; check "VAL-201e live shim serves the read with tldr hidden from the hook" $?
+  rm -rf "$CACHE_DIR"
+  hook_no_tldr "$(payload "$FIXTURE")" TLDR_READ_SHIM=0
+  [ "$OUT" = "{}" ]; check "VAL-201e TLDR_READ_SHIM=0 bypasses live shim (got: ${OUT:0:40})" $?
+else
+  skip_check "VAL-201e (tldr reachable from node's dir; cannot hide it)"
+fi
 rm -rf "$CACHE_DIR"
-start=$(date +%s%N)
 OUT=$(printf '%s' "$(payload "$FIXTURE")" | TLDR_READ_SHIM=0 node "$HOOK")
-end=$(date +%s%N); MS=$(( (end - start) / 1000000 ))
-[ "$OUT" = "$COLD_OUT" ] && [ "$MS" -gt 1000 ]
-check "VAL-201e TLDR_READ_SHIM=0 bypasses live shim (${MS}ms, want >1000ms)" $?
+[ "$OUT" = "$COLD_OUT" ]; check "VAL-201e TLDR_READ_SHIM=0 spawnSync output identical to cold" $?
 node "$SHIM" stop > /dev/null 2>&1
 else
   skip_group "VAL-001 nav-map cache + VAL-201 shim"
@@ -205,21 +258,34 @@ rm -f "$NB_FIXTURE" "$NB_SMALL"
 # allow inside CLAUDE_PROJECT_DIR (case/separator-insensitive on Windows), ask outside it,
 # including a sibling dir whose name is a prefix of the file's dir.
 if [ "$TLDR_OK" -eq 1 ]; then
-DP="{\"tool_name\":\"Read\",\"cwd\":\"C:/nowhere\",\"tool_input\":{\"file_path\":\"$FIXTURE\"}}"
+if [ "$PLATFORM" = win32 ]; then NOWHERE="C:/nowhere"; else NOWHERE="/nowhere"; fi
+DP="{\"tool_name\":\"Read\",\"cwd\":\"$NOWHERE\",\"tool_input\":{\"file_path\":\"$FIXTURE\"}}"
 decision() { printf '%s' "$DP" | env -u CLAUDE_PROJECT_DIR "$@" node "$HOOK" 2>/dev/null | grep -o '"permissionDecision":"[a-z]*"'; }
-[ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/.claude")" = '"permissionDecision":"allow"' ]
+[ "$(decision CLAUDE_PROJECT_DIR="$REPO_FWD")" = '"permissionDecision":"allow"' ]
 check "VAL-501a inside launch dir -> allow" $?
-[ "$(decision CLAUDE_PROJECT_DIR="$HOME_LC_BS\\.CLAUDE\\")" = '"permissionDecision":"allow"' ]
-check "VAL-501b case/backslash variant of launch dir -> allow" $?
-[ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/Documents")" = '"permissionDecision":"ask"' ]
+if [ "$PLATFORM" = win32 ]; then
+  # Windows paths are case-insensitive: lowercased, backslashed, trailing separator.
+  REPO_LC_BS="$(node -e "console.log(process.argv[1].replace(/\//g,'\\\\').toLowerCase())" "$REPO_FWD")"
+  [ "$(decision CLAUDE_PROJECT_DIR="$REPO_LC_BS\\")" = '"permissionDecision":"allow"' ]
+  check "VAL-501b case/backslash variant of launch dir -> allow" $?
+else
+  # POSIX paths are case-sensitive: a trailing slash still matches, a case variant does not.
+  [ "$(decision CLAUDE_PROJECT_DIR="$REPO_FWD/")" = '"permissionDecision":"allow"' ]
+  check "VAL-501b trailing-slash variant of launch dir -> allow" $?
+  REPO_UC="$(node -e "console.log(process.argv[1].toUpperCase())" "$REPO_FWD")"
+  [ "$(decision CLAUDE_PROJECT_DIR="$REPO_UC")" = '"permissionDecision":"ask"' ]
+  check "VAL-501b case variant of launch dir on POSIX -> ask" $?
+fi
+[ "$(decision CLAUDE_PROJECT_DIR="$REPO_FWD/install")" = '"permissionDecision":"ask"' ]
 check "VAL-501c outside launch dir -> ask" $?
-[ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/.cl")" = '"permissionDecision":"ask"' ]
+[ "$(decision CLAUDE_PROJECT_DIR="${FIXTURE_DIR%?}")" = '"permissionDecision":"ask"' ]
 check "VAL-501d prefix-named sibling dir -> ask" $?
 [ "$(decision)" = '"permissionDecision":"ask"' ]
 check "VAL-501e no CLAUDE_PROJECT_DIR, cwd elsewhere -> ask" $?
 else
   skip_group "VAL-501 launch-dir approval"
 fi
+rm -rf "$NO_TLDR_HOME"
 
 echo
 [ "$SKIPPED" -gt 0 ] && echo "SKIPPED: $SKIPPED group(s): $TLDR_SKIP"
