@@ -99,6 +99,34 @@ find_src() {
   echo "$TARGET"
 }
 
+# tech_debt scope - user decision (VAL-613): tests are out of the DEBT scan
+# only. `tldr debt` runs on a temp copy of the source files (git-tracked when
+# the dir is in a git work tree, else `find`) with extension py|mjs|js|ts|sh,
+# minus test files: basename test_*, *_test.*, conftest.py, and anything under
+# a tests/ dir. .tldrignore is unchanged, so cognitive/secure and every other
+# tldr job still scan tests.
+debt_sources() { # <dir> -> paths relative to <dir>, one per line
+  local dir="$1"
+  if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$dir" -c core.quotePath=false ls-files
+  else
+    # Fallback outside git: prune what .tldrignore and the test-count find skip
+    (cd "$dir" && find . \( -name .git -o -name node_modules -o -name __pycache__ -o -name .venv \
+      -o -name venv -o -name vendor -o -name target -o -name build -o -name dist \) -prune \
+      -o -type f -print | sed 's|^\./||')
+  fi | grep -E '\.(py|mjs|js|ts|sh)$' \
+     | grep -v -E '(^|/)(test_[^/]*|[^/]*_test\.[a-z]+|conftest\.py)$|(^|/)tests/' || true
+}
+
+debt_copy() { # <src_dir> <dest_dir>: copy debt_sources into dest, same layout
+  local src="$1" dest="$2" f
+  debt_sources "$src" | while IFS= read -r f; do
+    [[ -f "$src/$f" ]] || continue  # tracked but deleted in the work tree
+    [[ "$f" == */* ]] && mkdir -p "$dest/${f%/*}"
+    cp "$src/$f" "$dest/$f"
+  done
+}
+
 # ── Detect environment ──────────────────────────────────────────
 LANG_DETECTED=$(cd "$TARGET" && detect_lang)
 SRC_DIR=$(find_src)
@@ -125,7 +153,10 @@ if [[ "$HAS_TLDR" == "1" ]]; then
   PID_CLONES=$!
   { (cd "$TARGET" && tldr cognitive "$SRC_DIR" --format json --quiet > "$WORK_DIR/cognitive.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_COG=$!
-  { (cd "$TARGET" && tldr debt "$SRC_DIR" --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
+  # Debt scans a copy of SRC_DIR minus test files (see debt_sources). The copy
+  # lives under WORK_DIR, so the EXIT trap above removes it.
+  { (mkdir -p "$WORK_DIR/debt-src" && debt_copy "$SRC_DIR" "$WORK_DIR/debt-src" \
+     && cd "$WORK_DIR/debt-src" && tldr debt . --format json --quiet > "$WORK_DIR/debt.json" 2>/dev/null) || true; } </dev/null >/dev/null 2>&1 &
   PID_DEBT=$!
   PID_SEC=""
   if [[ "$SKIP_SECURE" != "1" ]]; then
