@@ -77,8 +77,8 @@ rejects them).
 | `kind` | str\|null | free string; observed `interactive`, `bg` |
 | `version` | str\|null | Claude Code CLI version |
 | `alive` | bool | pid running (and `procStart` matches when available) |
-| `started_at` | str\|null | `startedAt` |
-| `updated_at` | str\|null | `updatedAt` / `statusUpdatedAt` |
+| `started_at` | str\|null | `startedAt` (epoch ms converted to ISO UTC) |
+| `updated_at` | str\|null | `updatedAt` / `statusUpdatedAt` (epoch ms converted to ISO UTC) |
 | `model` | str\|null | last assistant `message.model` in the transcript |
 | `context_pct` | float\|null | last usage vs window (auto-handoff-stop.mjs rule) |
 | `last_activity` | str\|null | newest transcript record time |
@@ -96,6 +96,24 @@ rejects them).
 (str[] of session ids), `detail`.
 
 **Machine**: `mem_total_gb`, `mem_free_gb` (float\|null).
+
+### Collector extras (`tools/fleet/collect.py`)
+
+Keys the collector adds outside the declared fields (kept in `extra`):
+
+| Record | Key | Meaning |
+|--------|-----|---------|
+| FleetState | `warnings` | str[]: unreadable session files, invalid manifest, failed audit rotation |
+| FleetState | `collect_s` | float: collection time in seconds |
+| Harness | `in_sync` | bool\|null: `head_sha == installed_sha` (null when either is unknown) |
+| Harness | `dirty`, `synced_at` | manifest `dirty` and `generated_at` |
+| Session | `transcript` | absolute path of the transcript read |
+| Session | `status_updated_at`, `waiting_for` | `statusUpdatedAt` (ISO), `waitingFor` |
+
+The collector reads only `sessions/<digits>.json` (never `*.key`), the last 512 KB of
+each transcript and the last 256 KB of `audit.jsonl`, which it renames to
+`audit.jsonl.1` once past 5 MB. Missing expected session keys or transcript fields
+(`type`, assistant `message.usage`) add a `schema_unknown` alert.
 
 ## Proposal (`harness-inbox/<id>.json`)
 
