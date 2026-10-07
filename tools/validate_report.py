@@ -57,17 +57,22 @@ ASSERTION_ID = re.compile(r"^VAL-[\w.-]+$")
 
 
 class Findings:
+    """Accumulates (level, path, message) validation findings for one file."""
+
     def __init__(self):
         self.items = []  # (level, path, message)
 
     def error(self, path, msg):
+        """Record an ERROR finding at the given JSON path."""
         self.items.append(("ERROR", path, msg))
 
     def warn(self, path, msg):
+        """Record a WARN finding at the given JSON path."""
         self.items.append(("WARN", path, msg))
 
     @property
     def errors(self):
+        """Only the ERROR-level findings, in insertion order."""
         return [i for i in self.items if i[0] == "ERROR"]
 
 
@@ -327,14 +332,9 @@ def _check_nullable_str(f, a, key, p):
 
 def _check_contract_assertion(f, a, p, cx, ids):
     """One assertion object; records its id in ids."""
-    aid = _expect(f, a, "id", str, p)
-    if aid is not None:
-        if aid in ids:
-            f.error(f"{p}.id", f"duplicate id {aid}")
-        ids.add(aid)
+    _record_id(f, _expect(f, a, "id", str, p), p, ids)
     _expect(f, a, "text", str, p)
-    # Patch class has no milestones (SKILL.md PATCH FAST PATH): milestone may be null.
-    if not (cx == "patch" and "milestone" in a and a["milestone"] is None):
+    if not _null_patch_milestone(a, cx):
         _expect(f, a, "milestone", str, p)
     _check_enum(f, a, "type", ASSERTION_TYPES, p)
     _check_enum(f, a, "status", STATUSES, p)
@@ -344,6 +344,20 @@ def _check_contract_assertion(f, a, p, cx, ids):
     if a.get("status") == "passed" and not a.get("evidence"):
         f.error(f"{p}.evidence", "status passed without evidence")
     _extra(f, a, ASSERTION_FIELDS, p)
+
+
+def _record_id(f, aid, p, ids):
+    """Add a (non-None) assertion id to ids; a repeat is a duplicate-id error."""
+    if aid is None:
+        return
+    if aid in ids:
+        f.error(f"{p}.id", f"duplicate id {aid}")
+    ids.add(aid)
+
+
+def _null_patch_milestone(a, cx):
+    """Patch class has no milestones (SKILL.md PATCH FAST PATH): milestone may be null."""
+    return cx == "patch" and "milestone" in a and a["milestone"] is None
 
 
 def _check_milestone(f, m, p, ids, names):
@@ -368,14 +382,26 @@ def _each_object(f, items, key):
             f.error(p, f"expected object, got {_type_name(item)}")
 
 
-def _check_assertion_refs(f, a, i, ids, milestones, names):
-    """An assertion's depends[] and milestone point at things that exist."""
+def _check_assertion_refs(f, a, i, ids, names):
+    """An assertion's depends[] and milestone point at things that exist.
+
+    names is None when the contract has no milestones (milestone not checked).
+    """
     for j, dep in enumerate(a.get("depends") or []):
         if dep not in ids:
             f.error(f"$.assertions[{i}].depends[{j}]", f"unknown assertion id {dep!r}")
     ms = a.get("milestone")
-    if milestones and isinstance(ms, str) and ms not in names:
+    if names is not None and isinstance(ms, str) and ms not in names:
         f.error(f"$.assertions[{i}].milestone", f"unknown milestone {ms!r}")
+
+
+def _check_milestones(f, contract, ids):
+    """Check $.milestones[]; their names, or None when there are no milestones."""
+    milestones = _expect(f, contract, "milestones", list, "$") or []
+    names = set()
+    for p, m in _each_object(f, milestones, "milestones"):
+        _check_milestone(f, m, p, ids, names)
+    return names if milestones else None
 
 
 def validate_contract(contract):
@@ -393,14 +419,10 @@ def validate_contract(contract):
     for p, a in _each_object(f, assertions, "assertions"):
         _check_contract_assertion(f, a, p, cx, ids)
 
-    milestones = _expect(f, contract, "milestones", list, "$") or []
-    names = set()
-    for p, m in _each_object(f, milestones, "milestones"):
-        _check_milestone(f, m, p, ids, names)
-
+    names = _check_milestones(f, contract, ids)
     for i, a in enumerate(assertions):
         if isinstance(a, dict):
-            _check_assertion_refs(f, a, i, ids, milestones, names)
+            _check_assertion_refs(f, a, i, ids, names)
 
     _extra(f, contract, CONTRACT_FIELDS, "$")
     return f, ids
@@ -474,6 +496,7 @@ def _check_report_file(path, contract_ids):
 
 
 def main(argv=None):
+    """CLI entry: validate reports/contract; exit 0 ok, 1 findings, 2 usage or missing file."""
     ap = _build_parser()
     try:
         args = ap.parse_args(argv)
@@ -482,7 +505,13 @@ def main(argv=None):
     if not args.reports and not args.contract:
         ap.print_usage(sys.stderr)
         return 2
-    if _report_missing(args.reports + ([args.contract] if args.contract else [])):
+    return _check_files(args)
+
+
+def _check_files(args):
+    """Check the contract (ids feed the reports' cross-check), then each report."""
+    paths = args.reports + ([args.contract] if args.contract else [])
+    if _report_missing(paths):
         return 2
 
     failed = False
@@ -492,8 +521,9 @@ def main(argv=None):
     for path in args.reports:
         failed |= _check_report_file(path, contract_ids)
 
-    n = len(args.reports) + (1 if args.contract else 0)
-    print(f"{'FAIL' if failed else 'OK'}: {n} file(s) checked", file=sys.stderr)
+    print(
+        f"{'FAIL' if failed else 'OK'}: {len(paths)} file(s) checked", file=sys.stderr
+    )
     return 1 if failed else 0
 
 

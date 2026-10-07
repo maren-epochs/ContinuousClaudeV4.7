@@ -26,6 +26,8 @@ import time
 import unittest
 from pathlib import Path
 
+from _testing import load_module
+
 PROJECT = Path(__file__).resolve().parent.parent
 LEDGER = PROJECT / "tools" / "context_ledger.py"
 
@@ -385,12 +387,8 @@ class ContextLedgerTests(unittest.TestCase):
 
 
 def _load_ledger():
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("context_ledger_under_test", LEDGER)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Fresh import of the tool under test by file path."""
+    return load_module("context_ledger_under_test", LEDGER)
 
 
 class PathContainmentTests(unittest.TestCase):

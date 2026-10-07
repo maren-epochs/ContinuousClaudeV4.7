@@ -22,6 +22,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _testing import load_module
+
 PROJECT = Path(__file__).resolve().parent.parent
 VALIDATOR = PROJECT / "tools" / "validate_report.py"
 
@@ -240,14 +242,8 @@ class ValidateReportTests(unittest.TestCase):
 
 
 def _load_validator():
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "validate_report_under_test", VALIDATOR
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Fresh import of the tool under test by file path."""
+    return load_module("validate_report_under_test", VALIDATOR)
 
 
 _DROP = object()

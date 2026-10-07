@@ -88,6 +88,7 @@ def config_dir():
 
 
 def slug_for(cwd):
+    """Claude Code project-folder slug: every non-alphanumeric char becomes '-'."""
     return re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
 
 
@@ -234,6 +235,7 @@ def _time(ts):
 
 
 def render_text(ledger):
+    """Human-readable ledger: header stats, compactions, then the span and skill tables."""
     lines = [
         f"transcript: {ledger['transcript']}",
         f"version: {ledger['version'] or 'unknown'}",
@@ -310,6 +312,7 @@ def resolve_transcript(args):
 
 
 def main(argv=None):
+    """CLI entry: build the ledger for a transcript and print text or --json."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")

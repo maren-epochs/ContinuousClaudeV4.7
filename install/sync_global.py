@@ -48,6 +48,7 @@ NOT_EVENT_HOOKS = {"tldr-shim.mjs", "worker-report-check.mjs"}
 
 
 def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
+    """Regex rewrites that point repo-relative tool paths in .md files at dest."""
     harness = f"{dest}/tools/ouros_harness.py"
     return [
         (
@@ -75,6 +76,7 @@ def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
 
 
 def render(src: Path, rules, eol: str) -> bytes:
+    """Source file bytes as they should appear in the target (rewritten .md, chosen EOL)."""
     text = src.read_text(encoding="utf-8").replace("\r\n", "\n")
     if src.suffix == ".md":
         for pat, repl in rules:
@@ -204,6 +206,7 @@ def _print_diff(dst: Path, new: bytes) -> None:
 
 
 def print_plan(target: Path, plan, show_diff: bool) -> None:
+    """Print each planned create/update (optionally with a unified diff), or in-sync."""
     if not plan:
         print(f"{target}: in sync with {REPO.name}")
     for _, dst, new, kind in plan:
@@ -237,6 +240,7 @@ def apply_plan(target: Path, plan) -> None:
 
 
 def main() -> int:
+    """CLI entry: plan and print the sync to --target; dry run exits 1 if out of sync, --apply writes."""
     args = _parse_args()
     target = Path(args.target)
     rules = rewrites(target.as_posix(), args.python)

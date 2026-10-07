@@ -27,6 +27,7 @@ NO_DEPS = ["plotly-resampler==0.11.1"]
 
 
 def pyproject_requirements(path: Path) -> list[str]:
+    """Deduplicated deps + all extras + string dependency-group items from pyproject."""
     if not path.is_file():
         return []
     data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -40,6 +41,7 @@ def pyproject_requirements(path: Path) -> list[str]:
 
 
 def pip_args() -> tuple[str, list[str]]:
+    """Pick the first available requirement source; return (label, pip install args)."""
     lock = ROOT / "requirements.lock"
     if lock.is_file():
         return "requirements.lock", ["-r", str(lock)]
@@ -58,6 +60,7 @@ def pip_args() -> tuple[str, list[str]]:
 
 
 def main(argv: list[str]) -> int:
+    """Install requirements then the --no-deps pins; --dry-run prints commands only."""
     source, args = pip_args()
     if not args:
         print("setup_deps: no requirements found; nothing to install")

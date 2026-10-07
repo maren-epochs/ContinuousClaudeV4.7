@@ -13,32 +13,27 @@ for the HTTP layer in the request tests.
 Run: py -3.13 tools/test_nia_docs.py
 """
 
-import asyncio
-import concurrent.futures
+import argparse
 import contextlib
-import importlib.util
+import hashlib
 import io
+import json
 import os
 import sys
-import types
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from _testing import FakeResponse, fake_aiohttp, load_module, run_async
 
 PROJECT = Path(__file__).resolve().parent.parent
 NIA = PROJECT / "tools" / "nia_docs.py"
 
 
-def _load():
-    # NIA_API_KEY is read at import; set it so no ~/.claude/.env or ./.env is read.
-    with mock.patch.dict(os.environ, {"NIA_API_KEY": "test-key"}):
-        spec = importlib.util.spec_from_file_location("nia_docs_under_test", NIA)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    return mod
-
-
-nia = _load()
+# NIA_API_KEY is read at import; set it so no ~/.claude/.env or ./.env is read.
+with mock.patch.dict(os.environ, {"NIA_API_KEY": "test-key"}):
+    nia = load_module("nia_docs_under_test", NIA)
 
 LIST_RESULT = {
     "repositories": [{"display_name": "repo-a", "status": "ready"}, {"id": "r2"}],
@@ -180,17 +175,6 @@ CASES = [
     ("context-delete", ["context", "delete", "c1"]),
     ("script-arg-filtered", ["tools/nia_docs.py", "repos", "status", "r1"]),
 ]
-
-
-def run_async(fn, *args):
-    """asyncio.run(fn(*args)) on a worker thread.
-
-    A sync Playwright session started earlier in the same pytest process (the
-    viz suites) leaves an event loop running on the main thread, where
-    asyncio.run() refuses to start; a fresh thread has no running loop.
-    """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, fn(*args)).result()
 
 
 def _fake(name, calls, ret):
@@ -651,67 +635,12 @@ class Formatters(unittest.TestCase):
                 )
 
 
-class _FakeResponse:
-    def __init__(self, status, body, lines=()):
-        self.status = status
-        self._body = body
-        self.content = self._iter(lines)
-
-    async def _iter(self, lines):
-        for line in lines:
-            yield line
-
-    async def text(self):
-        return str(self._body)
-
-    async def json(self):
-        return self._body
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-
-class _FakeSession:
-    def __init__(self, log, response):
-        self._log = log
-        self._response = response
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    def _request(self, method, url, **kwargs):
-        self._log.append((method, url, kwargs))
-        return self._response
-
-    def get(self, url, **kw):
-        return self._request("GET", url, **kw)
-
-    def post(self, url, **kw):
-        return self._request("POST", url, **kw)
-
-    def delete(self, url, **kw):
-        return self._request("DELETE", url, **kw)
-
-
-def fake_aiohttp(log, response):
-    mod = types.ModuleType("aiohttp")
-    mod.ClientSession = lambda: _FakeSession(log, response)
-    mod.ClientTimeout = lambda total: ("timeout", total)
-    return mod
-
-
 class HttpLayer(unittest.TestCase):
     """The request builders against a fake aiohttp: URL, method, payload, errors."""
 
     def call(self, coro_fn, *args, status=200, body=None, lines=()):
         log = []
-        resp = _FakeResponse(status, body if body is not None else {"ok": True}, lines)
+        resp = FakeResponse(status, body if body is not None else {"ok": True}, lines)
         out = io.StringIO()
         fake = {"aiohttp": fake_aiohttp(log, resp)}
         with mock.patch.dict(sys.modules, fake), contextlib.redirect_stdout(out):
@@ -769,6 +698,72 @@ class HttpLayer(unittest.TestCase):
             nia.oracle_chat_followup, "s", "m", status=500, body="bad"
         )
         self.assertEqual(out, "Error: 500 - bad\n")
+
+
+def _parser_shape(parser):
+    """Every action of a parser (subparsers recursively) as plain data."""
+    shape = []
+    for a in parser._actions:
+        entry = [
+            type(a).__name__,
+            a.option_strings,
+            a.dest,
+            a.nargs,
+            a.const,
+            a.default,
+            getattr(a.type, "__name__", a.type),
+            list(a.choices) if a.choices is not None else None,
+            a.required,
+            a.help,
+            a.metavar,
+        ]
+        if isinstance(a, argparse._SubParsersAction):
+            entry.append({k: _parser_shape(v) for k, v in a.choices.items()})
+            entry[7] = None
+        shape.append(entry)
+    return shape
+
+
+# sha256 of the parser shape captured on HEAD 34862e9 (pre-refactor build_parser)
+PARSER_SHAPE_SHA = "697dba23defdd04e18c25e3bce5e00b3e10b1990453033b13658a605da2279c1"
+
+
+class ParserAndKey(unittest.TestCase):
+    """VAL-613: pin build_parser structure and load_api_key before refactoring."""
+
+    def test_parser_shape_pinned(self):
+        dump = json.dumps(_parser_shape(nia.build_parser()), sort_keys=True)
+        self.assertEqual(hashlib.sha256(dump.encode()).hexdigest(), PARSER_SHAPE_SHA)
+
+    def test_top_level_help_pinned(self):
+        with mock.patch.dict(os.environ, {"COLUMNS": "100"}):
+            text = nia.build_parser().format_help()
+        self.assertIn(
+            "{oracle,search,repos,sources,papers,context}", text.replace(" ", "")
+        )
+
+    def lookup(self, home, cwd, env_key=""):
+        with (
+            mock.patch.dict(os.environ, {"NIA_API_KEY": env_key}),
+            mock.patch.object(Path, "home", return_value=home),
+            mock.patch.object(Path, "cwd", return_value=cwd),
+        ):
+            return nia.load_api_key(), os.environ["NIA_API_KEY"]
+
+    def test_load_api_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home, cwd = Path(tmp) / "h", Path(tmp) / "c"
+            (home / ".claude").mkdir(parents=True)
+            cwd.mkdir()
+            self.assertEqual(self.lookup(home, cwd, "envkey"), ("envkey", "envkey"))
+            self.assertEqual(self.lookup(home, cwd), ("", ""))
+            (cwd / ".env").write_text("X=1\n NIA_API_KEY=\"'c1'\" \n")
+            self.assertEqual(self.lookup(home, cwd), ("c1", "c1"))
+            (home / ".claude" / ".env").write_text("NIA_API_KEY=\nNIA_API_KEY=h2\n")
+            # first matching line wins even when empty; home is read before cwd
+            self.assertEqual(self.lookup(home, cwd), ("", ""))
+            (home / ".claude" / ".env").write_text("nope\n")
+            self.assertEqual(self.lookup(home, cwd), ("c1", "c1"))
 
 
 if __name__ == "__main__":
