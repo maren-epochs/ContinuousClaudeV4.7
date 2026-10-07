@@ -3,7 +3,68 @@
 name = "continuous-claude"
 version = "4.7.0"
 requires-python = ">=3.13"
-# dependencies: declared by VAL-602 (runtime + dev tool pins); intentionally absent here.
+# Ranges here, exact pins in requirements.lock (regenerate: py -3.13 tools/lock_requirements.py).
+# tools/test_deps_lock.py keeps this file, the lock and tools/requirements-viz.txt consistent.
+# Runtime: everything under tools/ and install/ is stdlib-only except the two web bridges
+# (tools/exa_search.py, tools/nia_docs.py import aiohttp). Hooks are Node, not Python.
+dependencies = ["aiohttp>=3.9"]
+
+[project.optional-dependencies]
+# tools/ouros_harness.py (/research, /autonomous-research). Wheels only up to cp313.
+research = ["ouros>=0.0.7"]
+# Visualization suite: same package set as tools/requirements-viz.txt (exact pins live
+# there and in requirements.lock). Not listed: plotly-resampler 0.11.1 declares plotly<7,
+# so no resolver can co-install it with plotly 7; install it with
+# `py -3.13 -m pip install --no-deps plotly-resampler==0.11.1` (its deps are listed here).
+viz = [
+    "numpy>=2.5",
+    "pandas>=3.0",
+    "polars>=1.44",
+    "duckdb>=1.5",
+    "pyarrow>=25.0",
+    "pillow>=12.3",
+    "matplotlib>=3.11",
+    "seaborn>=0.13.2",
+    "altair[all]>=6.3",
+    "vl-convert-python>=1.9,<2",    # 2.0 is still rc-only
+    "vegafusion>=2.0",
+    "plotly>=7.1",
+    "kaleido>=1.4",
+    "dash>=4.4",                    # plotly-resampler runtime dep
+    "orjson>=3.12",                 # plotly-resampler runtime dep
+    "tsdownsample>=0.1.5",          # plotly-resampler runtime dep
+    "bokeh>=3.9,<3.10",             # panel 1.9.4 fails on import with bokeh 3.10.0
+    "holoviews>=1.23",
+    "hvplot>=0.12",
+    "panel>=1.9.4",
+    "great_tables[extra]>=1.0",
+    "plotnine>=0.15",
+    "lets-plot>=4.11",
+    "scienceplots>=2.2",
+    "adjustText>=1.4",
+    "datashader>=0.19",
+    "geopandas>=1.2",
+    "pyogrio>=0.13",
+    "shapely>=2.1",
+    "pyproj>=3.8",
+    "contextily>=1.7",
+    "folium>=0.20",
+    "pydeck>=0.9",
+    "lonboard>=0.17",
+    "mapclassify>=2.11",
+    "colorcet>=3.2",
+    "cmcrameri>=1.10",
+    "colorspacious>=1.1",
+    "qualpal>=1.1",
+    "playwright>=1.63",
+]
+dev = [
+    "pytest>=9.1",
+    "coverage>=7.10",               # [tool.coverage.run] patch = ["subprocess"] needs 7.10+
+    "mypy>=2.3",
+    "ruff>=0.16.8,<0.17",           # rule set + formatter output change on minor releases
+    "pre-commit>=4.0",
+]
 
 [tool.ruff]
 target-version = "py313"
@@ -60,9 +121,10 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tools", "install"]
+testpaths = ["tools", "install", "tests"]
 python_files = ["test_*.py"]
 addopts = "-ra"
+markers = ["integration: end-to-end checks (hook suites, simulated install, CLIs); deselect with -m 'not integration'"]
 
 [tool.coverage.run]
 source = ["tools", "install"]
