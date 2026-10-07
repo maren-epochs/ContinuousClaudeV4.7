@@ -418,10 +418,7 @@ def show(pid: str) -> str:
 
 
 def _manifest() -> dict[str, Any]:
-    try:
-        data = json.loads(model.manifest_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    data = model.load_json(model.manifest_path())
     return data if isinstance(data, dict) else {}
 
 

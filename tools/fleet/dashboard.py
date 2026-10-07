@@ -58,6 +58,82 @@ def _indent(text: str, pad: str) -> str:
     return "\n".join(pad + line for line in text.splitlines())
 
 
+# Static layout rules (no tokens): kept out of _css so the token prelude stays small.
+_RULES = (
+    """body {
+  margin: 0;
+  padding: 0 12px;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-x: hidden;
+}
+[hidden] { display: none !important; }
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+.page { max-width: 1200px; margin: 0 auto; padding: 20px 0 32px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: baseline;
+  justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; }
+h2 { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+h3 { font-size: 13px; font-weight: 600; margin: 14px 0 6px;
+  color: var(--text-secondary); }
+.muted { color: var(--text-muted); }
+.meta { color: var(--text-secondary); margin: 4px 0 0; }
+button { font: inherit; font-size: 13px; color: var(--text-secondary);
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 10px; min-height: 30px; cursor: pointer; }
+button:hover { color: var(--text-primary); }
+button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+.card { background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 16px 14px; margin: 0 0 16px; min-width: 0; }
+.tiles { display: grid; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+.tile { background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; min-width: 0; }
+.tile-label { color: var(--text-secondary); font-size: 12px; }
+.tile-value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile-note { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th { text-align: left; font-weight: 600; color: var(--text-secondary);
+  border-bottom: 1px solid var(--axis); padding: 6px 8px; }
+table.grid td { border-bottom: 1px solid var(--grid); padding: 6px 8px;
+  vertical-align: top; overflow-wrap: anywhere; }
+td.num { font-variant-numeric: tabular-nums; }
+code { font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.sev::before, .dot::before { content: ""; display: inline-block; width: 8px;
+  height: 8px; border-radius: 50%; margin-right: 6px; background: var(--gray); }
+.sev-error::before { background: var(--status-critical); }
+.sev-warn::before { background: var(--status-warning); }
+.sev-info::before { background: var(--series-1); }
+.dot-alive::before { background: var(--status-good); }
+dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px; margin: 0; }
+dl.facts dt { color: var(--text-secondary); }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+.big { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+ul.warnings { margin: 0; padding-left: 18px; color: var(--text-secondary);
+  overflow-wrap: anywhere; }
+.empty { color: var(--text-muted); margin: 4px 0; }
+@media (max-width: """
+    + str(NARROW_PX)
+    + """px) {
+  table.grid, table.grid tbody, table.grid tr, table.grid td { display: block;
+    width: 100%; }
+  table.grid thead { position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); }
+  table.grid tr { border-bottom: 1px solid var(--grid); padding: 6px 0; }
+  table.grid td { border: 0; padding: 2px 0; display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr); gap: 8px; }
+  table.grid td::before { content: attr(data-label); color: var(--text-secondary);
+    font-weight: 600; }
+}
+"""
+)
+
+
 def _css() -> str:
     light = _indent(palette.css_tokens("light"), "  ")
     dark_media = _indent(palette.css_tokens("dark"), "    ")
@@ -78,75 +154,7 @@ def _css() -> str:
   color-scheme: dark;
 {dark_attr}
 }}
-body {{
-  margin: 0;
-  padding: 0 12px;
-  background: var(--surface-2);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.45;
-  overflow-x: hidden;
-}}
-[hidden] {{ display: none !important; }}
-*, *::before, *::after {{ box-sizing: border-box; }}
-html {{ -webkit-text-size-adjust: 100%; }}
-.page {{ max-width: 1200px; margin: 0 auto; padding: 20px 0 32px; }}
-.page-head {{ display: flex; flex-wrap: wrap; align-items: baseline;
-  justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }}
-h1 {{ font-size: 22px; font-weight: 600; margin: 0; }}
-h2 {{ font-size: 16px; font-weight: 600; margin: 0 0 10px; }}
-h3 {{ font-size: 13px; font-weight: 600; margin: 14px 0 6px;
-  color: var(--text-secondary); }}
-.muted {{ color: var(--text-muted); }}
-.meta {{ color: var(--text-secondary); margin: 4px 0 0; }}
-button {{ font: inherit; font-size: 13px; color: var(--text-secondary);
-  background: none; border: 1px solid var(--border); border-radius: 6px;
-  padding: 4px 10px; min-height: 30px; cursor: pointer; }}
-button:hover {{ color: var(--text-primary); }}
-button:focus-visible {{ outline: 2px solid var(--series-1); outline-offset: 2px; }}
-.card {{ background: var(--surface-1); border: 1px solid var(--border);
-  border-radius: 8px; padding: 12px 16px 14px; margin: 0 0 16px; min-width: 0; }}
-.tiles {{ display: grid; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }}
-.tile {{ background: var(--surface-1); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 14px; min-width: 0; }}
-.tile-label {{ color: var(--text-secondary); font-size: 12px; }}
-.tile-value {{ font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }}
-.tile-note {{ color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }}
-table.grid {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-table.grid th {{ text-align: left; font-weight: 600; color: var(--text-secondary);
-  border-bottom: 1px solid var(--axis); padding: 6px 8px; }}
-table.grid td {{ border-bottom: 1px solid var(--grid); padding: 6px 8px;
-  vertical-align: top; overflow-wrap: anywhere; }}
-td.num {{ font-variant-numeric: tabular-nums; }}
-code {{ font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }}
-.sev::before, .dot::before {{ content: ""; display: inline-block; width: 8px;
-  height: 8px; border-radius: 50%; margin-right: 6px; background: var(--gray); }}
-.sev-error::before {{ background: var(--status-critical); }}
-.sev-warn::before {{ background: var(--status-warning); }}
-.sev-info::before {{ background: var(--series-1); }}
-.dot-alive::before {{ background: var(--status-good); }}
-dl.facts {{ display: grid; grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 16px; margin: 0; }}
-dl.facts dt {{ color: var(--text-secondary); }}
-dl.facts dd {{ margin: 0; overflow-wrap: anywhere; }}
-.big {{ font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }}
-ul.warnings {{ margin: 0; padding-left: 18px; color: var(--text-secondary);
-  overflow-wrap: anywhere; }}
-.empty {{ color: var(--text-muted); margin: 4px 0; }}
-@media (max-width: {NARROW_PX}px) {{
-  table.grid, table.grid tbody, table.grid tr, table.grid td {{ display: block;
-    width: 100%; }}
-  table.grid thead {{ position: absolute; width: 1px; height: 1px; overflow: hidden;
-    clip-path: inset(50%); }}
-  table.grid tr {{ border-bottom: 1px solid var(--grid); padding: 6px 0; }}
-  table.grid td {{ border: 0; padding: 2px 0; display: grid;
-    grid-template-columns: 7rem minmax(0, 1fr); gap: 8px; }}
-  table.grid td::before {{ content: attr(data-label); color: var(--text-secondary);
-    font-weight: 600; }}
-}}
-"""
+{_RULES}"""
 
 
 _SCRIPT = """

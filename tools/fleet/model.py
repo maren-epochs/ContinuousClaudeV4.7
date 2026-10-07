@@ -108,6 +108,14 @@ _SCALARS: dict[Any, Any] = {
 }
 
 
+def coerce_or_none[T](tp: type[T], value: Any) -> T | None:
+    """value as tp under the from_dict rules (no bools as numbers); None if it does not fit."""
+    try:
+        return typing.cast(T, _coerce(tp, value))
+    except _Bad:
+        return None
+
+
 def _coerce(tp: Any, value: Any) -> Any:
     if tp is Any:
         return value
@@ -482,7 +490,8 @@ def parse_audit_lines(text: str) -> list[AuditEvent]:
     return events
 
 
-def _load_json(path: Path) -> Any:
+def load_json(path: Path) -> Any:
+    """Parsed JSON of path; None when unreadable or not valid JSON."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -496,7 +505,7 @@ def save_state(state: FleetState, path: Path | None = None) -> Path:
 
 def load_state(path: Path | None = None) -> FleetState | None:
     """Read state.json; None when missing or not valid JSON."""
-    data = _load_json(path or state_path())
+    data = load_json(path or state_path())
     return FleetState.from_dict(data) if isinstance(data, Mapping) else None
 
 
@@ -511,7 +520,7 @@ def load_proposal(proposal_id: str) -> Proposal | None:
     """Read one proposal; None when the id is unsafe, the file missing or not JSON."""
     if not is_safe_proposal_id(proposal_id):
         return None
-    data = _load_json(proposal_path(proposal_id))
+    data = load_json(proposal_path(proposal_id))
     return Proposal.from_dict(data) if isinstance(data, Mapping) else None
 
 
@@ -529,7 +538,7 @@ def list_proposals(directory: Path | None = None) -> list[Proposal]:
 
 def _proposal_file(path: Path) -> Proposal | None:
     """The proposal in path when its stored id is safe and matches the file stem."""
-    data = _load_json(path)
+    data = load_json(path)
     if not isinstance(data, Mapping):
         return None
     proposal = Proposal.from_dict(data)

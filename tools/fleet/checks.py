@@ -884,10 +884,7 @@ def _safe_rel(key: str) -> PurePosixPath | None:
 
 
 def _load_manifest(path: Path) -> Mapping[str, Any] | None:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    data = model.load_json(path)
     return data if isinstance(data, Mapping) else None
 
 

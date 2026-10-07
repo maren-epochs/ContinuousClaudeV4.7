@@ -116,10 +116,8 @@ def read_tail(path: Path, max_bytes: int) -> str:
 
 
 def _finite(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    value = float(value)
-    return value if math.isfinite(value) else None
+    number = model.coerce_or_none(float, value)
+    return number if number is not None and math.isfinite(number) else None
 
 
 def _str(value: Any) -> str | None:
@@ -127,13 +125,7 @@ def _str(value: Any) -> str | None:
 
 
 def _int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    return None
+    return model.coerce_or_none(int, value)
 
 
 def _iso(value: Any) -> str | None:
