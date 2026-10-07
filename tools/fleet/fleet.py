@@ -38,11 +38,11 @@ from typing import Any
 
 if __package__:
     from . import collect, lessons, model
-    from .model import Change, FleetState, Proposal, Session
+    from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from fleet import collect, lessons, model
-    from fleet.model import Change, FleetState, Proposal, Session
+    from fleet.model import Alert, Change, FleetState, Proposal, Session
 
 LESSONS_MAX = 10
 LESSON_SOURCES = ("memory", "bloks", "all")
@@ -209,13 +209,14 @@ def _alert_lines(state: FleetState) -> list[str]:
     found.sort(key=lambda sa: SEVERITY_ORDER.get(sa[1].severity or "", 3))
     lines = [f"alerts ({len(found)}):"]
     for s, a in found:
-        who = s.project or s.session_id or "-"
-        lines.append(
-            f"  [{a.severity or '-'}] {a.kind or '-'} {who}: {a.detail or '-'}"
-        )
-        if a.evidence:
-            lines.append(f"      at {a.evidence}")
+        lines += _alert_line(s, a)
     return lines
+
+
+def _alert_line(s: Session, a: Alert) -> list[str]:
+    who = s.project or s.session_id or "-"
+    line = f"  [{a.severity or '-'}] {a.kind or '-'} {who}: {a.detail or '-'}"
+    return [line, f"      at {a.evidence}"] if a.evidence else [line]
 
 
 def _collision_lines(state: FleetState) -> list[str]:
@@ -363,6 +364,33 @@ def inbox(show_all: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _edit_lines(edits: Any) -> list[str]:
+    """MultiEdit ``edits`` as old/new blocks (non-object entries skipped)."""
+    lines: list[str] = []
+    for i, e in enumerate(edits if isinstance(edits, list) else [], 1):
+        if not isinstance(e, dict):
+            continue
+        lines += [f"--- edit {i} old_string", str(e.get("old_string"))]
+        lines += [f"--- edit {i} new_string", str(e.get("new_string"))]
+        if e.get("replace_all"):
+            lines.append(f"  edit {i} replace_all: true")
+    return lines
+
+
+def _change_lines(ch: Change) -> list[str]:
+    """Extra change keys, then the command/content/strings, then MultiEdit edits."""
+    lines = [
+        f"  {key}: {json.dumps(value, ensure_ascii=False)}"
+        for key, value in ch.extra.items()
+        if key != "edits"
+    ]
+    for key in ("command", "content", "old_string", "new_string"):
+        value = getattr(ch, key)
+        if value is not None:
+            lines += [f"--- {key}", value]
+    return lines + _edit_lines(ch.extra.get("edits"))
+
+
 def show(pid: str) -> str:
     """One proposal in full: metadata, target and the exact change."""
     _, _, p = _load(pid)
@@ -379,21 +407,8 @@ def show(pid: str) -> str:
         f"        repo_path {tgt.repo_path or '-'}{repo}",
         f"reason: {p.reason or '-'}",
         f"change: {ch.tool or '-'}",
+        *_change_lines(ch),
     ]
-    for key, value in ch.extra.items():
-        if key != "edits":
-            lines.append(f"  {key}: {json.dumps(value, ensure_ascii=False)}")
-    for key in ("command", "content", "old_string", "new_string"):
-        value = getattr(ch, key)
-        if value is not None:
-            lines += [f"--- {key}", value]
-    edits = ch.extra.get("edits")
-    for i, e in enumerate(edits if isinstance(edits, list) else [], 1):
-        if isinstance(e, dict):
-            lines += [f"--- edit {i} old_string", str(e.get("old_string"))]
-            lines += [f"--- edit {i} new_string", str(e.get("new_string"))]
-            if e.get("replace_all"):
-                lines.append(f"  edit {i} replace_all: true")
     for key, value in p.extra.items():
         lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
     return "\n".join(lines)
@@ -524,8 +539,8 @@ def _replace(text: str, old: object, new: object, replace_all: bool, label: str)
     return text.replace(old, new) if replace_all else text.replace(old, new, 1)
 
 
-def _notebook(text: str, change: Change) -> str:
-    """Apply a NotebookEdit (replace/insert/delete by cell id) to .ipynb JSON."""
+def _notebook_cells(text: str) -> tuple[Any, list[Any]]:
+    """Parsed notebook JSON and its cells list; Refused when either is missing."""
     try:
         nb = json.loads(text)
     except ValueError as exc:
@@ -533,46 +548,88 @@ def _notebook(text: str, change: Change) -> str:
     cells = nb.get("cells") if isinstance(nb, dict) else None
     if not isinstance(cells, list):
         raise Refused("notebook has no cells list")
+    return nb, cells
+
+
+def _cell_index(cells: list[Any], cell_id: Any) -> int | None:
+    if not cell_id:
+        return None
+    ids = [c.get("id") if isinstance(c, dict) else None for c in cells]
+    if cell_id not in ids:
+        raise Refused(f"notebook cell {cell_id!r} not found")
+    return ids.index(cell_id)
+
+
+def _nb_replace(
+    cells: list[Any], idx: int | None, cell_type: Any, source: list[str]
+) -> None:
+    if idx is None:
+        raise Refused("NotebookEdit replace needs a cell_id")
+    cell = cells[idx]
+    cell["source"] = source
+    if cell_type in ("code", "markdown"):
+        cell["cell_type"] = cell_type
+    if cell.get("cell_type") == "code":
+        cell["outputs"], cell["execution_count"] = [], None
+
+
+def _nb_insert(
+    cells: list[Any], idx: int | None, cell_type: Any, source: list[str]
+) -> None:
+    if cell_type not in ("code", "markdown"):
+        raise Refused("NotebookEdit insert needs cell_type code or markdown")
+    new: dict[str, Any] = {"cell_type": cell_type, "metadata": {}}
+    if any(isinstance(c, dict) and "id" in c for c in cells):
+        new["id"] = secrets.token_hex(4)
+    new["source"] = source
+    if cell_type == "code":
+        new["outputs"], new["execution_count"] = [], None
+    cells.insert(0 if idx is None else idx + 1, new)
+
+
+def _nb_delete(
+    cells: list[Any], idx: int | None, cell_type: Any, source: list[str]
+) -> None:
+    if idx is None:
+        raise Refused("NotebookEdit delete needs a cell_id")
+    del cells[idx]
+
+
+_NOTEBOOK_EDITS = {"replace": _nb_replace, "insert": _nb_insert, "delete": _nb_delete}
+
+
+def _notebook(text: str, change: Change) -> str:
+    """Apply a NotebookEdit (replace/insert/delete by cell id) to .ipynb JSON."""
+    nb, cells = _notebook_cells(text)
     meta = change.extra.get("notebook")
     meta = meta if isinstance(meta, dict) else {}
-    cell_id, cell_type = meta.get("cell_id"), meta.get("cell_type")
     mode = meta.get("edit_mode") or "replace"
-    idx = None
-    if cell_id:
-        ids = [c.get("id") if isinstance(c, dict) else None for c in cells]
-        if cell_id not in ids:
-            raise Refused(f"notebook cell {cell_id!r} not found")
-        idx = ids.index(cell_id)
+    idx = _cell_index(cells, meta.get("cell_id"))
     content = change.content
     if mode in ("replace", "insert") and not isinstance(content, str):
         raise Refused("NotebookEdit change has no new source")
-    source = (content or "").splitlines(keepends=True)
-    if mode == "replace":
-        if idx is None:
-            raise Refused("NotebookEdit replace needs a cell_id")
-        cell = cells[idx]
-        cell["source"] = source
-        if cell_type in ("code", "markdown"):
-            cell["cell_type"] = cell_type
-        if cell.get("cell_type") == "code":
-            cell["outputs"], cell["execution_count"] = [], None
-    elif mode == "insert":
-        if cell_type not in ("code", "markdown"):
-            raise Refused("NotebookEdit insert needs cell_type code or markdown")
-        new: dict[str, Any] = {"cell_type": cell_type, "metadata": {}}
-        if any(isinstance(c, dict) and "id" in c for c in cells):
-            new["id"] = secrets.token_hex(4)
-        new["source"] = source
-        if cell_type == "code":
-            new["outputs"], new["execution_count"] = [], None
-        cells.insert(0 if idx is None else idx + 1, new)
-    elif mode == "delete":
-        if idx is None:
-            raise Refused("NotebookEdit delete needs a cell_id")
-        del cells[idx]
-    else:
+    edit = _NOTEBOOK_EDITS.get(mode)
+    if edit is None:
         raise Refused(f"unknown NotebookEdit edit_mode {mode!r}")
+    edit(cells, idx, meta.get("cell_type"), (content or "").splitlines(keepends=True))
     return _eol(text, json.dumps(nb, indent=1, ensure_ascii=False) + "\n")
+
+
+def _multi_edit(text: str, ch: Change) -> str:
+    edits = ch.extra.get("edits")
+    if not isinstance(edits, list) or not edits:
+        raise Refused("MultiEdit change has no edits")
+    for i, e in enumerate(edits, 1):
+        if not isinstance(e, dict):
+            raise Refused(f"edit {i}: not an object")
+        text = _replace(
+            text,
+            e.get("old_string"),
+            e.get("new_string"),
+            e.get("replace_all") is True,
+            f"edit {i}",
+        )
+    return text
 
 
 def _edited(text: str | None, p: Proposal) -> str:
@@ -588,20 +645,7 @@ def _edited(text: str | None, p: Proposal) -> str:
         replace_all = ch.extra.get("replace_all") is True
         return _replace(text, ch.old_string, ch.new_string, replace_all, "Edit")
     if ch.tool == "MultiEdit":
-        edits = ch.extra.get("edits")
-        if not isinstance(edits, list) or not edits:
-            raise Refused("MultiEdit change has no edits")
-        for i, e in enumerate(edits, 1):
-            if not isinstance(e, dict):
-                raise Refused(f"edit {i}: not an object")
-            text = _replace(
-                text,
-                e.get("old_string"),
-                e.get("new_string"),
-                e.get("replace_all") is True,
-                f"edit {i}",
-            )
-        return text
+        return _multi_edit(text, ch)
     return _notebook(text, ch)
 
 
@@ -615,6 +659,34 @@ def _with_lesson(text: str, p: Proposal) -> str:
     if text and not text.endswith("\n"):
         text += eol
     return text + (eol if text.strip() else "") + body + eol
+
+
+def _lesson_target(root: Path, doc: str | None, p: Proposal) -> tuple[Path, str, str]:
+    """(--doc path, its text, text with the lesson appended) for a lesson proposal."""
+    if not doc:
+        raise Refused("lesson proposals need --doc <repo doc> (the skill asks which)")
+    doc_path = Path(doc)
+    target = _checked(
+        root, doc_path if doc_path.is_absolute() else root / doc_path, "--doc"
+    )
+    if not target.is_file():
+        raise Refused(f"--doc {target} does not exist")
+    old = _read(target)
+    return target, old, _with_lesson(old, p)
+
+
+def _edit_target(
+    root: Path, manifest: dict[str, Any], p: Proposal
+) -> tuple[Path, str | None, str]:
+    """(repo file, its text or None when absent, edited text) for an edit proposal."""
+    if p.change.tool not in FILE_TOOLS:
+        raise Refused(
+            f"{p.change.tool or 'unknown'} proposals carry a shell command; apply it"
+            " by hand in the repo (show prints it), then reject the proposal"
+        )
+    target = _repo_file(root, _repo_rel(p, manifest))
+    old = _read(target) if target.exists() else None
+    return target, old, _edited(old, p)
 
 
 def apply(
@@ -631,27 +703,9 @@ def apply(
     root = _repo_root(repo, manifest, p)
     old: str | None
     if p.kind == "lesson":
-        if not doc:
-            raise Refused(
-                "lesson proposals need --doc <repo doc> (the skill asks which)"
-            )
-        doc_path = Path(doc)
-        target = _checked(
-            root, doc_path if doc_path.is_absolute() else root / doc_path, "--doc"
-        )
-        if not target.is_file():
-            raise Refused(f"--doc {target} does not exist")
-        old = _read(target)
-        new = _with_lesson(old, p)
+        target, old, new = _lesson_target(root, doc, p)
     else:
-        if p.change.tool not in FILE_TOOLS:
-            raise Refused(
-                f"{p.change.tool or 'unknown'} proposals carry a shell command; apply it"
-                " by hand in the repo (show prints it), then reject the proposal"
-            )
-        target = _repo_file(root, _repo_rel(p, manifest))
-        old = _read(target) if target.exists() else None
-        new = _edited(old, p)
+        target, old, new = _edit_target(root, manifest, p)
     rel = target.relative_to(root).as_posix()
     if dry_run:
         diff = difflib.unified_diff(
@@ -788,30 +842,29 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+_COMMANDS: dict[str, Any] = {  # command -> args -> printed text
+    "report": lambda a: report(_state(a.fresh)),
+    "json": lambda a: _state(a.fresh).to_json(),
+    "inbox": lambda a: inbox(a.all),
+    "show": lambda a: show(a.id),
+    "apply": lambda a: apply(a.id, a.repo, a.doc, a.dry_run),
+    "reject": lambda a: reject(a.id),
+    "lessons": lambda a: propose(a.source, a.max_n, a.dry_run),
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point; returns the exit code."""
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(errors="replace")
     args = _parser().parse_args(argv)
+    if args.command == "collect":
+        return _collect_cmd()
+    command = _COMMANDS.get(args.command)
     try:
-        if args.command == "collect":
-            return _collect_cmd()
-        elif args.command == "report":
-            print(report(_state(args.fresh)))
-        elif args.command == "json":
-            print(_state(args.fresh).to_json())
-        elif args.command == "inbox":
-            print(inbox(args.all))
-        elif args.command == "show":
-            print(show(args.id))
-        elif args.command == "apply":
-            print(apply(args.id, args.repo, args.doc, args.dry_run))
-        elif args.command == "reject":
-            print(reject(args.id))
-        elif args.command == "lessons":
-            print(propose(args.source, args.max_n, args.dry_run))
-        else:
+        if command is None:
             return dashboard(args.out, args.fresh)
+        print(command(args))
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
