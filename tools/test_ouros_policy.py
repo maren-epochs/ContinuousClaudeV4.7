@@ -258,5 +258,134 @@ class AgentCallTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--max-turns") + 1], "3")
 
 
+class AgentCallCharacterization(unittest.TestCase):
+    """VAL-612: exact argv, subprocess kwargs and output shaping of _call_agent,
+    pinned on HEAD 2aff883 before the function was split into helpers."""
+
+    def _call(self, *args, stdout="done", stderr="", code=0, side_effect=None, **kw):
+        with mock.patch("subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], code, stdout, stderr)
+            run.side_effect = side_effect
+            out = oh._call_agent(*args, **kw)
+        return out, run
+
+    def test_claude_code_defaults(self):
+        out, run = self._call("task")
+        self.assertEqual(out, "done")
+        run.assert_called_once_with(
+            [
+                "claude",
+                "-p",
+                "task",
+                "--output-format",
+                "text",
+                "--max-turns",
+                str(oh.SECURITY_POLICY["agent_default_max_turns"]),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=None,
+        )
+
+    def test_claude_code_all_options(self):
+        _, run = self._call(
+            "task",
+            model="opus",
+            max_turns=7,
+            timeout=12,
+            cwd="/w",
+            isolated=True,
+            permission_mode="plan",
+        )
+        run.assert_called_once_with(
+            [
+                "claude",
+                "-p",
+                "task",
+                "--output-format",
+                "text",
+                "--model",
+                "opus",
+                "--max-turns",
+                "7",
+                "--worktree",
+                "--permission-mode",
+                "plan",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            cwd="/w",
+        )
+
+    def test_codex_argv_ignores_claude_only_options(self):
+        _, run = self._call(
+            "task",
+            agent="codex",
+            model="o3",
+            max_turns=3,
+            isolated=True,
+            permission_mode="plan",
+        )
+        self.assertEqual(
+            run.call_args[0][0], ["codex", "exec", "task", "--json", "-m", "o3"]
+        )
+        _, run = self._call("task", agent="codex")
+        self.assertEqual(run.call_args[0][0], ["codex", "exec", "task", "--json"])
+
+    def test_codex_agent_messages_extracted(self):
+        lines = [
+            '{"item": {"type": "agent_message", "text": "first"}}',
+            "not json",
+            '{"item": {"type": "reasoning", "text": "hidden"}}',
+            "[1, 2]",
+            '{"item": "str-item"}',
+            '{"other": 1}',
+            '{"item": {"type": "agent_message"}}',
+            '{"item": {"type": "agent_message", "text": "last"}}',
+        ]
+        out, _ = self._call("t", agent="codex", stdout="\n".join(lines) + "\n")
+        self.assertEqual(out, "first\n\nlast")
+
+    def test_codex_without_messages_keeps_raw_output(self):
+        out, _ = self._call("t", agent="codex", stdout="  plain text \n")
+        self.assertEqual(out, "plain text")
+        out, _ = self._call("t", agent="codex", stdout="")
+        self.assertEqual(out, "")
+
+    def test_stderr_appended_only_on_failure(self):
+        out, _ = self._call("t", stdout="partial\n", stderr=" boom \n", code=1)
+        self.assertEqual(out, "partial\n[stderr]: boom")
+        out, _ = self._call("t", stdout="", stderr="boom", code=2, agent="codex")
+        self.assertEqual(out, "\n[stderr]: boom")
+        out, _ = self._call("t", stdout="ok", stderr="", code=1)
+        self.assertEqual(out, "ok")
+        out, _ = self._call("t", stdout="ok", stderr="noise", code=0)
+        self.assertEqual(out, "ok")
+
+    def test_unknown_agent_never_spawns(self):
+        out, run = self._call("t", agent="gemini")
+        self.assertEqual(
+            out, {"error": "Unknown agent: gemini. Supported: claude-code, codex"}
+        )
+        run.assert_not_called()
+
+    def test_timeout_and_missing_binary(self):
+        out, _ = self._call(
+            "t", timeout=5, side_effect=subprocess.TimeoutExpired(["claude"], 5)
+        )
+        self.assertEqual(
+            out,
+            {
+                "error": "Agent timed out after 5s. Task may be too complex or agent is stuck."
+            },
+        )
+        out, _ = self._call("t", agent="codex", side_effect=FileNotFoundError())
+        self.assertEqual(
+            out, {"error": "Agent 'codex' not found on PATH. Is it installed?"}
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

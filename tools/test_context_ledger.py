@@ -494,5 +494,67 @@ class PathContainmentTests(unittest.TestCase):
                 cl.contained(bad, root)
 
 
+class ReaderCharacterization(unittest.TestCase):
+    """VAL-612: Reader.__iter__ yields, skip counting and version capture,
+    pinned on HEAD 2aff883 before the per-line parsing moved into helpers."""
+
+    def test_reader_yields_and_counters(self):
+        cl = _load_ledger()
+        a1 = _assistant(300, out=7, label="review", version="")
+        a2 = _assistant(90, out=None, label="", version="2.0.1")
+        a2["timestamp"] = 12
+        a3 = _assistant(60, label=None)
+        a3["message"]["usage"]["input_tokens"] = "x"
+        a3.pop("timestamp")
+        no_msg = _assistant(10)
+        no_msg["message"] = "text"
+        lines = [
+            "",
+            "   ",
+            "not json",
+            "[1, 2]",
+            "42",
+            json.dumps({"type": "user", "version": 3}),
+            json.dumps(a1),
+            json.dumps(_assistant(50, sidechain=True, version="9.9.9")),
+            json.dumps(no_msg),
+            json.dumps(_assistant(10, usage=False)),
+            json.dumps({"type": "assistant", "message": {"usage": []}}),
+            json.dumps(a2),
+            json.dumps(a3),
+            json.dumps(_assistant(30, label="ABSENT", version="3.0")),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "t.jsonl"
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            reader = cl.Reader(path)
+            rows = list(reader)
+        self.assertEqual(
+            rows,
+            [
+                (TS, 300, 7, "review"),
+                ("", 90, 0, cl.NONE_LABEL),
+                ("", 40, 10, cl.NONE_LABEL),
+                (TS, 30, 10, cl.NONE_LABEL),
+            ],
+        )
+        self.assertEqual(reader.skipped, 3)
+        # first non-empty string version wins, even from a sidechain entry
+        self.assertEqual(reader.version, "9.9.9")
+
+    def test_reader_replaces_undecodable_bytes(self):
+        cl = _load_ledger()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "t.jsonl"
+            path.write_bytes(
+                b"\xff\xfe garbage\n" + json.dumps(_assistant(9)).encode() + b"\n"
+            )
+            reader = cl.Reader(path)
+            rows = list(reader)
+        self.assertEqual(rows, [(TS, 9, 10, "autonomous")])
+        self.assertEqual(reader.skipped, 1)
+        self.assertEqual(reader.version, "2.1.290")
+
+
 if __name__ == "__main__":
     unittest.main()

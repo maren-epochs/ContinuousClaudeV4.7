@@ -295,5 +295,94 @@ class ToolsInstall(unittest.TestCase):
         )
 
 
+class UpdateDiffBackup(unittest.TestCase):
+    """VAL-612 characterization of main(): update/new listing, --diff output,
+    --apply backups and the install record, pinned before main() was split."""
+
+    def test_update_diff_and_backup(self) -> None:
+        rel = "tools/requirements.txt"
+        src = SCRIPT.parent.parent / rel
+        self.assertTrue(src.is_file(), f"fixture missing: {src}")
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "lf").returncode, 0)
+            dst = target / rel
+            original = dst.read_bytes()
+            dst.write_bytes(b"locally edited\n" + original)
+            gone = target / "tools" / "viz" / "palette.json"
+            gone.unlink()
+
+            dry = run_sync(target, "--diff", "--eol", "lf")
+            self.assertEqual(dry.returncode, 1, dry.stdout + dry.stderr)
+            lines = dry.stdout.splitlines()
+            self.assertIn(f"update  {rel}", lines)
+            self.assertIn("new     tools/viz/palette.json", lines)
+            i = lines.index(f"update  {rel}")
+            self.assertEqual(lines[i + 1 : i + 3], ["--- installed", "+++ repo"])
+            self.assertTrue(lines[i + 3].startswith("@@ "), lines[i + 3])
+            self.assertIn("-locally edited", lines[i + 4 : i + 6])
+            self.assertEqual(
+                lines[-1], "dry run - pass --apply to write (exit 1: out of sync)"
+            )
+            self.assertEqual(lines[-2], "")
+
+            # dry run without --diff lists the same plan and nothing else
+            plain = run_sync(target, "--eol", "lf")
+            self.assertEqual(
+                [
+                    l
+                    for l in plain.stdout.splitlines()
+                    if l.startswith(("new", "update"))
+                ],
+                [l for l in lines if l.startswith(("new ", "update "))],
+            )
+            self.assertNotIn("--- installed", plain.stdout)
+
+            applied = run_sync(target, "--apply", "--eol", "lf")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertEqual(dst.read_bytes(), original)
+            self.assertTrue(gone.is_file())
+            backups = list((target / ".ccv47-backup").iterdir())
+            self.assertEqual(len(backups), 1)
+            self.assertRegex(backups[0].name, r"^\d{8}-\d{6}$")
+            # only updated files are backed up; new files have nothing to back up
+            saved = sorted(
+                p.relative_to(backups[0]).as_posix()
+                for p in backups[0].rglob("*")
+                if p.is_file()
+            )
+            self.assertEqual(saved, [rel])
+            self.assertEqual(
+                (backups[0] / rel).read_bytes(), b"locally edited\n" + original
+            )
+            self.assertIn(f"\nwrote 2 file(s); backups in {backups[0]}", applied.stdout)
+            record = (target / ".ccv47-installed").read_text(encoding="utf-8")
+            self.assertRegex(record, r"^[0-9a-f]{40}( \(dirty\))?\n$")
+
+    def test_apply_in_sync_only_rewrites_record(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / ".ccv47-installed").write_text("stale\n", encoding="utf-8")
+            again = run_sync(target, "--apply")
+            self.assertEqual(again.returncode, 0)
+            self.assertIn("in sync", again.stdout)
+            self.assertNotIn("wrote", again.stdout)
+            self.assertFalse((target / ".ccv47-backup").exists())
+            record = (target / ".ccv47-installed").read_text(encoding="utf-8")
+            self.assertRegex(record, r"^[0-9a-f]{40}( \(dirty\))?\n$")
+
+    def test_crlf_and_lf_rendering(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "crlf").returncode, 0)
+            body = (target / "tools" / "requirements.txt").read_bytes()
+            self.assertIn(b"\r\n", body)
+            # switching eol makes every text file an update
+            dry = run_sync(target, "--eol", "lf")
+            self.assertEqual(dry.returncode, 1)
+            self.assertIn("update  tools/requirements.txt", dry.stdout.splitlines())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1380,6 +1380,612 @@ class LiveTokens(unittest.TestCase):
         self.assertTrue(any("gone-away" in e for e in errors), errors)
 
 
+# VAL-612 characterization: full prepare_chart output for ECharts options,
+# captured on HEAD 2aff883 before _prepare_echarts was split into helpers.
+_CAT = {"type": "category", "data": ["a", "b", "c"]}
+_VAL = {"type": "value"}
+ECHARTS_CASES = {
+    "two-lines-end-labels-all": {
+        "kind": "echarts",
+        "title": "t",
+        "end_labels": True,
+        "spec": {
+            "xAxis": _CAT,
+            "yAxis": _VAL,
+            "series": [
+                {"type": "line", "name": "s1", "data": [1, 2, 3]},
+                {"type": "line", "name": "s2", "data": [3, 2, 1], "showSymbol": False},
+            ],
+        },
+    },
+    "end-labels-list-with-unknown": {
+        "kind": "echarts",
+        "end_labels": ["s1", "ghost"],
+        "spec": {
+            "xAxis": _CAT,
+            "yAxis": _VAL,
+            "series": [
+                {"type": "line", "name": "s1", "data": [1, 2, 3], "symbol": "circle"},
+                {"type": "line", "name": "s2", "data": [3, 2, 1]},
+                {
+                    "type": "line",
+                    "name": "s3",
+                    "data": [0, 0, 0],
+                    "endLabel": {"show": False},
+                },
+            ],
+        },
+    },
+    "no-end-labels-default": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": _CAT,
+            "yAxis": _VAL,
+            "series": [
+                {"type": "line", "name": "s1", "data": [1, 2, 3]},
+                {"type": "line", "data": [{"value": 4}, {"value": 5}, 6, 7]},
+            ],
+        },
+    },
+    "horizontal-bar-own-grid-tooltip": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "value"},
+            "yAxis": {"type": "category", "data": ["x", "y"]},
+            "grid": {"left": 1},
+            "tooltip": {"show": False},
+            "series": [{"type": "bar", "data": [5, 6], "itemStyle": {"color": "red"}}],
+        },
+    },
+    "vertical-bars-two-series": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": [_CAT],
+            "yAxis": [_VAL],
+            "series": [
+                {"type": "bar", "name": "b1", "data": [1, 2, 3], "barMaxWidth": 10},
+                {"type": "bar", "name": "b2", "data": [1, 2]},
+                "not-a-series",
+            ],
+        },
+    },
+    "dual-axis-dropped": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": _CAT,
+            "yAxis": [_VAL, {"type": "value", "name": "right"}],
+            "series": [
+                {"type": "bar", "name": "b", "data": [1, 2, 3]},
+                {"type": "line", "name": "l", "data": [5, 6, 7], "yAxisIndex": 1},
+            ],
+        },
+    },
+    "legend-list-untouched": {
+        "kind": "echarts",
+        "spec": {
+            "legend": [{"top": 5}],
+            "xAxis": _CAT,
+            "yAxis": _VAL,
+            "series": [{"type": "scatter", "data": [1]}, {"type": "pie", "data": [2]}],
+        },
+    },
+    "legend-dict-kept": {
+        "kind": "echarts",
+        "spec": {
+            "legend": {"top": 30, "icon": "circle"},
+            "xAxis": _CAT,
+            "yAxis": _VAL,
+            "series": [
+                {"type": "line", "name": "a", "data": [1]},
+                {"type": "line", "name": "b", "data": [2]},
+            ],
+        },
+    },
+    "dataset-dict-rows": {
+        "kind": "echarts",
+        "spec": {
+            "dataset": {"source": [{"k": "a", "v": 1}, {"k": "b", "v": 2}]},
+            "xAxis": {"type": "category"},
+            "yAxis": _VAL,
+            "series": [{"type": "bar"}],
+        },
+    },
+    "dataset-list-rows": {
+        "kind": "echarts",
+        "spec": {
+            "dataset": {"source": [["k", 2020], ["a", 1], "junk", ["b", 2]]},
+            "xAxis": {"type": "category"},
+            "yAxis": _VAL,
+            "series": [{"type": "line"}],
+        },
+    },
+    "dataset-empty-falls-back-to-axis": {
+        "kind": "echarts",
+        "spec": {
+            "dataset": {"source": []},
+            "xAxis": {"type": "value"},
+            "yAxis": {"type": "category", "data": ["p", "q"]},
+            "series": [{"type": "bar", "data": [3, 4]}],
+        },
+    },
+    "no-series": {"kind": "echarts", "spec": {"xAxis": _CAT, "yAxis": _VAL}},
+    "no-axes": {
+        "kind": "echarts",
+        "spec": {"series": [{"type": "pie", "data": [1, 2]}]},
+    },
+}
+
+ECHARTS_GOLDEN = {
+    "two-lines-end-labels-all": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "type": "line",
+                    "name": "s1",
+                    "data": [1, 2, 3],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                    "endLabel": {"show": True, "formatter": "{a}"},
+                    "labelLayout": {"moveOverlap": "shiftY"},
+                },
+                {
+                    "type": "line",
+                    "name": "s2",
+                    "data": [3, 2, 1],
+                    "showSymbol": False,
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                    "endLabel": {"show": True, "formatter": "{a}"},
+                    "labelLayout": {"moveOverlap": "shiftY"},
+                },
+            ],
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "line"}},
+            "legend": {"show": True, "top": 0},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "s1": 1, "s2": 3},
+            {"category": "b", "s1": 2, "s2": 2},
+            {"category": "c", "s1": 3, "s2": 1},
+        ],
+        "warnings": [],
+        "title": "t",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "end-labels-list-with-unknown": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "type": "line",
+                    "name": "s1",
+                    "data": [1, 2, 3],
+                    "symbol": "circle",
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                    "endLabel": {"show": True, "formatter": "{a}"},
+                    "labelLayout": {"moveOverlap": "shiftY"},
+                },
+                {
+                    "type": "line",
+                    "name": "s2",
+                    "data": [3, 2, 1],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+                {
+                    "type": "line",
+                    "name": "s3",
+                    "data": [0, 0, 0],
+                    "endLabel": {"show": False},
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+            ],
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "line"}},
+            "legend": {"show": True, "top": 0},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "s1": 1, "s2": 3, "s3": 0},
+            {"category": "b", "s1": 2, "s2": 2, "s3": 0},
+            {"category": "c", "s1": 3, "s2": 1, "s3": 0},
+        ],
+        "warnings": [
+            "end_labels: no line series named 'ghost'; line series are 's1', 's2', 's3'."
+        ],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "no-end-labels-default": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "type": "line",
+                    "name": "s1",
+                    "data": [1, 2, 3],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+                {
+                    "type": "line",
+                    "data": [{"value": 4}, {"value": 5}, 6, 7],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+            ],
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "line"}},
+            "legend": {"show": True, "top": 0},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "s1": 1, "series 2": 4},
+            {"category": "b", "s1": 2, "series 2": 5},
+            {"category": "c", "s1": 3, "series 2": 6},
+        ],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "horizontal-bar-own-grid-tooltip": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "value"},
+            "yAxis": {"type": "category", "data": ["x", "y"]},
+            "grid": {"left": 1},
+            "tooltip": {"show": False},
+            "series": [
+                {
+                    "type": "bar",
+                    "data": [5, 6],
+                    "itemStyle": {"color": "red", "borderRadius": [0, 4, 4, 0]},
+                    "barMaxWidth": 24,
+                }
+            ],
+            "legend": {"show": False},
+        },
+        "rows": [{"category": "x", "series 1": 5}, {"category": "y", "series 1": 6}],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": False,
+    },
+    "vertical-bars-two-series": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": [{"type": "category", "data": ["a", "b", "c"]}],
+            "yAxis": [{"type": "value"}],
+            "series": [
+                {
+                    "type": "bar",
+                    "name": "b1",
+                    "data": [1, 2, 3],
+                    "barMaxWidth": 10,
+                    "itemStyle": {"borderRadius": [4, 4, 0, 0]},
+                },
+                {
+                    "type": "bar",
+                    "name": "b2",
+                    "data": [1, 2],
+                    "barMaxWidth": 24,
+                    "itemStyle": {"borderRadius": [4, 4, 0, 0]},
+                },
+                "not-a-series",
+            ],
+            "tooltip": {"trigger": "item"},
+            "legend": {"show": True, "top": 0},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "b1": 1, "b2": 1},
+            {"category": "b", "b1": 2, "b2": 2},
+            {"category": "c", "b1": 3},
+        ],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "dual-axis-dropped": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "type": "bar",
+                    "name": "b",
+                    "data": [1, 2, 3],
+                    "barMaxWidth": 24,
+                    "itemStyle": {"borderRadius": [4, 4, 0, 0]},
+                },
+                {
+                    "type": "line",
+                    "name": "l",
+                    "data": [5, 6, 7],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+            ],
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "line"}},
+            "legend": {"show": True, "top": 0},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "b": 1, "l": 5},
+            {"category": "b", "b": 2, "l": 6},
+            {"category": "c", "b": 3, "l": 7},
+        ],
+        "warnings": [
+            "Dual y-axis removed: two scales on one plot mislead. Plot the second measure as its own chart or index both to a common base."
+        ],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "legend-list-untouched": {
+        "kind": "echarts",
+        "spec": {
+            "legend": [{"top": 5}],
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "series": [{"type": "scatter", "data": [1]}, {"type": "pie", "data": [2]}],
+            "tooltip": {"trigger": "item"},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "series 1": 1, "series 2": 2},
+            {"category": "b"},
+            {"category": "c"},
+        ],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "legend-dict-kept": {
+        "kind": "echarts",
+        "spec": {
+            "legend": {"top": 30, "icon": "circle", "show": True},
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "type": "line",
+                    "name": "a",
+                    "data": [1],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+                {
+                    "type": "line",
+                    "name": "b",
+                    "data": [2],
+                    "lineStyle": {"width": 2},
+                    "symbolSize": 8,
+                },
+            ],
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "line"}},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 40,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [
+            {"category": "a", "a": 1, "b": 2},
+            {"category": "b"},
+            {"category": "c"},
+        ],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "dataset-dict-rows": {
+        "kind": "echarts",
+        "spec": {
+            "dataset": {"source": [{"k": "a", "v": 1}, {"k": "b", "v": 2}]},
+            "xAxis": {"type": "category"},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "type": "bar",
+                    "barMaxWidth": 24,
+                    "itemStyle": {"borderRadius": [4, 4, 0, 0]},
+                }
+            ],
+            "tooltip": {"trigger": "item"},
+            "legend": {"show": False},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 16,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [{"k": "a", "v": 1}, {"k": "b", "v": 2}],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "dataset-list-rows": {
+        "kind": "echarts",
+        "spec": {
+            "dataset": {"source": [["k", 2020], ["a", 1], "junk", ["b", 2]]},
+            "xAxis": {"type": "category"},
+            "yAxis": {"type": "value"},
+            "series": [{"type": "line", "lineStyle": {"width": 2}, "symbolSize": 8}],
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "line"}},
+            "legend": {"show": False},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 16,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [{"k": "a", "2020": 1}, {"k": "b", "2020": 2}],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "dataset-empty-falls-back-to-axis": {
+        "kind": "echarts",
+        "spec": {
+            "dataset": {"source": []},
+            "xAxis": {"type": "value"},
+            "yAxis": {"type": "category", "data": ["p", "q"]},
+            "series": [
+                {
+                    "type": "bar",
+                    "data": [3, 4],
+                    "barMaxWidth": 24,
+                    "itemStyle": {"borderRadius": [0, 4, 4, 0]},
+                }
+            ],
+            "tooltip": {"trigger": "item"},
+            "legend": {"show": False},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 16,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": [{"category": "p", "series 1": 3}, {"category": "q", "series 1": 4}],
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "no-series": {
+        "kind": "echarts",
+        "spec": {
+            "xAxis": {"type": "category", "data": ["a", "b", "c"]},
+            "yAxis": {"type": "value"},
+            "tooltip": {"trigger": "item"},
+            "legend": {"show": False},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 16,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": None,
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+    "no-axes": {
+        "kind": "echarts",
+        "spec": {
+            "series": [{"type": "pie", "data": [1, 2]}],
+            "tooltip": {"trigger": "item"},
+            "legend": {"show": False},
+            "grid": {
+                "left": 8,
+                "right": 16,
+                "top": 16,
+                "bottom": 8,
+                "containLabel": True,
+            },
+        },
+        "rows": None,
+        "warnings": [],
+        "title": "",
+        "caption": None,
+        "height": 320,
+        "fit": True,
+    },
+}
+
+
+class EChartsPreparePinned(unittest.TestCase):
+    def test_prepare_echarts_output_pinned(self):
+        self.assertEqual(sorted(ECHARTS_GOLDEN), sorted(ECHARTS_CASES))
+        for case, chart in ECHARTS_CASES.items():
+            with self.subTest(case=case):
+                self.assertEqual(ap.prepare_chart(chart), ECHARTS_GOLDEN[case])
+
+    def test_input_not_mutated(self):
+        import copy
+
+        chart = ECHARTS_CASES["dual-axis-dropped"]
+        before = copy.deepcopy(chart)
+        ap.prepare_chart(chart)
+        self.assertEqual(chart, before)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

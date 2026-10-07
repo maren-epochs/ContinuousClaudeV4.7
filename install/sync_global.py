@@ -135,7 +135,7 @@ def drift_checks(target: Path, sha: str, file_drift: bool) -> None:
             )
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -160,58 +160,93 @@ def main() -> int:
     ap.add_argument(
         "--diff", action="store_true", help="show unified diffs for changed files"
     )
-    args = ap.parse_args()
+    return ap.parse_args()
 
-    target = Path(args.target)
-    rules = rewrites(target.as_posix(), args.python)
-    eol = "\r\n" if args.eol == "crlf" else "\n"
 
+def _sources(src_root: Path):
+    """Installable files under one mapped repo subtree, sorted."""
+    for src in sorted(src_root.rglob("*")):
+        if (
+            src.is_file()
+            and src.suffix in INCLUDE_SUFFIXES
+            and "__pycache__" not in src.parts
+        ):
+            yield src
+
+
+def build_plan(target: Path, rules, eol: str) -> list[tuple[Path, Path, bytes, str]]:
+    """(src, dst, rendered bytes, 'new'|'update') for every file that differs."""
     plan: list[tuple[Path, Path, bytes, str]] = []
     for src_rel, dst_rel in MAPPINGS:
-        for src in sorted((REPO / src_rel).rglob("*")):
-            if (
-                not src.is_file()
-                or src.suffix not in INCLUDE_SUFFIXES
-                or "__pycache__" in src.parts
-            ):
-                continue
+        for src in _sources(REPO / src_rel):
             dst = target / dst_rel / src.relative_to(REPO / src_rel)
             new = render(src, rules, eol)
             if not dst.exists():
                 plan.append((src, dst, new, "new"))
             elif dst.read_bytes() != new:
                 plan.append((src, dst, new, "update"))
+    return plan
 
+
+def _print_diff(dst: Path, new: bytes) -> None:
+    old = dst.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines()
+    sys.stdout.writelines(
+        l + "\n"
+        for l in difflib.unified_diff(
+            old,
+            new.decode("utf-8").replace("\r\n", "\n").splitlines(),
+            "installed",
+            "repo",
+            lineterm="",
+            n=1,
+        )
+    )
+
+
+def print_plan(target: Path, plan, show_diff: bool) -> None:
     if not plan:
         print(f"{target}: in sync with {REPO.name}")
-    for src, dst, new, kind in plan:
+    for _, dst, new, kind in plan:
         print(f"{kind:7} {dst.relative_to(target).as_posix()}")
-        if args.diff and kind == "update":
-            old = dst.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines()
-            sys.stdout.writelines(
-                l + "\n"
-                for l in difflib.unified_diff(
-                    old,
-                    new.decode("utf-8").replace("\r\n", "\n").splitlines(),
-                    "installed",
-                    "repo",
-                    lineterm="",
-                    n=1,
-                )
-            )
+        if show_diff and kind == "update":
+            _print_diff(dst, new)
 
-    sha = subprocess.run(
-        ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+
+def _git(*args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(REPO), *args],
         capture_output=True,
         text=True,
         check=False,
     ).stdout.strip()
-    dirty = subprocess.run(
-        ["git", "-C", str(REPO), "status", "--porcelain"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
+
+
+def apply_plan(target: Path, plan) -> None:
+    """Write the plan; files being updated are backed up first."""
+    backup = (
+        target / ".ccv47-backup" / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    )
+    for _, dst, new, kind in plan:
+        if kind == "update":
+            b = backup / dst.relative_to(target)
+            b.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dst, b)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(new)
+    print(f"\nwrote {len(plan)} file(s); backups in {backup}")
+
+
+def main() -> int:
+    args = _parse_args()
+    target = Path(args.target)
+    rules = rewrites(target.as_posix(), args.python)
+    eol = "\r\n" if args.eol == "crlf" else "\n"
+
+    plan = build_plan(target, rules, eol)
+    print_plan(target, plan, args.diff)
+
+    sha = _git("rev-parse", "HEAD")
+    dirty = _git("status", "--porcelain")
 
     if not args.apply:
         drift_checks(target, sha, file_drift=bool(plan))
@@ -220,19 +255,7 @@ def main() -> int:
         return 1 if plan else 0
 
     if plan:
-        backup = (
-            target
-            / ".ccv47-backup"
-            / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-        )
-        for _, dst, new, kind in plan:
-            if kind == "update":
-                b = backup / dst.relative_to(target)
-                b.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(dst, b)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(new)
-        print(f"\nwrote {len(plan)} file(s); backups in {backup}")
+        apply_plan(target, plan)
     (target / ".ccv47-installed").write_text(
         f"{sha}{' (dirty)' if dirty else ''}\n", encoding="utf-8"
     )

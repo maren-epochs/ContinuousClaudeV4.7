@@ -239,5 +239,424 @@ class ValidateReportTests(unittest.TestCase):
         self.assertIn("$.assertions[0].milestone", out)
 
 
+def _load_validator():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "validate_report_under_test", VALIDATOR
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_DROP = object()
+
+
+def _with(base, **changes):
+    obj = copy.deepcopy(base)
+    for k, v in changes.items():
+        if v is _DROP:
+            obj.pop(k, None)
+        else:
+            obj[k] = v
+    return obj
+
+
+# Characterization (VAL-612): exact findings, in order, captured on HEAD 2aff883
+# before validate_report/validate_contract/main were split into helpers.
+REPORT_CASES = {
+    "valid": VALID,
+    "not-object": [1, 2],
+    "blocked-early-exit": {"result": "blocked", "reason": 5, "extra": 1},
+    "blocked-with-implemented": _with(VALID, result="blocked", reason="r"),
+    "result-not-str": _with(VALID, result=1),
+    "multi-assertion": _with(VALID, assertion="VAL-001, VAL-002"),
+    "bad-assertion-ids": _with(VALID, assertion="VAL-1, nope"),
+    "missing-scalars": _with(VALID, implemented=_DROP, task=3, remaining=None),
+    "tests-not-object": _with(VALID, tests=[]),
+    "tests-missing-exit": _with(VALID, tests={"added": [], "command": ""}),
+    "tests-null-exit-with-command": _with(
+        VALID, tests={"added": [], "command": "pytest", "exit_code": None}
+    ),
+    "tests-null-exit-no-command": _with(
+        VALID, tests={"added": [], "command": "", "exit_code": None}
+    ),
+    "tests-bad-shapes": _with(
+        VALID,
+        tests={
+            "added": [1, {"file": "f", "name": 2, "x": 1}],
+            "command": 5,
+            "exit_code": True,
+            "z": 1,
+        },
+    ),
+    "tests-added-not-list": _with(VALID, tests={"added": "x", "exit_code": "0"}),
+    "checks-bad-shapes": _with(
+        VALID,
+        checks=[
+            1,
+            {"command": 5, "exit_code": "0"},
+            {"command": "c", "exit_code": False, "observed": "o", "x": 1},
+            {"foo": 1},
+            {"action": "a", "observed": "o", "extra": 1},
+        ],
+    ),
+    "checks-not-list": _with(VALID, checks={}),
+    "bloks-used-shapes": _with(
+        VALID,
+        bloks_used=[
+            {"card": "c", "helpful": "yes"},
+            {"card": "c"},
+            {"card": "c", "helpful": False},
+            {"helpful": True, "x": 1},
+            3,
+        ],
+    ),
+    "lists-not-lists": _with(VALID, corrections="x", discoveries=None, issues=_DROP),
+    "discoveries-shapes": _with(
+        VALID,
+        discoveries=[
+            {"lib": "l", "finding": "f", "bloks_cmd": ""},
+            {"lib": "l", "finding": "f", "bloks_cmd": "bloks new rule x"},
+            {"lib": "l", "finding": "f", "bloks_cmd": 'bloks new rule "x" --lib y'},
+            {"lib": "l", "finding": "f", "bloks_cmd": 7},
+        ],
+    ),
+    "issues-shapes": _with(
+        VALID,
+        issues=[
+            {"severity": "low", "description": "d"},
+            {"severity": 1, "description": "d"},
+            {"description": "d"},
+        ],
+    ),
+    "conventions-shapes": _with(VALID, conventions=["ok", 3, None]),
+    "conventions-not-list": _with(VALID, conventions="x"),
+    "unknown-top-level": _with(VALID, zzz=1, reason="allowed"),
+}
+
+_A = CONTRACT["assertions"][0]
+CONTRACT_CASES = {
+    "valid": CONTRACT,
+    "not-object": "x",
+    "kitchen-sink": {
+        "task": 1,
+        "complexity": "huge",
+        "assertions": [
+            5,
+            {
+                "id": "VAL-1",
+                "type": "bad",
+                "text": "t",
+                "milestone": "mX",
+                "status": "weird",
+                "depends": ["VAL-9"],
+                "worker": 3,
+            },
+            dict(_A, id="VAL-1", status="passed", milestone="m1", extra=1),
+            dict(_A, id="VAL-2", status="passed", evidence="e.txt", depends=["VAL-1"]),
+            dict(_A, id=7, milestone=None),
+        ],
+        "milestones": [
+            7,
+            {"name": "m1", "status": "bad", "assertions": ["VAL-1", "VAL-404"], "x": 1},
+            {"name": "", "status": "pending", "assertions": "notalist"},
+        ],
+        "other": 1,
+    },
+    "patch-null-milestone": dict(
+        CONTRACT,
+        complexity="patch",
+        milestones=[],
+        assertions=[dict(_A, milestone=None)],
+    ),
+    "feature-null-milestone": dict(CONTRACT, assertions=[dict(_A, milestone=None)]),
+    "no-milestones": {
+        "task": "t",
+        "complexity": "feature",
+        "assertions": [dict(_A, milestone="nowhere")],
+    },
+    "assertions-not-list": dict(CONTRACT, assertions={}, milestones="x"),
+    "depends-null": dict(CONTRACT, assertions=[dict(_A, depends=None)]),
+}
+
+REPORT_GOLDEN = {
+    "valid": [],
+    "not-object": [["ERROR", "$", "expected object, got list"]],
+    "blocked-early-exit": [
+        ["ERROR", "$.reason", "expected str, got int"],
+        ["WARN", "$.extra", "unknown field"],
+    ],
+    "blocked-with-implemented": [],
+    "result-not-str": [["ERROR", "$.result", "expected str, got int"]],
+    "multi-assertion": [
+        [
+            "WARN",
+            "$.assertion",
+            "multiple assertions — plan decomposes one task = one assertion",
+        ]
+    ],
+    "bad-assertion-ids": [["ERROR", "$.assertion", "not an assertion id: ['nope']"]],
+    "missing-scalars": [
+        ["ERROR", "$.task", "expected str, got int"],
+        ["ERROR", "$.implemented", "missing required field"],
+        ["ERROR", "$.remaining", "expected str, got null"],
+    ],
+    "tests-not-object": [["ERROR", "$.tests", "expected dict, got list"]],
+    "tests-missing-exit": [["ERROR", "$.tests.exit_code", "missing required field"]],
+    "tests-null-exit-with-command": [
+        [
+            "ERROR",
+            "$.tests.exit_code",
+            "null but tests.command is set — record the exit code",
+        ]
+    ],
+    "tests-null-exit-no-command": [],
+    "tests-bad-shapes": [
+        [
+            "ERROR",
+            "$.tests.added[0]",
+            "expected object {file, name, verifies}, got int",
+        ],
+        ["ERROR", "$.tests.added[1].name", "expected str, got int"],
+        ["ERROR", "$.tests.added[1].verifies", "missing required field"],
+        ["WARN", "$.tests.added[1].x", "unknown field"],
+        ["ERROR", "$.tests.command", "expected str, got int"],
+        ["ERROR", "$.tests.exit_code", "expected int, got bool"],
+        ["WARN", "$.tests.z", "unknown field"],
+    ],
+    "tests-added-not-list": [
+        ["ERROR", "$.tests.added", "expected list, got str"],
+        ["ERROR", "$.tests.command", "missing required field"],
+        ["ERROR", "$.tests.exit_code", "expected int, got str"],
+    ],
+    "checks-bad-shapes": [
+        [
+            "ERROR",
+            "$.checks[0]",
+            "expected object {command, exit_code} | {action, observed}, got int",
+        ],
+        ["ERROR", "$.checks[1].command", "expected str, got int"],
+        ["ERROR", "$.checks[1].exit_code", "expected int, got str"],
+        ["ERROR", "$.checks[2].exit_code", "expected int, got bool"],
+        ["WARN", "$.checks[2].x", "unknown field"],
+        ["ERROR", "$.checks[3]", "expected {command, exit_code} or {action, observed}"],
+        ["WARN", "$.checks[4].extra", "unknown field"],
+    ],
+    "checks-not-list": [["ERROR", "$.checks", "expected list, got dict"]],
+    "bloks-used-shapes": [
+        ["ERROR", "$.bloks_used[0].helpful", "expected bool, got str"],
+        ["ERROR", "$.bloks_used[1].helpful", "missing required field"],
+        [
+            "WARN",
+            "$.bloks_used[2].reason",
+            "helpful: false without a reason — EVOLVE can't act on it",
+        ],
+        ["ERROR", "$.bloks_used[3].card", "missing required field"],
+        ["WARN", "$.bloks_used[3].x", "unknown field"],
+        ["ERROR", "$.bloks_used[4]", "expected object {card}, got int"],
+    ],
+    "lists-not-lists": [
+        ["ERROR", "$.corrections", "expected list, got str"],
+        ["ERROR", "$.discoveries", "expected list, got null"],
+        ["ERROR", "$.issues", "missing required field"],
+    ],
+    "discoveries-shapes": [
+        [
+            "ERROR",
+            "$.discoveries[1].bloks_cmd",
+            'expected: bloks new rule "<text>" [--tags a,b]',
+        ],
+        [
+            "ERROR",
+            "$.discoveries[2].bloks_cmd",
+            'invented flag (--lib/--title/--body/--text); syntax: bloks new rule "<text>" --tags a,b',
+        ],
+        ["ERROR", "$.discoveries[3].bloks_cmd", "expected str, got int"],
+    ],
+    "issues-shapes": [
+        ["ERROR", "$.issues[0].severity", "'low' not in ('blocking', 'non-blocking')"],
+        ["ERROR", "$.issues[1].severity", "expected str, got int"],
+        ["ERROR", "$.issues[2].severity", "missing required field"],
+    ],
+    "conventions-shapes": [
+        ["ERROR", "$.conventions[1]", "expected str, got int"],
+        ["ERROR", "$.conventions[2]", "expected str, got null"],
+    ],
+    "conventions-not-list": [["ERROR", "$.conventions", "expected list, got str"]],
+    "unknown-top-level": [["WARN", "$.zzz", "unknown field"]],
+}
+CONTRACT_GOLDEN = {
+    "valid": ([], ["VAL-001"]),
+    "not-object": ([["ERROR", "$", "expected object, got str"]], []),
+    "kitchen-sink": (
+        [
+            ["ERROR", "$.task", "expected str, got int"],
+            [
+                "ERROR",
+                "$.complexity",
+                "'huge' not in ('patch', 'feature', 'multi-feature', 'greenfield')",
+            ],
+            ["ERROR", "$.assertions[0]", "expected object, got int"],
+            [
+                "ERROR",
+                "$.assertions[1].type",
+                "'bad' not in ('invariant', 'behavioral', 'contract', 'property', 'fuzz', 'approval')",
+            ],
+            [
+                "ERROR",
+                "$.assertions[1].status",
+                "'weird' not in ('pending', 'passed', 'failed')",
+            ],
+            ["ERROR", "$.assertions[1].worker", "expected str|null, got int"],
+            [
+                "ERROR",
+                "$.assertions[1].evidence",
+                "missing required field (null until set)",
+            ],
+            ["ERROR", "$.assertions[2].id", "duplicate id VAL-1"],
+            ["ERROR", "$.assertions[2].evidence", "status passed without evidence"],
+            ["WARN", "$.assertions[2].extra", "unknown field"],
+            ["ERROR", "$.assertions[4].id", "expected str, got int"],
+            ["ERROR", "$.assertions[4].milestone", "expected str, got null"],
+            ["ERROR", "$.milestones[0]", "expected object, got int"],
+            [
+                "ERROR",
+                "$.milestones[1].status",
+                "'bad' not in ('pending', 'passed', 'failed')",
+            ],
+            [
+                "ERROR",
+                "$.milestones[1].assertions[1]",
+                "unknown assertion id 'VAL-404'",
+            ],
+            ["WARN", "$.milestones[1].x", "unknown field"],
+            ["ERROR", "$.milestones[2].assertions", "expected list, got str"],
+            ["ERROR", "$.assertions[1].depends[0]", "unknown assertion id 'VAL-9'"],
+            ["ERROR", "$.assertions[1].milestone", "unknown milestone 'mX'"],
+            ["WARN", "$.other", "unknown field"],
+        ],
+        ["VAL-1", "VAL-2"],
+    ),
+    "patch-null-milestone": ([], ["VAL-001"]),
+    "feature-null-milestone": (
+        [["ERROR", "$.assertions[0].milestone", "expected str, got null"]],
+        ["VAL-001"],
+    ),
+    "no-milestones": (
+        [["ERROR", "$.milestones", "missing required field"]],
+        ["VAL-001"],
+    ),
+    "assertions-not-list": (
+        [
+            ["ERROR", "$.assertions", "expected list, got dict"],
+            ["ERROR", "$.milestones", "expected list, got str"],
+        ],
+        [],
+    ),
+    "depends-null": (
+        [["ERROR", "$.assertions[0].depends", "expected list, got null"]],
+        ["VAL-001"],
+    ),
+}
+
+
+class FindingsCharacterization(unittest.TestCase):
+    """Pins every finding (level, path, message) and the contract id set."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.vr = _load_validator()
+
+    def test_report_findings_pinned(self):
+        self.assertEqual(sorted(REPORT_GOLDEN), sorted(REPORT_CASES))
+        for case, obj in REPORT_CASES.items():
+            with self.subTest(case=case):
+                got = self.vr.validate_report(copy.deepcopy(obj)).items
+                self.assertEqual([list(i) for i in got], REPORT_GOLDEN[case])
+
+    def test_contract_findings_pinned(self):
+        self.assertEqual(sorted(CONTRACT_GOLDEN), sorted(CONTRACT_CASES))
+        for case, obj in CONTRACT_CASES.items():
+            with self.subTest(case=case):
+                f, ids = self.vr.validate_contract(copy.deepcopy(obj))
+                want_items, want_ids = CONTRACT_GOLDEN[case]
+                self.assertEqual([list(i) for i in f.items], want_items)
+                self.assertEqual(sorted(ids), want_ids)
+
+
+class CliCharacterization(unittest.TestCase):
+    """main() branches the CLI tests above do not reach."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, name, obj):
+        p = self.dir / name
+        p.write_text(obj if isinstance(obj, str) else json.dumps(obj), encoding="utf-8")
+        return str(p)
+
+    def _run(self, *args):
+        proc = subprocess.run(
+            [sys.executable, str(VALIDATOR), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def test_bad_flag_exits_2_and_help_exits_0(self):
+        self.assertEqual(self._run("--bogus")[0], 2)
+        code, out, _ = self._run("--help")
+        self.assertEqual(code, 0)
+        self.assertIn("--contract", out)
+
+    def test_contract_only(self):
+        c = self._write("c.json", CONTRACT)
+        code, out, err = self._run("--contract", c)
+        self.assertEqual((code, out), (0, ""))
+        self.assertEqual(err.strip(), "OK: 1 file(s) checked")
+
+    def test_malformed_contract_still_checks_reports(self):
+        c = self._write("c.json", "{nope")
+        r = self._write("r.json", VALID)
+        code, out, err = self._run(r, "--contract", c)
+        self.assertEqual(code, 1)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith(f"{c}: ERROR $: malformed JSON: "))
+        self.assertEqual(err.strip(), "FAIL: 2 file(s) checked")
+
+    def test_cross_check_skips_bad_ids_and_non_dict_reports(self):
+        c = self._write("c.json", CONTRACT)
+        r1 = self._write("r1.json", _with(VALID, assertion="VAL-001, VAL-777, junk"))
+        r2 = self._write("r2.json", [1])
+        code, out, err = self._run(r1, r2, "--contract", c)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                f"{r1}: ERROR $.assertion: not an assertion id: ['junk']",
+                f"{r1}: ERROR $.assertion: VAL-777 not in contract",
+                f"{r2}: ERROR $: expected object, got list",
+            ],
+        )
+        self.assertEqual(err.strip(), "FAIL: 3 file(s) checked")
+
+    def test_missing_files_listed_exit_2(self):
+        code, out, err = self._run("nope1.json", "--contract", "nope2.json")
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(
+            err.splitlines(),
+            ["nope1.json: file not found", "nope2.json: file not found"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

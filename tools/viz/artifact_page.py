@@ -496,37 +496,15 @@ def _prepare_echarts(opt, warnings, end_labels=False):
     labelled = _end_label_names(end_labels, series, warnings)
     y_axes = _as_list(opt.get("yAxis"))
     if len(y_axes) > 1:
-        opt["yAxis"] = y_axes[0]
-        for s in series:
-            s.pop("yAxisIndex", None)
-        warnings.append(DUAL_AXIS_WARNING)
+        _drop_second_y_axis(opt, y_axes, series, warnings)
     x_axes = _as_list(opt.get("xAxis"))
-    horizontal = (
-        bool(x_axes)
-        and isinstance(x_axes[0], dict)
-        and x_axes[0].get("type") == "value"
-        and bool(y_axes)
-        and isinstance(y_axes[0], dict)
-        and y_axes[0].get("type") == "category"
+    horizontal = _first_axis_type(x_axes) == "value" and (
+        _first_axis_type(y_axes) == "category"
     )
-    lineish = any(s.get("type") == "line" for s in series)
     if "tooltip" not in opt:
-        opt["tooltip"] = (
-            {"trigger": "axis", "axisPointer": {"type": "line"}}
-            if lineish
-            else {"trigger": "item"}
-        )
-    legend = opt.get("legend")
+        opt["tooltip"] = _echarts_tooltip(series)
     show = len(series) >= 2
-    if isinstance(legend, dict) or legend is None:
-        legend = dict(legend or {})
-        legend["show"] = show
-        if show:
-            legend.setdefault("top", 0)
-            if all(_markerless(s) for s in series):  # key mirrors the stroke
-                for k, v in LEGEND_STROKE.items():
-                    legend.setdefault(k, v)
-        opt["legend"] = legend
+    _patch_echarts_legend(opt, series, show)
     fit = "grid" not in opt
     if fit:
         opt["grid"] = {
@@ -538,22 +516,66 @@ def _prepare_echarts(opt, warnings, end_labels=False):
         }
     for s in series:
         if s.get("type") == "bar":
-            s.setdefault("barMaxWidth", BAR_MAX_PX)
-            item = s.setdefault("itemStyle", {})
-            item.setdefault(
-                "borderRadius", [0, 4, 4, 0] if horizontal else [4, 4, 0, 0]
-            )
+            _patch_echarts_bar(s, horizontal)
         elif s.get("type") == "line":
-            s.setdefault("lineStyle", {}).setdefault("width", 2)
-            s.setdefault("symbolSize", 8)
-            # endLabel.show False on the series is the author's opt-out: kept.
-            # Color comes from --text-secondary in the bridge.
-            if labelled is None or (s.get("name") and str(s["name"]) in labelled):
-                label = s.setdefault("endLabel", {})
-                label.setdefault("show", True)
-                label.setdefault("formatter", "{a}")
-                s.setdefault("labelLayout", {"moveOverlap": "shiftY"})
+            _patch_echarts_line(s, labelled)
     return opt, _echarts_rows(opt, series, x_axes), fit
+
+
+def _drop_second_y_axis(opt, y_axes, series, warnings):
+    """Keep the first y axis only; series lose their yAxisIndex."""
+    opt["yAxis"] = y_axes[0]
+    for s in series:
+        s.pop("yAxisIndex", None)
+    warnings.append(DUAL_AXIS_WARNING)
+
+
+def _first_axis_type(axes):
+    """`type` of the first axis when it is a dict, else None."""
+    if axes and isinstance(axes[0], dict):
+        return axes[0].get("type")
+    return None
+
+
+def _echarts_tooltip(series):
+    """Axis tooltip with a line pointer when any series is a line, else per item."""
+    if any(s.get("type") == "line" for s in series):
+        return {"trigger": "axis", "axisPointer": {"type": "line"}}
+    return {"trigger": "item"}
+
+
+def _patch_echarts_legend(opt, series, show):
+    """Legend shown for 2+ series (dict or absent legend only; a list is left alone)."""
+    legend = opt.get("legend")
+    if not (isinstance(legend, dict) or legend is None):
+        return
+    legend = dict(legend or {})
+    legend["show"] = show
+    if show:
+        legend.setdefault("top", 0)
+        if all(_markerless(s) for s in series):  # key mirrors the stroke
+            for k, v in LEGEND_STROKE.items():
+                legend.setdefault(k, v)
+    opt["legend"] = legend
+
+
+def _patch_echarts_bar(s, horizontal):
+    s.setdefault("barMaxWidth", BAR_MAX_PX)
+    item = s.setdefault("itemStyle", {})
+    item.setdefault("borderRadius", [0, 4, 4, 0] if horizontal else [4, 4, 0, 0])
+
+
+def _patch_echarts_line(s, labelled):
+    """Line width/symbol defaults; end label unless end_labels excludes the series."""
+    s.setdefault("lineStyle", {}).setdefault("width", 2)
+    s.setdefault("symbolSize", 8)
+    # endLabel.show False on the series is the author's opt-out: kept.
+    # Color comes from --text-secondary in the bridge.
+    if labelled is None or (s.get("name") and str(s["name"]) in labelled):
+        label = s.setdefault("endLabel", {})
+        label.setdefault("show", True)
+        label.setdefault("formatter", "{a}")
+        s.setdefault("labelLayout", {"moveOverlap": "shiftY"})
 
 
 def _echarts_rows(opt, series, x_axes):

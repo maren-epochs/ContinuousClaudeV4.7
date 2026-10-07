@@ -121,42 +121,54 @@ class Reader:
     def __iter__(self):
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                line = line.strip()
-                if not line:
+                e = self._entry(line)
+                if e is None:
                     continue
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    self.skipped += 1
-                    continue
-                if not isinstance(e, dict):
-                    self.skipped += 1
-                    continue
-                if (
-                    self.version is None
-                    and isinstance(e.get("version"), str)
-                    and e["version"]
-                ):
-                    self.version = e["version"]
-                if e.get("type") != "assistant" or e.get("isSidechain"):
-                    continue
-                msg = e.get("message")
-                if not isinstance(msg, dict):
-                    continue
-                usage = msg.get("usage")
-                if not isinstance(usage, dict):
-                    continue
-                ctx = sum(_int(usage.get(k)) for k in TOKEN_KEYS)
-                label = e.get("attributionSkill")
-                if not isinstance(label, str) or not label:
-                    label = NONE_LABEL
-                ts = e.get("timestamp")
-                yield (
-                    ts if isinstance(ts, str) else "",
-                    ctx,
-                    _int(usage.get("output_tokens")),
-                    label,
-                )
+                self._note_version(e)
+                turn = _turn(e)
+                if turn is not None:
+                    yield turn
+
+    def _entry(self, line):
+        """Parsed JSON object for one line; None for blank lines and (counted) junk."""
+        line = line.strip()
+        if not line:
+            return None
+        try:
+            e = json.loads(line)
+        except ValueError:
+            e = None
+        if not isinstance(e, dict):
+            self.skipped += 1
+            return None
+        return e
+
+    def _note_version(self, e):
+        """First non-empty string `version` of any entry wins."""
+        v = e.get("version")
+        if self.version is None and isinstance(v, str) and v:
+            self.version = v
+
+
+def _turn(e):
+    """(timestamp, context, output_tokens, label) for a main-thread assistant
+    entry with a usage dict, else None."""
+    if e.get("type") != "assistant" or e.get("isSidechain"):
+        return None
+    msg = e.get("message")
+    usage = msg.get("usage") if isinstance(msg, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    label = e.get("attributionSkill")
+    if not isinstance(label, str) or not label:
+        label = NONE_LABEL
+    ts = e.get("timestamp")
+    return (
+        ts if isinstance(ts, str) else "",
+        sum(_int(usage.get(k)) for k in TOKEN_KEYS),
+        _int(usage.get("output_tokens")),
+        label,
+    )
 
 
 def build_ledger(path):

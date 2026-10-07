@@ -930,98 +930,109 @@ def format_oracle_result(result: dict) -> str:
     return "\n".join(output)
 
 
+def _first(*values: Any) -> Any:
+    """First truthy value, else "" (same result as an `a or b or ... or ""` chain)."""
+    return next((v for v in values if v), "")
+
+
+def _dict_field(item: dict, key: str) -> dict:
+    """item[key] when it is a dict, else an empty dict."""
+    value = item.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _content_lines(result: dict) -> list[str]:
+    """Answer text (first 2000 chars) plus up to five sources."""
+    lines = [result["content"][:2000]]
+    sources = result.get("sources")
+    if sources:
+        lines.append("\n## Sources")
+        for src in sources[:5]:
+            label = (
+                src.get("title", src.get("path", "unknown"))
+                if isinstance(src, dict)
+                else src
+            )
+            lines.append(f"- {label}")
+    return lines
+
+
+def _result_title(
+    item: dict, inner: dict, source: dict, meta: dict, text: str, i: int
+) -> str:
+    """Title: top-level -> inner -> source nested -> metadata path -> markdown heading."""
+    title = _first(
+        item.get("title"),
+        item.get("path"),
+        item.get("name"),
+        inner.get("file_path"),
+        source.get("document_name"),
+        source.get("display_name"),
+        meta.get("document_key"),
+    )
+    if not title and text.startswith("# "):
+        title = text.split("\n", 1)[0].lstrip("# ").strip()
+    title = title or f"Result {i}"
+    # Line info from grep/inner results
+    line_num = inner.get("start_line")
+    return f"{title}:{line_num}" if line_num else title
+
+
+def _result_item_lines(i: int, item: Any) -> list[str]:
+    """Lines for one entry of a "results" list."""
+    if not isinstance(item, dict):
+        return [f"\n{i}. {str(item)[:300]}"]
+    # Grep results nest data under "result" key — unwrap it
+    inner = _dict_field(item, "result")
+    source = _dict_field(item, "source")
+    meta = _dict_field(item, "metadata")
+    # Content: check all levels (top, inner, document)
+    text = _first(
+        item.get("snippet"),
+        item.get("content"),
+        inner.get("content"),
+        item.get("document"),
+        item.get("description"),
+    )
+    title = _result_title(item, inner, source, meta, text, i)
+    score = item.get("score")
+    score_str = f" (score: {score:.3f})" if isinstance(score, (int, float)) else ""
+    lines = [f"\n{i}. **{title}**{score_str}"]
+    url = _first(source.get("url"), source.get("file_path"))
+    if url:
+        lines.append(f"   {url}")
+    if text:
+        lines.append(f"   {text[:800]}")
+    return lines
+
+
+def _match_lines(matches: list) -> list[str]:
+    """Lines for up to ten grep "matches"."""
+    lines = []
+    for i, match in enumerate(matches[:10], 1):
+        path = match.get("path", match.get("file", "unknown"))
+        line = match.get("line", match.get("content", ""))
+        lines.append(f"\n{i}. `{path}`")
+        if line:
+            lines.append(f"   {line[:200]}")
+    return lines
+
+
 def format_search_result(result: dict, search_type: str) -> str:
     """Format search results."""
     if "error" in result:
         return f"Error: {result['error']}"
 
     output = [f"# {search_type} Results\n"]
-
     if "content" in result:
-        output.append(result["content"][:2000])
-        if result.get("sources"):
-            output.append("\n## Sources")
-            for src in result["sources"][:5]:
-                if isinstance(src, dict):
-                    output.append(f"- {src.get('title', src.get('path', 'unknown'))}")
-                else:
-                    output.append(f"- {src}")
-
+        output += _content_lines(result)
     elif "results" in result:
         for i, item in enumerate(result["results"][:10], 1):
-            if isinstance(item, dict):
-                # Grep results nest data under "result" key — unwrap it
-                inner = (
-                    item.get("result", {})
-                    if isinstance(item.get("result"), dict)
-                    else {}
-                )
-                source = (
-                    item.get("source", {})
-                    if isinstance(item.get("source"), dict)
-                    else {}
-                )
-                meta = (
-                    item.get("metadata", {})
-                    if isinstance(item.get("metadata"), dict)
-                    else {}
-                )
-
-                # Content: check all levels (top, inner, document)
-                text = (
-                    item.get("snippet")
-                    or item.get("content")
-                    or inner.get("content")
-                    or item.get("document")
-                    or item.get("description")
-                    or ""
-                )
-
-                # Title: top-level → inner → source nested → metadata path → markdown heading
-                title = (
-                    item.get("title")
-                    or item.get("path")
-                    or item.get("name")
-                    or inner.get("file_path")
-                    or source.get("document_name")
-                    or source.get("display_name")
-                    or meta.get("document_key")
-                    or ""
-                )
-                if not title and text.startswith("# "):
-                    title = text.split("\n", 1)[0].lstrip("# ").strip()
-
-                title = title or f"Result {i}"
-
-                # Line info from grep/inner results
-                line_num = inner.get("start_line")
-                if line_num:
-                    title = f"{title}:{line_num}"
-
-                score = item.get("score")
-                score_str = (
-                    f" (score: {score:.3f})" if isinstance(score, (int, float)) else ""
-                )
-                url = source.get("url") or source.get("file_path") or ""
-                output.append(f"\n{i}. **{title}**{score_str}")
-                if url:
-                    output.append(f"   {url}")
-                if text:
-                    output.append(f"   {text[:800]}")
-            else:
-                output.append(f"\n{i}. {str(item)[:300]}")
-
+            output += _result_item_lines(i, item)
     elif "matches" in result:
-        for i, match in enumerate(result["matches"][:10], 1):
-            path = match.get("path", match.get("file", "unknown"))
-            line = match.get("line", match.get("content", ""))
-            output.append(f"\n{i}. `{path}`")
-            if line:
-                output.append(f"   {line[:200]}")
-
+        output += _match_lines(result["matches"])
     else:
         output.append(json.dumps(result, indent=2, default=str)[:2000])
-
     return "\n".join(output)
 
 
@@ -1263,7 +1274,246 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _json(result: Any) -> str:
+    """Pretty JSON; non-JSON values via str()."""
+    return json.dumps(result, indent=2, default=str)
+
+
+def _json_strict(result: Any) -> str:
+    """Pretty JSON without a default (the delete commands' output)."""
+    return json.dumps(result, indent=2)
+
+
+def _content_or_json(result: dict) -> str:
+    """A content endpoint's "content", else the whole result as JSON."""
+    return result.get("content", json.dumps(result, indent=2))
+
+
+def _listing(title: str):
+    """Formatter: format_list_result under `title`."""
+    return lambda result: format_list_result(result, title)
+
+
+def _searching(title: str):
+    """Formatter: format_search_result under `title`."""
+    return lambda result: format_search_result(result, title)
+
+
+def _call(*args: Any, **kwargs: Any) -> tuple[tuple, dict]:
+    """Positional and keyword arguments for one API call."""
+    return args, kwargs
+
+
+def _route(func: str, call, fmt, banner=None):
+    """Handler for a plain subcommand: optional banner line, one API call, print fmt(result).
+
+    `func` is looked up in the module at call time, so the dispatch table always
+    reaches the current module-level API function.
+    """
+
+    async def handler(args: argparse.Namespace) -> None:
+        if banner:
+            print(banner(args))
+        pos, kw = call(args)
+        print(fmt(await globals()[func](*pos, **kw)))
+
+    return handler
+
+
+async def _oracle_research(args: argparse.Namespace) -> None:
+    """oracle research [--stream]."""
+    print(f"Running Oracle research: {args.query}")
+    if args.stream:
+        await oracle_research_stream(args.query, args.repos, args.sources, args.model)
+        return
+    result = await oracle_research(
+        args.query, args.repos, args.sources, model=args.model
+    )
+    print(format_oracle_result(result))
+
+
+async def _oracle_session(args: argparse.Namespace) -> None:
+    """oracle session <id> [--messages]."""
+    if args.messages:
+        result = await oracle_get_messages(args.session_id)
+    else:
+        result = await oracle_get_session(args.session_id)
+    print(_json(result))
+
+
+async def _oracle_chat(args: argparse.Namespace) -> None:
+    """oracle chat <id> <message> (streams its own output)."""
+    await oracle_chat_followup(args.session_id, args.message)
+
+
+async def _oracle_job(args: argparse.Namespace) -> None:
+    """oracle job <id> [--cancel | --stream]; --cancel wins over --stream."""
+    if args.cancel:
+        result = await oracle_cancel_job(args.job_id)
+    elif args.stream:
+        await oracle_stream_job_events(args.job_id)
+        return
+    else:
+        result = await oracle_get_job(args.job_id)
+    print(_json(result))
+
+
+async def _search_package(args: argparse.Namespace) -> None:
+    """search package <pkg> [--grep PATTERN | --query TEXT]."""
+    if args.grep:
+        print(f"Package grep: {args.package} / {args.grep}")
+        result = await search_package_grep(
+            args.package, args.grep, args.registry, args.limit
+        )
+    else:
+        print(f"Package search: {args.package} / {args.query}")
+        result = await search_package_hybrid(
+            args.package, args.query or "", args.registry, args.limit
+        )
+    print(format_search_result(result, "Package Search"))
+
+
+async def _context_search(args: argparse.Namespace) -> None:
+    """context search <query> [--semantic]."""
+    if args.semantic:
+        result = await context_search_semantic(args.query)
+    else:
+        result = await context_search_text(args.query)
+    print(format_search_result(result, "Context Search"))
+
+
+# (command, action) -> async handler(args). A known command with a missing or
+# unknown action prints nothing; an unknown command prints the help.
+HANDLERS = {
+    ("oracle", "research"): _oracle_research,
+    ("oracle", "sessions"): _route(
+        "oracle_list_sessions", lambda a: _call(a.limit), _listing("Oracle Sessions")
+    ),
+    ("oracle", "session"): _oracle_session,
+    ("oracle", "chat"): _oracle_chat,
+    ("oracle", "jobs"): _route(
+        "oracle_list_jobs", lambda a: _call(), _listing("Oracle Jobs")
+    ),
+    ("oracle", "job"): _oracle_job,
+    ("oracle", "create-job"): _route(
+        "oracle_create_job",
+        lambda a: _call(a.query, a.repos, model=a.model),
+        _json,
+    ),
+    ("search", "universal"): _route(
+        "search_universal",
+        lambda a: _call(a.query, a.limit),
+        _searching("Universal Search"),
+        lambda a: f"Universal search: {a.query}",
+    ),
+    ("search", "web"): _route(
+        "search_web",
+        lambda a: _call(a.query, a.category, a.time),
+        _searching("Web Search"),
+        lambda a: f"Web search: {a.query}",
+    ),
+    ("search", "deep"): _route(
+        "search_deep",
+        lambda a: _call(a.query),
+        _searching("Deep Research"),
+        lambda a: f"Deep research: {a.query}",
+    ),
+    ("search", "package"): _search_package,
+    ("search", "query"): _route(
+        "search_query",
+        lambda a: _call([{"role": "user", "content": a.query}], a.repos, a.sources),
+        _searching("Query"),
+    ),
+    ("repos", "list"): _route(
+        "repos_list",
+        lambda a: _call(a.filter, a.status, a.limit),
+        _listing("Repositories"),
+    ),
+    ("repos", "index"): _route(
+        "repos_index",
+        lambda a: _call(a.repo, a.token),
+        _json,
+        lambda a: f"Indexing repository: {a.repo}",
+    ),
+    ("repos", "status"): _route("repos_status", lambda a: _call(a.repo_id), _json),
+    ("repos", "tree"): _route("repos_tree", lambda a: _call(a.repo_id), _json),
+    ("repos", "content"): _route(
+        "repos_content", lambda a: _call(a.repo_id, a.path), _content_or_json
+    ),
+    ("repos", "grep"): _route(
+        "repos_grep",
+        lambda a: _call(a.repo_id, a.pattern, a.context),
+        _searching("Repository Grep"),
+    ),
+    ("repos", "delete"): _route(
+        "repos_delete", lambda a: _call(a.repo_id), _json_strict
+    ),
+    ("sources", "list"): _route(
+        "sources_list",
+        lambda a: _call(a.filter, a.status, limit=a.limit),
+        _listing("Data Sources"),
+    ),
+    ("sources", "index"): _route(
+        "sources_index",
+        lambda a: _call(a.url, a.name),
+        _json,
+        lambda a: f"Indexing: {a.url}",
+    ),
+    ("sources", "get"): _route("sources_get", lambda a: _call(a.source_id), _json),
+    ("sources", "tree"): _route("sources_tree", lambda a: _call(a.source_id), _json),
+    ("sources", "content"): _route(
+        "sources_content", lambda a: _call(a.source_id, a.path), _content_or_json
+    ),
+    ("sources", "grep"): _route(
+        "sources_grep",
+        lambda a: _call(a.source_id, a.pattern),
+        _searching("Source Grep"),
+    ),
+    ("sources", "delete"): _route(
+        "sources_delete", lambda a: _call(a.source_id), _json_strict
+    ),
+    ("papers", "list"): _route(
+        "papers_list",
+        lambda a: _call(a.limit, status=a.status),
+        _listing("Research Papers"),
+    ),
+    ("papers", "index"): _route(
+        "papers_index",
+        lambda a: _call(a.arxiv_id),
+        _json,
+        lambda a: f"Indexing arXiv paper: {a.arxiv_id}",
+    ),
+    ("context", "list"): _route(
+        "context_list",
+        lambda a: _call(a.limit, tags=a.tags),
+        _listing("Contexts"),
+    ),
+    ("context", "save"): _route(
+        "context_save",
+        lambda a: _call(a.title, a.content, a.summary, a.tags),
+        _json,
+    ),
+    ("context", "search"): _context_search,
+    ("context", "get"): _route("context_get", lambda a: _call(a.context_id), _json),
+    ("context", "delete"): _route(
+        "context_delete", lambda a: _call(a.context_id), _json_strict
+    ),
+}
+COMMANDS = frozenset(command for command, _ in HANDLERS)
+
+
+async def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Run the handler for (command, action)."""
+    if args.command not in COMMANDS:
+        parser.print_help()
+        return
+    handler = HANDLERS.get((args.command, args.action))
+    if handler is not None:
+        await handler(args)
+
+
 async def main():
+    """CLI entry point: parse, check the key, dispatch; errors are printed, not raised."""
     parser = build_parser()
 
     # Handle args that might come from runtime harness
@@ -1279,192 +1529,7 @@ async def main():
         return
 
     try:
-        # Oracle commands
-        if args.command == "oracle":
-            if args.action == "research":
-                print(f"Running Oracle research: {args.query}")
-                if args.stream:
-                    await oracle_research_stream(
-                        args.query, args.repos, args.sources, args.model
-                    )
-                else:
-                    result = await oracle_research(
-                        args.query, args.repos, args.sources, model=args.model
-                    )
-                    print(format_oracle_result(result))
-
-            elif args.action == "sessions":
-                result = await oracle_list_sessions(args.limit)
-                print(format_list_result(result, "Oracle Sessions"))
-
-            elif args.action == "session":
-                if args.messages:
-                    result = await oracle_get_messages(args.session_id)
-                else:
-                    result = await oracle_get_session(args.session_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "chat":
-                await oracle_chat_followup(args.session_id, args.message)
-
-            elif args.action == "jobs":
-                result = await oracle_list_jobs()
-                print(format_list_result(result, "Oracle Jobs"))
-
-            elif args.action == "job":
-                if args.cancel:
-                    result = await oracle_cancel_job(args.job_id)
-                elif args.stream:
-                    await oracle_stream_job_events(args.job_id)
-                    return
-                else:
-                    result = await oracle_get_job(args.job_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "create-job":
-                result = await oracle_create_job(
-                    args.query, args.repos, model=args.model
-                )
-                print(json.dumps(result, indent=2, default=str))
-
-        # Search commands
-        elif args.command == "search":
-            if args.action == "universal":
-                print(f"Universal search: {args.query}")
-                result = await search_universal(args.query, args.limit)
-                print(format_search_result(result, "Universal Search"))
-
-            elif args.action == "web":
-                print(f"Web search: {args.query}")
-                result = await search_web(args.query, args.category, args.time)
-                print(format_search_result(result, "Web Search"))
-
-            elif args.action == "deep":
-                print(f"Deep research: {args.query}")
-                result = await search_deep(args.query)
-                print(format_search_result(result, "Deep Research"))
-
-            elif args.action == "package":
-                if args.grep:
-                    print(f"Package grep: {args.package} / {args.grep}")
-                    result = await search_package_grep(
-                        args.package, args.grep, args.registry, args.limit
-                    )
-                else:
-                    print(f"Package search: {args.package} / {args.query}")
-                    result = await search_package_hybrid(
-                        args.package, args.query or "", args.registry, args.limit
-                    )
-                print(format_search_result(result, "Package Search"))
-
-            elif args.action == "query":
-                messages = [{"role": "user", "content": args.query}]
-                result = await search_query(messages, args.repos, args.sources)
-                print(format_search_result(result, "Query"))
-
-        # Repository commands
-        elif args.command == "repos":
-            if args.action == "list":
-                result = await repos_list(args.filter, args.status, args.limit)
-                print(format_list_result(result, "Repositories"))
-
-            elif args.action == "index":
-                print(f"Indexing repository: {args.repo}")
-                result = await repos_index(args.repo, args.token)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "status":
-                result = await repos_status(args.repo_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "tree":
-                result = await repos_tree(args.repo_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "content":
-                result = await repos_content(args.repo_id, args.path)
-                print(result.get("content", json.dumps(result, indent=2)))
-
-            elif args.action == "grep":
-                result = await repos_grep(args.repo_id, args.pattern, args.context)
-                print(format_search_result(result, "Repository Grep"))
-
-            elif args.action == "delete":
-                result = await repos_delete(args.repo_id)
-                print(json.dumps(result, indent=2))
-
-        # Data sources commands
-        elif args.command == "sources":
-            if args.action == "list":
-                result = await sources_list(args.filter, args.status, limit=args.limit)
-                print(format_list_result(result, "Data Sources"))
-
-            elif args.action == "index":
-                print(f"Indexing: {args.url}")
-                result = await sources_index(args.url, args.name)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "get":
-                result = await sources_get(args.source_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "tree":
-                result = await sources_tree(args.source_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "content":
-                result = await sources_content(args.source_id, args.path)
-                print(result.get("content", json.dumps(result, indent=2)))
-
-            elif args.action == "grep":
-                result = await sources_grep(args.source_id, args.pattern)
-                print(format_search_result(result, "Source Grep"))
-
-            elif args.action == "delete":
-                result = await sources_delete(args.source_id)
-                print(json.dumps(result, indent=2))
-
-        # Papers commands
-        elif args.command == "papers":
-            if args.action == "list":
-                result = await papers_list(args.limit, status=args.status)
-                print(format_list_result(result, "Research Papers"))
-
-            elif args.action == "index":
-                print(f"Indexing arXiv paper: {args.arxiv_id}")
-                result = await papers_index(args.arxiv_id)
-                print(json.dumps(result, indent=2, default=str))
-
-        # Context commands
-        elif args.command == "context":
-            if args.action == "list":
-                result = await context_list(args.limit, tags=args.tags)
-                print(format_list_result(result, "Contexts"))
-
-            elif args.action == "save":
-                result = await context_save(
-                    args.title, args.content, args.summary, args.tags
-                )
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "search":
-                if args.semantic:
-                    result = await context_search_semantic(args.query)
-                else:
-                    result = await context_search_text(args.query)
-                print(format_search_result(result, "Context Search"))
-
-            elif args.action == "get":
-                result = await context_get(args.context_id)
-                print(json.dumps(result, indent=2, default=str))
-
-            elif args.action == "delete":
-                result = await context_delete(args.context_id)
-                print(json.dumps(result, indent=2))
-
-        else:
-            parser.print_help()
-
+        await _dispatch(args, parser)
     except ImportError:
         print("Error: aiohttp not installed. Run: pip install aiohttp")
     except Exception as e:

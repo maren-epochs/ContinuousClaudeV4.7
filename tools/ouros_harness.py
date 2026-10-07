@@ -719,6 +719,68 @@ def _parse_command(cmd):
     return argv, ""
 
 
+def _exe_name(arg0):
+    """Lower-case basename of argv[0] with .exe/.cmd/.bat stripped (in that order)."""
+    exe = os.path.basename(arg0).lower()
+    for ext in (".exe", ".cmd", ".bat"):
+        if exe.endswith(ext):
+            exe = exe[: -len(ext)]
+    return exe
+
+
+def _is_allowlisted(argv):
+    """argv starts with one of the command_allow prefixes."""
+    return any(
+        tuple(argv[: len(allow)]) == allow for allow in SECURITY_POLICY["command_allow"]
+    )
+
+
+def _arg_refusal(arg):
+    """Why one argument is refused ("" if it is fine).
+
+    Allowed commands read whatever paths they are given (git diff --no-index,
+    grep, git show rev:path): the read policy applies to path-like arguments.
+    """
+    if arg.split("=", 1)[0] in SECURITY_POLICY["command_deny_args"]:
+        return f"argument '{arg}' not allowed"
+    for cand in _path_candidates(arg):
+        if _is_secret(cand):
+            return f"argument '{arg}' names a credential/secret file"
+        if os.path.exists(cand) and not _check_path_allowed(
+            cand, SECURITY_POLICY["read_allow"]
+        ):
+            return f"argument '{arg}' is outside allowed directories"
+    return ""
+
+
+def _is_recursive_grep_flag(a):
+    """-r/-R/--recursive/--dereference-recursive, or a short-flag cluster holding r/R."""
+    return a in ("-r", "-R", "--recursive", "--dereference-recursive") or bool(
+        a.startswith("-") and not a.startswith("--") and set(a[1:]) & {"r", "R"}
+    )
+
+
+def _with_secret_excludes(exe, argv):
+    """Recursive search reads every file under a directory: keep secrets out of it."""
+    if exe == "rg":
+        return (
+            argv[:1]
+            + [f"--glob=!{p}" for p in SECURITY_POLICY["read_deny_names"]]
+            + argv[1:]
+        )
+    if exe == "grep" and any(_is_recursive_grep_flag(a) for a in argv[1:]):
+        return (
+            argv[:1]
+            + [f"--exclude={p}" for p in SECURITY_POLICY["read_deny_names"]]
+            + [
+                f"--exclude-dir={d.split('/')[-1]}"
+                for d in SECURITY_POLICY["read_deny_dirs"]
+            ]
+            + argv[1:]
+        )
+    return argv
+
+
 def _check_command_allowed(cmd):
     """Check a command against policy. Returns (allowed, reason, argv)."""
     raw = cmd if isinstance(cmd, str) else " ".join(map(str, cmd))
@@ -729,49 +791,15 @@ def _check_command_allowed(cmd):
     argv, err = _parse_command(cmd)
     if err:
         return False, err, None
-    exe = os.path.basename(argv[0]).lower()
-    for ext in (".exe", ".cmd", ".bat"):
-        if exe.endswith(ext):
-            exe = exe[: -len(ext)]
+    exe = _exe_name(argv[0])
     argv = [exe] + argv[1:]
-    if not any(
-        tuple(argv[: len(allow)]) == allow for allow in SECURITY_POLICY["command_allow"]
-    ):
+    if not _is_allowlisted(argv):
         return False, "not in command allowlist", None
     for arg in argv[1:]:
-        if arg.split("=", 1)[0] in SECURITY_POLICY["command_deny_args"]:
-            return False, f"argument '{arg}' not allowed", None
-        # Allowed commands read whatever paths they are given (git diff --no-index,
-        # grep, git show rev:path): apply the read policy to path-like arguments.
-        for cand in _path_candidates(arg):
-            if _is_secret(cand):
-                return False, f"argument '{arg}' names a credential/secret file", None
-            if os.path.exists(cand) and not _check_path_allowed(
-                cand, SECURITY_POLICY["read_allow"]
-            ):
-                return False, f"argument '{arg}' is outside allowed directories", None
-    # Recursive search reads every file under a directory: keep secrets out of it.
-    if exe == "rg":
-        argv = (
-            argv[:1]
-            + [f"--glob=!{p}" for p in SECURITY_POLICY["read_deny_names"]]
-            + argv[1:]
-        )
-    elif exe == "grep" and any(
-        a in ("-r", "-R", "--recursive", "--dereference-recursive")
-        or (a.startswith("-") and not a.startswith("--") and set(a[1:]) & {"r", "R"})
-        for a in argv[1:]
-    ):
-        argv = (
-            argv[:1]
-            + [f"--exclude={p}" for p in SECURITY_POLICY["read_deny_names"]]
-            + [
-                f"--exclude-dir={d.split('/')[-1]}"
-                for d in SECURITY_POLICY["read_deny_dirs"]
-            ]
-            + argv[1:]
-        )
-    return True, "", argv
+        reason = _arg_refusal(arg)
+        if reason:
+            return False, reason, None
+    return True, "", _with_secret_excludes(exe, argv)
 
 
 def _path_candidates(arg):
@@ -1170,23 +1198,10 @@ def _call_agent(
     """
     import subprocess
 
-    if agent == "claude-code":
-        cmd = ["claude", "-p", prompt, "--output-format", "text"]
-        if model:
-            cmd.extend(["--model", model])
-        if max_turns is None:
-            max_turns = SECURITY_POLICY["agent_default_max_turns"]
-        cmd.extend(["--max-turns", str(max_turns)])
-        if isolated:
-            cmd.append("--worktree")
-        if permission_mode != "default":
-            cmd.extend(["--permission-mode", permission_mode])
-    elif agent == "codex":
-        cmd = ["codex", "exec", prompt, "--json"]
-        if model:
-            cmd.extend(["-m", model])
-    else:
+    build = _AGENT_ARGV.get(agent)
+    if build is None:
         return {"error": f"Unknown agent: {agent}. Supported: claude-code, codex"}
+    cmd = build(prompt, model, max_turns, isolated, permission_mode)
 
     try:
         r = subprocess.run(
@@ -1196,31 +1211,66 @@ def _call_agent(
             timeout=timeout,
             cwd=cwd,
         )
-        output = r.stdout.strip()
-
-        # Parse Codex JSON output — extract agent_message text
-        if agent == "codex" and output:
-            messages = []
-            for line in output.splitlines():
-                try:
-                    event = json.loads(line)
-                    item = event.get("item", {})
-                    if item.get("type") == "agent_message":
-                        messages.append(item.get("text", ""))
-                except (json.JSONDecodeError, AttributeError):
-                    continue
-            if messages:
-                output = "\n".join(messages)
-
-        if r.returncode != 0 and r.stderr:
-            output += f"\n[stderr]: {r.stderr.strip()}"
-        return output
     except subprocess.TimeoutExpired:
         return {
             "error": f"Agent timed out after {timeout}s. Task may be too complex or agent is stuck."
         }
     except FileNotFoundError:
         return {"error": f"Agent '{agent}' not found on PATH. Is it installed?"}
+    return _agent_output(agent, r)
+
+
+def _claude_argv(prompt, model, max_turns, isolated, permission_mode):
+    """claude -p argv; --max-turns is always present (policy default when None)."""
+    cmd = ["claude", "-p", prompt, "--output-format", "text"]
+    if model:
+        cmd.extend(["--model", model])
+    if max_turns is None:
+        max_turns = SECURITY_POLICY["agent_default_max_turns"]
+    cmd.extend(["--max-turns", str(max_turns)])
+    if isolated:
+        cmd.append("--worktree")
+    if permission_mode != "default":
+        cmd.extend(["--permission-mode", permission_mode])
+    return cmd
+
+
+def _codex_argv(prompt, model, max_turns, isolated, permission_mode):
+    """codex exec argv; max_turns/isolated/permission_mode do not apply to codex."""
+    cmd = ["codex", "exec", prompt, "--json"]
+    if model:
+        cmd.extend(["-m", model])
+    return cmd
+
+
+# agent name -> argv builder(prompt, model, max_turns, isolated, permission_mode)
+_AGENT_ARGV = {"claude-code": _claude_argv, "codex": _codex_argv}
+
+
+def _codex_messages(output):
+    """agent_message texts from Codex --json event lines (other lines skipped)."""
+    messages = []
+    for line in output.splitlines():
+        try:
+            item = json.loads(line).get("item", {})
+            if item.get("type") == "agent_message":
+                messages.append(item.get("text", ""))
+        except (json.JSONDecodeError, AttributeError):
+            continue
+    return messages
+
+
+def _agent_output(agent, r):
+    """Final text of a finished agent run; stderr appended when it failed."""
+    output = r.stdout.strip()
+    # Parse Codex JSON output — extract agent_message text
+    if agent == "codex" and output:
+        messages = _codex_messages(output)
+        if messages:
+            output = "\n".join(messages)
+    if r.returncode != 0 and r.stderr:
+        output += f"\n[stderr]: {r.stderr.strip()}"
+    return output
 
 
 # function_name -> sync handler

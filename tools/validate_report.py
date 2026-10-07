@@ -164,6 +164,95 @@ def _check_check(f, item, p):
         f.error(p, "expected {command, exit_code} or {action, observed}")
 
 
+def _check_assertion_ref(f, assertion):
+    """$.assertion: comma-separated ids; more than one is a WARN."""
+    ids = [a.strip() for a in assertion.split(",")]
+    bad = [a for a in ids if not ASSERTION_ID.match(a)]
+    if bad:
+        f.error("$.assertion", f"not an assertion id: {bad}")
+    elif len(ids) > 1:
+        f.warn(
+            "$.assertion",
+            "multiple assertions — plan decomposes one task = one assertion",
+        )
+
+
+def _check_tests_added(f, added):
+    for i, t in enumerate(added or []):
+        p = f"$.tests.added[{i}]"
+        if not isinstance(t, dict):
+            f.error(p, f"expected object {{file, name, verifies}}, got {_type_name(t)}")
+            continue
+        for k in ("file", "name", "verifies"):
+            _expect(f, t, k, str, p)
+        _extra(f, t, ("file", "name", "verifies"), p)
+
+
+def _check_tests_exit_code(f, tests, command):
+    if "exit_code" not in tests:
+        f.error("$.tests.exit_code", "missing required field")
+        return
+    code = tests["exit_code"]
+    # null only when no test command ran (docs-only work)
+    if code is None:
+        if command:
+            f.error(
+                "$.tests.exit_code",
+                "null but tests.command is set — record the exit code",
+            )
+    elif not isinstance(code, int) or isinstance(code, bool):
+        f.error("$.tests.exit_code", f"expected int, got {_type_name(code)}")
+
+
+def _check_tests(f, report):
+    tests = _expect(f, report, "tests", dict, "$")
+    if tests is None:
+        return
+    _check_tests_added(f, _expect(f, tests, "added", list, "$.tests"))
+    command = _expect(f, tests, "command", str, "$.tests")
+    _check_tests_exit_code(f, tests, command)
+    _extra(f, tests, ("added", "command", "exit_code"), "$.tests")
+
+
+def _check_checks(f, report):
+    checks = _expect(f, report, "checks", list, "$")
+    for i, c in enumerate(checks or []):
+        p = f"$.checks[{i}]"
+        if isinstance(c, dict):
+            _check_check(f, c, p)
+        else:
+            f.error(
+                p,
+                f"expected object {{command, exit_code}} | {{action, observed}}, got {_type_name(c)}",
+            )
+
+
+def _check_conventions(f, report):
+    conventions = _expect(f, report, "conventions", list, "$")
+    for i, c in enumerate(conventions or []):
+        if not isinstance(c, str):
+            f.error(f"$.conventions[{i}]", f"expected str, got {_type_name(c)}")
+
+
+# key -> (allowed fields, required str fields, per-item check)
+REPORT_LISTS = (
+    ("bloks_used", ("card", "helpful", "reason"), ("card",), _check_bloks_used),
+    ("corrections", ("block", "issue"), ("block", "issue"), None),
+    (
+        "discoveries",
+        ("lib", "finding", "bloks_cmd"),
+        ("lib", "finding", "bloks_cmd"),
+        _check_discovery,
+    ),
+    ("issues", ("severity", "description"), ("severity", "description"), _check_issue),
+)
+
+
+def _is_blocked_early_exit(result, report):
+    """worker.md allows {"result": "blocked", "reason": "..."} with nothing else."""
+    return result == "blocked" and "reason" in report and "implemented" not in report
+
+
 def validate_report(report):
     """Return Findings for one parsed report object."""
     f = Findings()
@@ -175,8 +264,7 @@ def validate_report(report):
     if result is not None and result not in RESULTS:
         f.error("$.result", f"'{result}' not in {RESULTS}")
 
-    # Early exit allowed by worker.md: {"result": "blocked", "reason": "..."}
-    if result == "blocked" and "reason" in report and "implemented" not in report:
+    if _is_blocked_early_exit(result, report):
         _expect(f, report, "reason", str, "$")
         _extra(f, report, ("result", "reason", "task", "assertion"), "$")
         return f
@@ -184,91 +272,110 @@ def validate_report(report):
     _expect(f, report, "task", str, "$")
     assertion = _expect(f, report, "assertion", str, "$")
     if assertion is not None:
-        ids = [a.strip() for a in assertion.split(",")]
-        bad = [a for a in ids if not ASSERTION_ID.match(a)]
-        if bad:
-            f.error("$.assertion", f"not an assertion id: {bad}")
-        elif len(ids) > 1:
-            f.warn(
-                "$.assertion",
-                "multiple assertions — plan decomposes one task = one assertion",
-            )
+        _check_assertion_ref(f, assertion)
     _expect(f, report, "implemented", str, "$")
     _expect(f, report, "remaining", str, "$")
-
-    tests = _expect(f, report, "tests", dict, "$")
-    if tests is not None:
-        added = _expect(f, tests, "added", list, "$.tests")
-        for i, t in enumerate(added or []):
-            p = f"$.tests.added[{i}]"
-            if not isinstance(t, dict):
-                f.error(
-                    p, f"expected object {{file, name, verifies}}, got {_type_name(t)}"
-                )
-                continue
-            for k in ("file", "name", "verifies"):
-                _expect(f, t, k, str, p)
-            _extra(f, t, ("file", "name", "verifies"), p)
-        command = _expect(f, tests, "command", str, "$.tests")
-        if "exit_code" not in tests:
-            f.error("$.tests.exit_code", "missing required field")
-        else:
-            code = tests["exit_code"]
-            # null only when no test command ran (docs-only work)
-            if code is None:
-                if command:
-                    f.error(
-                        "$.tests.exit_code",
-                        "null but tests.command is set — record the exit code",
-                    )
-            elif not isinstance(code, int) or isinstance(code, bool):
-                f.error("$.tests.exit_code", f"expected int, got {_type_name(code)}")
-        _extra(f, tests, ("added", "command", "exit_code"), "$.tests")
-
-    checks = _expect(f, report, "checks", list, "$")
-    for i, c in enumerate(checks or []):
-        p = f"$.checks[{i}]"
-        if not isinstance(c, dict):
-            f.error(
-                p,
-                f"expected object {{command, exit_code}} | {{action, observed}}, got {_type_name(c)}",
-            )
-        else:
-            _check_check(f, c, p)
-
-    _list_of_objects(
-        f,
-        report,
-        "bloks_used",
-        ("card", "helpful", "reason"),
-        ("card",),
-        _check_bloks_used,
-    )
-    _list_of_objects(f, report, "corrections", ("block", "issue"), ("block", "issue"))
-    _list_of_objects(
-        f,
-        report,
-        "discoveries",
-        ("lib", "finding", "bloks_cmd"),
-        ("lib", "finding", "bloks_cmd"),
-        _check_discovery,
-    )
-    _list_of_objects(
-        f,
-        report,
-        "issues",
-        ("severity", "description"),
-        ("severity", "description"),
-        _check_issue,
-    )
-
-    conventions = _expect(f, report, "conventions", list, "$")
-    for i, c in enumerate(conventions or []):
-        if not isinstance(c, str):
-            f.error(f"$.conventions[{i}]", f"expected str, got {_type_name(c)}")
-
+    _check_tests(f, report)
+    _check_checks(f, report)
+    for key, allowed, required, check in REPORT_LISTS:
+        _list_of_objects(f, report, key, allowed, required, check)
+    _check_conventions(f, report)
     _extra(f, report, REPORT_FIELDS + ("reason",), "$")
     return f
+
+
+ASSERTION_FIELDS = (
+    "id",
+    "type",
+    "text",
+    "milestone",
+    "status",
+    "depends",
+    "worker",
+    "evidence",
+    "presentation",
+    "variants",
+    "medium",
+)
+MILESTONE_FIELDS = ("name", "status", "assertions")
+CONTRACT_FIELDS = (
+    "task",
+    "complexity",
+    "milestones",
+    "assertions",
+    "baseline",
+    "premortem",
+    "post_validation",
+    "meta_goal",
+)
+
+
+def _check_enum(f, obj, key, enum, path):
+    """obj[key] is a str in enum (missing / wrong type reported by _expect)."""
+    v = _expect(f, obj, key, str, path)
+    if v is not None and v not in enum:
+        f.error(f"{path}.{key}", f"'{v}' not in {enum}")
+    return v
+
+
+def _check_nullable_str(f, a, key, p):
+    if key not in a:
+        f.error(f"{p}.{key}", "missing required field (null until set)")
+    elif a[key] is not None and not isinstance(a[key], str):
+        f.error(f"{p}.{key}", f"expected str|null, got {_type_name(a[key])}")
+
+
+def _check_contract_assertion(f, a, p, cx, ids):
+    """One assertion object; records its id in ids."""
+    aid = _expect(f, a, "id", str, p)
+    if aid is not None:
+        if aid in ids:
+            f.error(f"{p}.id", f"duplicate id {aid}")
+        ids.add(aid)
+    _expect(f, a, "text", str, p)
+    # Patch class has no milestones (SKILL.md PATCH FAST PATH): milestone may be null.
+    if not (cx == "patch" and "milestone" in a and a["milestone"] is None):
+        _expect(f, a, "milestone", str, p)
+    _check_enum(f, a, "type", ASSERTION_TYPES, p)
+    _check_enum(f, a, "status", STATUSES, p)
+    _expect(f, a, "depends", list, p)
+    for k in ("worker", "evidence"):
+        _check_nullable_str(f, a, k, p)
+    if a.get("status") == "passed" and not a.get("evidence"):
+        f.error(f"{p}.evidence", "status passed without evidence")
+    _extra(f, a, ASSERTION_FIELDS, p)
+
+
+def _check_milestone(f, m, p, ids, names):
+    """One milestone object; records its name in names."""
+    name = _expect(f, m, "name", str, p)
+    if name:
+        names.add(name)
+    _check_enum(f, m, "status", STATUSES, p)
+    for j, ref in enumerate(_expect(f, m, "assertions", list, p) or []):
+        if ref not in ids:
+            f.error(f"{p}.assertions[{j}]", f"unknown assertion id {ref!r}")
+    _extra(f, m, MILESTONE_FIELDS, p)
+
+
+def _each_object(f, items, key):
+    """Yield (path, item) for dict items of $.key[]; non-dicts are errors."""
+    for i, item in enumerate(items):
+        p = f"$.{key}[{i}]"
+        if isinstance(item, dict):
+            yield p, item
+        else:
+            f.error(p, f"expected object, got {_type_name(item)}")
+
+
+def _check_assertion_refs(f, a, i, ids, milestones, names):
+    """An assertion's depends[] and milestone point at things that exist."""
+    for j, dep in enumerate(a.get("depends") or []):
+        if dep not in ids:
+            f.error(f"$.assertions[{i}].depends[{j}]", f"unknown assertion id {dep!r}")
+    ms = a.get("milestone")
+    if milestones and isinstance(ms, str) and ms not in names:
+        f.error(f"$.assertions[{i}].milestone", f"unknown milestone {ms!r}")
 
 
 def validate_contract(contract):
@@ -280,101 +387,22 @@ def validate_contract(contract):
         return f, ids
 
     _expect(f, contract, "task", str, "$")
-    cx = _expect(f, contract, "complexity", str, "$")
-    if cx is not None and cx not in COMPLEXITIES:
-        f.error("$.complexity", f"'{cx}' not in {COMPLEXITIES}")
+    cx = _check_enum(f, contract, "complexity", COMPLEXITIES, "$")
 
     assertions = _expect(f, contract, "assertions", list, "$") or []
-    for i, a in enumerate(assertions):
-        p = f"$.assertions[{i}]"
-        if not isinstance(a, dict):
-            f.error(p, f"expected object, got {_type_name(a)}")
-            continue
-        aid = _expect(f, a, "id", str, p)
-        if aid is not None:
-            if aid in ids:
-                f.error(f"{p}.id", f"duplicate id {aid}")
-            ids.add(aid)
-        _expect(f, a, "text", str, p)
-        # Patch class has no milestones (SKILL.md PATCH FAST PATH): milestone may be null.
-        if not (cx == "patch" and "milestone" in a and a["milestone"] is None):
-            _expect(f, a, "milestone", str, p)
-        for k, enum in (("type", ASSERTION_TYPES), ("status", STATUSES)):
-            v = _expect(f, a, k, str, p)
-            if v is not None and v not in enum:
-                f.error(f"{p}.{k}", f"'{v}' not in {enum}")
-        _expect(f, a, "depends", list, p)
-        for k in ("worker", "evidence"):
-            if k not in a:
-                f.error(f"{p}.{k}", "missing required field (null until set)")
-            elif a[k] is not None and not isinstance(a[k], str):
-                f.error(f"{p}.{k}", f"expected str|null, got {_type_name(a[k])}")
-        if a.get("status") == "passed" and not a.get("evidence"):
-            f.error(f"{p}.evidence", "status passed without evidence")
-        _extra(
-            f,
-            a,
-            (
-                "id",
-                "type",
-                "text",
-                "milestone",
-                "status",
-                "depends",
-                "worker",
-                "evidence",
-                "presentation",
-                "variants",
-                "medium",
-            ),
-            p,
-        )
+    for p, a in _each_object(f, assertions, "assertions"):
+        _check_contract_assertion(f, a, p, cx, ids)
 
     milestones = _expect(f, contract, "milestones", list, "$") or []
     names = set()
-    for i, m in enumerate(milestones):
-        p = f"$.milestones[{i}]"
-        if not isinstance(m, dict):
-            f.error(p, f"expected object, got {_type_name(m)}")
-            continue
-        name = _expect(f, m, "name", str, p)
-        if name:
-            names.add(name)
-        st = _expect(f, m, "status", str, p)
-        if st is not None and st not in STATUSES:
-            f.error(f"{p}.status", f"'{st}' not in {STATUSES}")
-        for j, ref in enumerate(_expect(f, m, "assertions", list, p) or []):
-            if ref not in ids:
-                f.error(f"{p}.assertions[{j}]", f"unknown assertion id {ref!r}")
-        _extra(f, m, ("name", "status", "assertions"), p)
+    for p, m in _each_object(f, milestones, "milestones"):
+        _check_milestone(f, m, p, ids, names)
 
     for i, a in enumerate(assertions):
-        if not isinstance(a, dict):
-            continue
-        for j, dep in enumerate(a.get("depends") or []):
-            if dep not in ids:
-                f.error(
-                    f"$.assertions[{i}].depends[{j}]", f"unknown assertion id {dep!r}"
-                )
-        ms = a.get("milestone")
-        if milestones and isinstance(ms, str) and ms not in names:
-            f.error(f"$.assertions[{i}].milestone", f"unknown milestone {ms!r}")
+        if isinstance(a, dict):
+            _check_assertion_refs(f, a, i, ids, milestones, names)
 
-    _extra(
-        f,
-        contract,
-        (
-            "task",
-            "complexity",
-            "milestones",
-            "assertions",
-            "baseline",
-            "premortem",
-            "post_validation",
-            "meta_goal",
-        ),
-        "$",
-    )
+    _extra(f, contract, CONTRACT_FIELDS, "$")
     return f, ids
 
 
@@ -391,7 +419,7 @@ def _emit(path, findings):
         print(f"{path}: {level} {p}: {msg}")
 
 
-def main(argv=None):
+def _build_parser():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -400,6 +428,53 @@ def main(argv=None):
         "--contract",
         help="contract.json: validate it and cross-check report assertion ids",
     )
+    return ap
+
+
+def _report_missing(paths):
+    """Print 'file not found' for each missing path; True if any."""
+    missing = [p for p in paths if not Path(p).is_file()]
+    for p in missing:
+        print(f"{p}: file not found", file=sys.stderr)
+    return bool(missing)
+
+
+def _check_contract_file(path):
+    """Validate contract.json. Returns (failed, contract ids or None)."""
+    obj, err = _load(path)
+    if err:
+        print(f"{path}: ERROR $: {err}")
+        return True, None
+    cf, ids = validate_contract(obj)
+    _emit(path, cf)
+    return bool(cf.errors), ids
+
+
+def _cross_check(rf, obj, contract_ids):
+    """Every well-formed assertion id of the report must exist in the contract."""
+    if contract_ids is None or not isinstance(obj, dict):
+        return
+    if not isinstance(obj.get("assertion"), str):
+        return
+    for aid in (a.strip() for a in obj["assertion"].split(",")):
+        if ASSERTION_ID.match(aid) and aid not in contract_ids:
+            rf.error("$.assertion", f"{aid} not in contract")
+
+
+def _check_report_file(path, contract_ids):
+    """Validate one report file. Returns True if it has errors."""
+    obj, err = _load(path)
+    if err:
+        print(f"{path}: ERROR $: {err}")
+        return True
+    rf = validate_report(obj)
+    _cross_check(rf, obj, contract_ids)
+    _emit(path, rf)
+    return bool(rf.errors)
+
+
+def main(argv=None):
+    ap = _build_parser()
     try:
         args = ap.parse_args(argv)
     except SystemExit as e:
@@ -407,45 +482,15 @@ def main(argv=None):
     if not args.reports and not args.contract:
         ap.print_usage(sys.stderr)
         return 2
-    missing = [
-        p
-        for p in args.reports + ([args.contract] if args.contract else [])
-        if not Path(p).is_file()
-    ]
-    if missing:
-        for p in missing:
-            print(f"{p}: file not found", file=sys.stderr)
+    if _report_missing(args.reports + ([args.contract] if args.contract else [])):
         return 2
 
     failed = False
     contract_ids = None
     if args.contract:
-        obj, err = _load(args.contract)
-        if err:
-            print(f"{args.contract}: ERROR $: {err}")
-            failed = True
-        else:
-            cf, contract_ids = validate_contract(obj)
-            _emit(args.contract, cf)
-            failed |= bool(cf.errors)
-
+        failed, contract_ids = _check_contract_file(args.contract)
     for path in args.reports:
-        obj, err = _load(path)
-        if err:
-            print(f"{path}: ERROR $: {err}")
-            failed = True
-            continue
-        rf = validate_report(obj)
-        if (
-            contract_ids is not None
-            and isinstance(obj, dict)
-            and isinstance(obj.get("assertion"), str)
-        ):
-            for aid in (a.strip() for a in obj["assertion"].split(",")):
-                if ASSERTION_ID.match(aid) and aid not in contract_ids:
-                    rf.error("$.assertion", f"{aid} not in contract")
-        _emit(path, rf)
-        failed |= bool(rf.errors)
+        failed |= _check_report_file(path, contract_ids)
 
     n = len(args.reports) + (1 if args.contract else 0)
     print(f"{'FAIL' if failed else 'OK'}: {n} file(s) checked", file=sys.stderr)
