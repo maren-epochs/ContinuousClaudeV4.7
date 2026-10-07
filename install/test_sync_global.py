@@ -14,24 +14,33 @@ Runs the sync script against a temporary --target directory (never the real
      `py -3.13 tools/viz/<x>.py` commands in skills are rewritten to absolute
      paths exactly like the existing `py -3.13 tools/validate_report.py` rule
      (VAL-301).
+  6. --apply writes <target>/.ccv47-manifest.json atomically (installed path ->
+     repo path, sha256, kept flag); dry runs write nothing and the manifest is
+     never planned or reported as drift (VAL-802).
 
 Stdlib only. Run as: py -3.13 install/test_sync_global.py
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent / "sync_global.py"
 sys.path.insert(0, str(SCRIPT.parent))
+if str(SCRIPT.parent.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT.parent.parent))
 # importlib (not a late `import`) keeps ruff quiet under both default (E402) and RUF100 configs
 _sync = importlib.import_module("sync_global")
+_model = importlib.import_module("tools.fleet.model")
 NOT_EVENT_HOOKS, render, rewrites = _sync.NOT_EVENT_HOOKS, _sync.render, _sync.rewrites
 
 TIMEOUT = 120
@@ -481,6 +490,146 @@ class KeepList(unittest.TestCase):
                 any("skills/no-such/SKILL.md" in n for n in note_lines(dry.stdout)),
                 dry.stdout,
             )
+
+
+MANIFEST = ".ccv47-manifest.json"
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def installed_files(target: Path) -> dict[str, str]:
+    """installed rel path -> repo rel path for every file the sync maps into target."""
+    out: dict[str, str] = {}
+    for src_rel, dst_rel in _sync.MAPPINGS:
+        root = target / dst_rel
+        for p in root.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(root).as_posix()
+                out[f"{dst_rel}/{rel}"] = f"{src_rel}/{rel}"
+    return out
+
+
+class Manifest(unittest.TestCase):
+    """VAL-802: --apply writes <target>/.ccv47-manifest.json atomically."""
+
+    def load(self, target: Path) -> dict:
+        return json.loads((target / MANIFEST).read_text(encoding="utf-8"))
+
+    def test_apply_writes_manifest_of_every_installed_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            applied = run_sync(target, "--apply", "--eol", "lf")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            data = self.load(target)
+            self.assertEqual(data["schema_version"], 1)
+            self.assertRegex(data["generated_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertRegex(data["head_sha"], r"^[0-9a-f]{40}$")
+            self.assertIsInstance(data["dirty"], bool)
+            self.assertEqual(data["eol"], "lf")
+            self.assertEqual(Path(data["repo"]), SCRIPT.parent.parent)
+            files = data["files"]
+            expected = installed_files(target)
+            self.assertTrue(expected)
+            self.assertEqual(set(files), set(expected))
+            self.assertEqual(
+                files["hooks/status.mjs"]["repo_path"], ".claude/hooks/status.mjs"
+            )
+            for rel, entry in files.items():
+                self.assertEqual(set(entry), {"repo_path", "sha256", "kept"}, rel)
+                self.assertEqual(entry["repo_path"], expected[rel], rel)
+                self.assertEqual(entry["sha256"], sha256_of(target / rel), rel)
+                self.assertIs(entry["kept"], False, rel)
+            self.assertNotIn(MANIFEST, files)
+            # atomic replace leaves no temp file behind
+            self.assertEqual(
+                sorted(p.name for p in target.iterdir() if p.is_file()),
+                [".ccv47-installed", MANIFEST],
+            )
+
+    def test_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target).returncode, 1)
+            self.assertEqual(list(target.iterdir()), [], "dry run wrote files")
+
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            before = (target / MANIFEST).read_bytes()
+            (target / "tools" / "requirements.txt").write_bytes(b"drift\n")
+            self.assertEqual(run_sync(target).returncode, 1)
+            self.assertEqual((target / MANIFEST).read_bytes(), before)
+
+    def test_manifest_is_not_sync_managed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / MANIFEST).write_text("not json", encoding="utf-8")
+
+            plan = _sync.build_plan(target, rewrites(target.as_posix(), "py"), "\n")
+            self.assertNotIn(target / MANIFEST, [dst for _, dst, _, _ in plan])
+
+            dry = run_sync(target)
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertIn("in sync", dry.stdout)
+            self.assertNotIn(MANIFEST, dry.stdout)
+
+            again = run_sync(target, "--apply")
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+            self.assertNotIn("wrote", again.stdout)
+            self.assertFalse((target / ".ccv47-backup").exists())
+            self.assertEqual(
+                set(self.load(target)["files"]), set(installed_files(target))
+            )
+
+    def test_kept_paths_flagged_and_not_overwritten(self) -> None:
+        edited_rel = "tools/requirements.txt"
+        gone_rel = "tools/viz/palette.json"
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            local = b"user copy\n"
+            (target / edited_rel).write_bytes(local)
+            (target / gone_rel).unlink()
+            (target / ".ccv47-keep").write_text(
+                f"{edited_rel}\n{gone_rel}\n", encoding="utf-8"
+            )
+
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertEqual((target / edited_rel).read_bytes(), local)
+            files = self.load(target)["files"]
+            self.assertEqual(
+                files[edited_rel],
+                {
+                    "repo_path": edited_rel,
+                    "sha256": hashlib.sha256(local).hexdigest(),
+                    "kept": True,
+                },
+            )
+            self.assertEqual(
+                files[gone_rel], {"repo_path": gone_rel, "sha256": None, "kept": True}
+            )
+            kept = sorted(rel for rel, e in files.items() if e["kept"])
+            self.assertEqual(kept, sorted([edited_rel, gone_rel]))
+
+    def test_default_target_is_model_manifest_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            env = {**os.environ, "HOME": td, "USERPROFILE": td}
+            applied = subprocess.run(
+                [sys.executable, str(SCRIPT), "--apply"],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            with mock.patch.dict(os.environ, {"HOME": td, "USERPROFILE": td}):
+                path = _model.manifest_path()
+            self.assertEqual(path, Path(td) / ".claude" / MANIFEST)
+            self.assertTrue(path.is_file())
+            self.assertTrue(json.loads(path.read_text(encoding="utf-8"))["files"])
 
 
 if __name__ == "__main__":

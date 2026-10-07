@@ -14,6 +14,9 @@ Never touches settings.json, CLAUDE.md, .env, or *.orig / *.bak-* files.
 User pins: <target>/.ccv47-keep lists install-relative paths (one per line,
 # comments) that are never written; they print as `keep    <path>` and do not
 count as drift.
+--apply also writes <target>/.ccv47-manifest.json (atomic replace): every
+installed path -> its repo path, sha256 of the installed bytes, and a kept flag
+(shape: tools/fleet/schema.md). The manifest itself is never a synced file.
 Hook registration in settings.json is a one-time manual step (see README);
 the dry run only READS settings.json to warn about installed-but-unregistered
 hooks, and compares .ccv47-installed against git HEAD. Those drift checks are
@@ -24,12 +27,16 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+import tempfile
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -179,6 +186,13 @@ def _sources(src_root: Path):
             yield src
 
 
+def installables(target: Path):
+    """(src, dst) for every repo file the sync maps into target."""
+    for src_rel, dst_rel in MAPPINGS:
+        for src in _sources(REPO / src_rel):
+            yield src, target / dst_rel / src.relative_to(REPO / src_rel)
+
+
 KEEP_FILE = ".ccv47-keep"
 
 
@@ -202,18 +216,63 @@ def build_plan(
     """(src, dst, rendered bytes, 'new'|'update') for every file that differs;
     kept paths are always listed as (src, dst, b'', 'keep') and never rendered."""
     plan: list[tuple[Path, Path, bytes, str]] = []
-    for src_rel, dst_rel in MAPPINGS:
-        for src in _sources(REPO / src_rel):
-            dst = target / dst_rel / src.relative_to(REPO / src_rel)
-            if dst.relative_to(target).as_posix() in keep:
-                plan.append((src, dst, b"", "keep"))
-                continue
-            new = render(src, rules, eol)
-            if not dst.exists():
-                plan.append((src, dst, new, "new"))
-            elif dst.read_bytes() != new:
-                plan.append((src, dst, new, "update"))
+    for src, dst in installables(target):
+        if dst.relative_to(target).as_posix() in keep:
+            plan.append((src, dst, b"", "keep"))
+            continue
+        new = render(src, rules, eol)
+        if not dst.exists():
+            plan.append((src, dst, new, "new"))
+        elif dst.read_bytes() != new:
+            plan.append((src, dst, new, "update"))
     return plan
+
+
+MANIFEST_FILE = ".ccv47-manifest.json"  # tools/fleet/model.py manifest_path()
+
+
+def build_manifest(
+    target: Path, keep: frozenset[str] | set[str], sha: str, dirty: bool, eol: str
+) -> dict:
+    """Manifest of the installed tree as it is on disk (call after writing)."""
+    files: dict[str, dict] = {}
+    for src, dst in installables(target):
+        rel = dst.relative_to(target).as_posix()
+        digest = hashlib.sha256(dst.read_bytes()).hexdigest() if dst.is_file() else None
+        files[rel] = {
+            "repo_path": src.relative_to(REPO).as_posix(),
+            "sha256": digest,
+            "kept": rel in keep,
+        }
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "repo": str(REPO),
+        "head_sha": sha or None,
+        "dirty": dirty,
+        "eol": eol,
+        "files": files,
+    }
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Temp file in the same dir + os.replace (retried: Windows readers block renames)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def _print_diff(dst: Path, new: bytes) -> None:
@@ -299,6 +358,8 @@ def main() -> int:
     (target / ".ccv47-installed").write_text(
         f"{sha}{' (dirty)' if dirty else ''}\n", encoding="utf-8"
     )
+    manifest = build_manifest(target, keep, sha, bool(dirty), args.eol)
+    write_atomic(target / MANIFEST_FILE, json.dumps(manifest, indent=2) + "\n")
     return 0
 
 

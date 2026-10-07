@@ -15,7 +15,7 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/audit.jsonl` | `AuditEvent`, one per line | fleet-audit hook, append | `audit_path()`, `append_audit`, `read_audit` |
 | `~/.claude/harness-inbox/<id>.json` | `Proposal` | harness-guard hook, lessons | `inbox_dir()`, `proposal_path(id)`, `save_proposal`, `load_proposal`, `list_proposals` |
 | `~/.claude/fleet/guard-errors.log` | text | harness-guard (fail-open errors) | `guard_errors_path()` |
-| `~/.claude/.ccv47-manifest.json` | install manifest | `install/sync_global.py` | `manifest_path()` |
+| `~/.claude/.ccv47-manifest.json` | install manifest (section below) | `install/sync_global.py --apply`, atomic replace | `manifest_path()` |
 
 Home resolution (`home_dir()`): on win32 `USERPROFILE`, then `HOME`; elsewhere `HOME`,
 then `USERPROFILE`; empty values are skipped; last resort `Path.home()`. This matches
@@ -137,5 +137,51 @@ One compact JSON object per line, appended. Readers skip blank or invalid lines.
   "audit_recent": [],
   "collisions": [],
   "machine": {"mem_total_gb": 32.0, "mem_free_gb": 7.5}
+}
+```
+
+## Install manifest (`~/.claude/.ccv47-manifest.json`)
+
+Written by `install/sync_global.py --apply` at `<target>/.ccv47-manifest.json`
+(`--target` given: that dir; default `~/.claude`, i.e. `manifest_path()`), after every
+file write, by atomic replace (temp file in the same dir + `os.replace`). Rewritten on
+every `--apply`, including an in-sync one. Dry runs never write it. It sits outside the
+mapped subtrees, so the sync never plans, backs up or reports it as drift; a corrupt
+manifest is simply replaced on the next `--apply`. No `Record` class: readers parse it as
+plain JSON with the same tolerance rules.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `schema_version` | int | `1` |
+| `generated_at` | str | write time, `YYYY-MM-DDTHH:MM:SSZ` |
+| `repo` | str | absolute repo root the sync ran from |
+| `head_sha` | str\|null | repo HEAD at sync time (null outside git) |
+| `dirty` | bool | working tree had uncommitted changes |
+| `eol` | str | `crlf` or `lf` (EOL the files were rendered with) |
+| `files` | {installed_path: ManifestEntry} | every file the sync maps into the target |
+
+Keys of `files` are install-relative posix paths (`hooks/status.mjs`), one per
+installable repo file, kept or not.
+
+**ManifestEntry**: `repo_path` (str, repo-relative posix path, e.g.
+`.claude/hooks/status.mjs`), `sha256` (str\|null, hex sha256 of the installed bytes as
+on disk after the sync; `.md` files carry the path rewrites and every text file the
+chosen EOL, so this is not the repo file's hash; null when a kept path is absent),
+`kept` (bool, path pinned in `<target>/.ccv47-keep`: not written by the sync, `sha256`
+is the user's copy). Drift checks compare a file's current sha256 to `sha256`; kept
+entries are user-owned and are not drift.
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-07T12:00:00Z",
+  "repo": "repo-root",
+  "head_sha": "abc1234",
+  "dirty": false,
+  "eol": "crlf",
+  "files": {
+    "hooks/status.mjs": {"repo_path": ".claude/hooks/status.mjs", "sha256": "9f2c...", "kept": false},
+    "skills/review/SKILL.md": {"repo_path": "harness/skills/review/SKILL.md", "sha256": null, "kept": true}
+  }
 }
 ```
