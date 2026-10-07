@@ -19,7 +19,7 @@ help: ## List targets
 	@echo ""
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
 
-setup: ## Deps (requirements.lock, else pyproject) + plotly-resampler --no-deps, Playwright Chromium, pre-commit hook; idempotent
+setup: ## Deps (requirements.lock, else pyproject) + plotly-resampler --no-deps, Playwright Chromium, pre-commit hook (kept if its interpreter exists; FORCE_HOOK=1 repoints); idempotent
 	$(PYTHON) install/setup_deps.py
 	@if $(PYTHON) -m playwright --version >/dev/null 2>&1; then \
 	  echo "$(PYTHON) -m playwright install chromium"; \
@@ -27,14 +27,7 @@ setup: ## Deps (requirements.lock, else pyproject) + plotly-resampler --no-deps,
 	else \
 	  echo "skip: playwright not installed"; \
 	fi
-	@if [ ! -f .pre-commit-config.yaml ]; then \
-	  echo "skip: no .pre-commit-config.yaml"; \
-	elif $(PYTHON) -m pre_commit --version >/dev/null 2>&1; then \
-	  echo "$(PYTHON) -m pre_commit install"; \
-	  $(PYTHON) -m pre_commit install; \
-	else \
-	  echo "skip: pre-commit not installed"; \
-	fi
+	$(PYTHON) install/setup_deps.py --hook $(if $(FORCE_HOOK),--force-hook)
 
 test: ## Unit suites (pytest) + hook suites + readiness script tests
 	@failed=""; \

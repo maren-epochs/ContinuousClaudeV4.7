@@ -116,6 +116,7 @@ The repo-root `requirements.lock` pins the full transitive closure of `pyproject
 (all groups, viz included); `py -3.13 -m pip install -r requirements.lock` can replace the
 first line, and the `--no-deps` plotly-resampler step is still required (it is kept out of
 the lock). `make setup` (or `pwsh install/setup.ps1 -Setup`) runs all three steps.
+It installs the pre-commit hook only when none exists or its interpreter is gone; `FORCE_HOOK=1` / `-ForceHook` repoints it.
 Regenerate the lock with `py -3.13 tools/lock_requirements.py`; `--check` exits 1 when stale.
 
 - **Chrome for kaleido** (plotly static export): kaleido 1.x bundles no browser. It uses an

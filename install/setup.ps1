@@ -8,6 +8,8 @@
   and exits with its exit code. `make sync` has no switch on purpose (it writes
   ~/.claude); run `py -3.13 install/sync_global.py --diff` / `--apply` by hand.
   Shell suites need Git Bash: set $env:BASH to its bash.exe if it is not found.
+  -Setup keeps an existing .git/hooks/pre-commit whose interpreter still exists;
+  add -ForceHook to repoint it at -Python (make: FORCE_HOOK=1).
 
 .EXAMPLE
   pwsh install/setup.ps1 -Setup -Test
@@ -21,6 +23,7 @@ param(
     [switch]$Format,
     [switch]$Typecheck,
     [switch]$Readiness,
+    [switch]$ForceHook,
     [string]$Python = 'py -3.13'
 )
 
@@ -77,16 +80,9 @@ function Step-Setup {
     } else {
         Write-Host 'skip: playwright not installed'
     }
-    if (-not (Test-Path -LiteralPath '.pre-commit-config.yaml')) {
-        Write-Host 'skip: no .pre-commit-config.yaml'
-        return 0
-    }
-    & $Py[0] @($Py | Select-Object -Skip 1) -m pre_commit --version *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host 'skip: pre-commit not installed'
-        return 0
-    }
-    return (Invoke-Py -m pre_commit install)
+    # Guarded: keeps an existing hook whose interpreter still exists unless -ForceHook.
+    if ($ForceHook) { return (Invoke-Py install/setup_deps.py --hook --force-hook) }
+    return (Invoke-Py install/setup_deps.py --hook)
 }
 
 function Step-Test {
