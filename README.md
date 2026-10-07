@@ -130,6 +130,29 @@ MCP server config — add to `~/.claude.json` (or use `claude mcp add`):
 
 This exposes 10 tools in Claude Code automatically: `fast_edit`, `fast_batch_edit`, `fast_read`, `fast_search`, `fast_delete`, `fast_move`, `fast_rename`, `fast_diff`, `fast_undo`, `fast_multi_edit`.
 
+## Build / setup
+
+From Git Bash (or any POSIX shell; GNU make):
+
+```bash
+make setup && make test    # deps, Playwright Chromium, pre-commit hook; then every suite
+make help                  # also: lint, format, typecheck, readiness, sync
+```
+
+`make setup` is idempotent: it installs `requirements.lock` when present (else the `pyproject.toml` dependencies), then `plotly-resampler==0.11.1` with `--no-deps` (it declares `plotly<7`, so it stays out of the lock), runs `playwright install chromium`, and runs `pre-commit install` when pre-commit is available. `make test` runs pytest over `tools/` and `install/`, every `.claude/hooks/test_*.sh` suite, and `scripts/test_readiness.sh`. `make sync` writes into `~/.claude` (see Option B below). The interpreter defaults to `py -3.13`; override with `make test PYTHON=python3`.
+
+Without make, use the PowerShell 7 twin (same commands, exit codes propagated; needs Git Bash for the shell suites):
+
+```powershell
+pwsh install/setup.ps1 -Setup -Test    # also: -Lint, -Format, -Typecheck, -Readiness
+```
+
+## Development
+
+`.pre-commit-config.yaml` runs `ruff check`, `ruff format --check` and `privacy-guard` (`tools/privacy_guard.py`) on every commit; enable with `py -3.13 -m pre_commit install`, check the tree with `py -3.13 -m pre_commit run --all-files`.
+The guard rejects absolute user-home paths, your OS username, session-UUID-shaped ids, and every line of the untracked `.git/info/privacy-terms` (one term per line, `#` comments; create it locally, never commit it).
+Reviewed false positives go in `.privacy-allow` (one regex per line, full match against the flagged text).
+
 ## Quick start
 
 ### Option A: Add to an existing project
