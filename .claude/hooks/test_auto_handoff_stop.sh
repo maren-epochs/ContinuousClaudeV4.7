@@ -10,6 +10,12 @@ set -u
 HOOK="$(cd "$(dirname "$0")" && pwd)/auto-handoff-stop.mjs"
 TMPWIN="$(node -e "console.log(require('os').tmpdir().replace(/\\\\/g,'/'))")"
 ERRFILE="$TMPWIN/stopguard_test_err_$$.txt"
+# The hook also starts a background fleet collect (VAL-809, tested in test_status.sh):
+# disable it and isolate homedir() so these runs never touch the real ~/.claude.
+FAKEHOME="$TMPWIN/stopguard_test_home_$$"
+mkdir -p "$FAKEHOME"
+export HOME="$FAKEHOME" USERPROFILE="$FAKEHOME" FLEET_COLLECT=0
+trap 'rm -rf "$FAKEHOME"' EXIT
 
 PASS=0
 FAIL=0

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * StatusLine hook — context %, git info, goal from handoffs.
+ * StatusLine hook — context %, git info, goal from handoffs, fleet summary.
  *
- * Shows: 145K 72% | main U:6 | Goal -> Current focus
+ * Shows: 145K 72% | main U:6 | Goal -> Current focus | fleet 3 live | 2 inbox | 1 alert
  * Critical: ! 160K 80% | main U:6 | Current focus
  *
  * Writes context percentage to temp file for auto-handoff-stop.mjs.
@@ -139,6 +139,33 @@ function getContinuityInfo(dir) {
   return { goal, now };
 }
 
+// Fleet summary from ~/.claude/fleet/state.json (tools/fleet/schema.md), written by
+// `fleet.py collect` (refreshed from auto-handoff-stop.mjs). Read only, never collects.
+// Live = alive sessions; alerts counted on alive sessions only; '?' = older than 15 min
+// or unknown age. Empty string when the file is absent/unreadable or all counts are 0.
+const FLEET_STALE_MS = 15 * 60 * 1000;
+function getFleetInfo() {
+  let s;
+  try { s = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'state.json'), 'utf-8')); } catch { return ''; }
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return '';
+  const sessions = Array.isArray(s.sessions) ? s.sessions : [];
+  let live = 0, alerts = 0;
+  for (const x of sessions) {
+    if (!x || typeof x !== 'object' || x.alive !== true) continue;
+    live++;
+    if (Array.isArray(x.alerts)) alerts += x.alerts.filter(a => a && typeof a === 'object').length;
+  }
+  const inbox = Number.isInteger(s.inbox_count) && s.inbox_count > 0 ? s.inbox_count : 0;
+  const counts = [];
+  if (live) counts.push(`${live} live`);
+  if (inbox) counts.push(`${inbox} inbox`);
+  if (alerts) counts.push(`${alerts} alert`);
+  if (!counts.length) return '';
+  const t = typeof s.generated_at === 'string' ? Date.parse(s.generated_at) : NaN;
+  const stale = !Number.isFinite(t) || Date.now() - t > FLEET_STALE_MS;
+  return `fleet${stale ? '?' : ''} ${counts.join(' | ')}`;
+}
+
 function findProjectRoot(start) {
   let cur = resolve(start);
   while (true) {
@@ -177,6 +204,8 @@ function main() {
   if (git) parts.push(git);
   if (pct >= 80 && now) parts.push(now);
   else if (continuity) parts.push(continuity);
+  const fleet = getFleetInfo();
+  if (fleet) parts.push(fleet);
 
   process.stdout.write(parts.join(' | '));
 }

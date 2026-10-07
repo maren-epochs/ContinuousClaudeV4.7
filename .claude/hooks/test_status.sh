@@ -185,8 +185,229 @@ case "$OUT" in *NaN*) r=1;; *) r=0;; esac
 [ "$v" = "0" ] || r=1
 check "g14 bad size/pct -> no NaN in statusline, stale 90 reset to 0 (got: pct=$v out=${OUT:0:40})" $r
 
+# --- (h) VAL-809 fleet segment: reads ~/.claude/fleet/state.json only ---
+FLEETDIR="$FAKEHOME/.claude/fleet"
+STATE="$FLEETDIR/state.json"
+iso_ago() { # <minutes> -> ISO UTC string that many minutes ago
+  node -e "console.log(new Date(Date.now()-Number(process.argv[1])*60000).toISOString().replace(/\.\d+Z$/,'Z'))" "$1"
+}
+mkstate() { # <generated_at json value> <alive count> <dead count> <inbox> <alerts on alive> [alerts on dead]
+  node -e '
+    const [g, live, dead, inbox, al, dl] = process.argv.slice(1);
+    const alerts = (n) => Array.from({ length: Number(n) }, (_, i) => ({ kind: "stuck", severity: "warn", session: "sess-" + i }));
+    const sess = (alive, i, n) => ({ pid: 4000 + i, session_id: "sess-" + i, project: "project-A", alive, alerts: alerts(n) });
+    const sessions = [];
+    for (let i = 0; i < Number(live); i++) sessions.push(sess(true, i, i === 0 ? al : 0));
+    for (let i = 0; i < Number(dead); i++) sessions.push(sess(false, 100 + i, i === 0 ? (dl || 0) : 0));
+    require("fs").writeFileSync(process.argv[7], JSON.stringify({ schema_version: 1, generated_at: JSON.parse(g),
+      harness: {}, sessions, inbox_count: Number(inbox), audit_recent: [], collisions: [], machine: {} }));
+  ' "$1" "$2" "$3" "$4" "$5" "${6:-0}" "$STATE"
+}
+strip_fleet() { printf '%s' "$1" | sed -E 's/ \| fleet\??( [0-9]+ (live|inbox|alert)( \|)?)*$//'; }
+PROJF="$ROOT/sttstprojf"
+mkproj "$PROJF"
+fpay() { payload sttstH7x '{"used_percentage":12,"context_window_size":200000}' "$PROJF"; }
+SIDS="$SIDS sttstH7x"
+
+rm -rf "$FLEETDIR"
+run_hook "$(fpay)"; BASE="$OUT"
+case "$OUT" in *fleet*) r=1;; *) r=0;; esac
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+check "h1 no state.json -> no fleet segment, exit 0, no stderr (got: ${OUT:0:120})" $r
+
+mkdir -p "$FLEETDIR"
+mkstate "\"$(iso_ago 1)\"" 3 1 2 1 4
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 3 live | 2 inbox | 1 alert') r=0;; *) r=1;; esac
+check "h2 fresh state -> ends with 'fleet 3 live | 2 inbox | 1 alert' (dead sessions and their alerts not counted) (got: ${OUT:0:160})" $r
+[ "$(strip_fleet "$OUT")" = "$BASE" ]; check "h3 rest of the statusline unchanged by the segment" $?
+
+mkstate "\"$(iso_ago 1)\"" 0 2 2 0 3
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 2 inbox') r=0;; *) r=1;; esac
+check "h4 only non-zero parts: 'fleet 2 inbox' (got: ${OUT:0:160})" $r
+
+mkstate "\"$(iso_ago 1)\"" 0 2 0 0 3
+run_hook "$(fpay)"
+[ "$OUT" = "$BASE" ]; check "h5 all-zero fresh state -> no fleet segment (got: ${OUT:0:160})" $?
+
+mkstate "\"$(iso_ago 20)\"" 3 0 0 1
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet? 3 live | 1 alert') r=0;; *) r=1;; esac
+check "h6 generated_at 20 min old -> 'fleet? 3 live | 1 alert' (got: ${OUT:0:160})" $r
+
+mkstate "\"$(iso_ago 14)\"" 1 0 0 0
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 1 live') r=0;; *) r=1;; esac
+check "h7 generated_at 14 min old is fresh (got: ${OUT:0:160})" $r
+
+mkstate "\"$(iso_ago 30)\"" 0 0 0 0
+run_hook "$(fpay)"
+[ "$OUT" = "$BASE" ]; check "h8 stale all-zero state -> no segment ('?' only marks shown counts) (got: ${OUT:0:160})" $?
+
+for g in null '"not-a-date"' 42; do
+  mkstate "$g" 1 0 0 0
+  run_hook "$(fpay)"
+  case "$OUT" in *' | fleet? 1 live') r=0;; *) r=1;; esac
+  check "h9 generated_at $g -> unknown age is stale (got: ${OUT:0:160})" $r
+done
+
+hi=0
+while IFS= read -r body; do
+  hi=$((hi+1))
+  printf '%s' "$body" > "$STATE"
+  run_hook "$(fpay)"
+  [ "$RC" -eq 0 ] && [ -z "$ERR" ] && [ "$OUT" = "$BASE" ]
+  check "h10.$hi unreadable/garbage state.json -> no segment, statusline unchanged: [${body:0:50}] (rc=$RC err=${ERR:0:60} out=${OUT:0:100})" $?
+done <<'EOF'
+not json {{{
+
+null
+[]
+"str"
+{"sessions":"x","inbox_count":"2","generated_at":{}}
+{"sessions":[null,1,"x",{"alive":"yes","alerts":"x"}],"inbox_count":-3}
+{"sessions":[{"alive":1,"alerts":[1,2]}],"inbox_count":true}
+EOF
+printf '{"sessions":[{"alive":true,"alerts":"x"},{"alive":true,"alerts":[{}]}],"inbox_count":2.5,"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 2 live | 1 alert') r=0;; *) r=1;; esac
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+check "h11 wrong-typed fields tolerated, non-integer inbox ignored (got: ${OUT:0:160})" $r
+
+rm -f "$STATE"; mkdir -p "$STATE"
+run_hook "$(fpay)"
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] && [ "$OUT" = "$BASE" ]; check "h12 state.json is a directory -> no segment, no throw" $?
+rm -rf "$STATE"
+
+# statusline never collects: nothing but state.json appears under ~/.claude/fleet
+rm -rf "$FLEETDIR"; mkdir -p "$FLEETDIR"
+mkstate "\"$(iso_ago 30)\"" 1 0 0 0
+run_hook "$(fpay)"
+[ "$(ls -A "$FLEETDIR")" = "state.json" ]; r=$?; check "h13 statusline writes/locks/spawns nothing under ~/.claude/fleet (got: $(ls -A "$FLEETDIR" | tr '\n' ' '))" $r
+
+# --- (i) VAL-809 refresh path: auto-handoff-stop.mjs starts a detached, locked collect ---
+STOPHOOK="${STOP_HOOK:-$(dirname "$HOOK")/auto-handoff-stop.mjs}"
+FAKECOL="$ROOT/fake-fleet.mjs"
+RUNLOG="$FLEETDIR/fake-runs.log"
+cat > "$FAKECOL" <<'EOF'
+import { appendFileSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+appendFileSync(join(homedir(), '.claude', 'fleet', 'fake-runs.log'), JSON.stringify({
+  argv: process.argv.slice(2), cwd: process.cwd(), nobytecode: process.env.PYTHONDONTWRITEBYTECODE || '',
+}) + '\n');
+const ms = Number(process.env.FAKE_COLLECT_MS || 0);
+if (ms) setTimeout(() => {}, ms);
+EOF
+stop_run() { # <payload> — runs the Stop hook from inside the project dir
+  local t0 t1
+  t0=$(date +%s%N)
+  OUT=$(cd "$PROJF" && printf '%s' "$1" | FLEET_PYTHON="${FLEET_PYTHON_T-node}" FLEET_PY="${FLEET_PY_T-$FAKECOL}" node "$STOPHOOK" 2>"$ERRFILE"); RC=$?
+  t1=$(date +%s%N)
+  ELAPSED_MS=$(( (t1 - t0) / 1000000 ))
+  ERR=$(cat "$ERRFILE" 2>/dev/null || true)
+}
+runs() { if [ -f "$RUNLOG" ]; then grep -c . "$RUNLOG"; else echo 0; fi; }
+wait_runs() { # <n> — up to 10 s for the fake collector to log n runs
+  local i=0
+  while [ "$(runs)" -lt "$1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+}
+spay() { printf '{"session_id":"sttstI8x-0000-4000-8000-tail","stop_hook_active":false}'; }
+SIDS="$SIDS sttstI8x"
+age_file() { # <file> <seconds ago>
+  node -e "const t=(Date.now()-Number(process.argv[2])*1000)/1000; require('fs').utimesSync(process.argv[1], t, t)" "$1" "$2"
+}
+
+rm -rf "$FLEETDIR"
+stop_run "$(spay)"
+[ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; check "i1 stop hook output unchanged ({}), exit 0 (got: $OUT rc=$RC)" $?
+wait_runs 1
+[ "$(runs)" -eq 1 ]; r=$?; check "i2 one background collect started (runs: $(runs))" $r
+grep -q '"argv":\["collect"\]' "$RUNLOG" 2>/dev/null; r=$?; check "i3 collector invoked as 'fleet.py collect' (log: $(head -c 200 "$RUNLOG" 2>/dev/null))" $r
+CWD_SEEN=$(node -e "const l=require('fs').readFileSync(process.argv[1],'utf-8').trim().split('\n')[0];console.log(JSON.parse(l).cwd.split(String.fromCharCode(92)).join('/'))" "$RUNLOG" 2>/dev/null)
+case "$CWD_SEEN" in */.claude/fleet) r=0;; *) r=1;; esac
+check "i4 collect runs with cwd ~/.claude/fleet, not the project (got: $CWD_SEEN)" $r
+grep -q '"nobytecode":"1"' "$RUNLOG" 2>/dev/null; check "i5 PYTHONDONTWRITEBYTECODE=1 (no __pycache__ beside a repo-layout fleet.py)" $?
+[ -f "$FLEETDIR/collect.lock" ]; check "i6 lock file ~/.claude/fleet/collect.lock created" $?
+
+stop_run "$(spay)"; sleep 1
+[ "$(runs)" -eq 1 ]; r=$?; check "i7 second Stop within 2 min -> no second collect (runs: $(runs))" $r
+
+age_file "$FLEETDIR/collect.lock" 180
+stop_run "$(spay)"; wait_runs 2
+[ "$(runs)" -eq 2 ]; r=$?; check "i8 lock older than 2 min -> collect runs again (runs: $(runs))" $r
+
+rm -f "$FLEETDIR/collect.lock"; printf '{}' > "$STATE"
+stop_run "$(spay)"; sleep 1
+[ "$(runs)" -eq 2 ]; r=$?; check "i9 state.json written < 2 min ago (e.g. manual collect) -> skip (runs: $(runs))" $r
+age_file "$STATE" 180
+stop_run "$(spay)"; wait_runs 3
+[ "$(runs)" -eq 3 ]; r=$?; check "i10 state.json older than 2 min, no lock -> collect (runs: $(runs))" $r
+
+rm -f "$FLEETDIR/collect.lock" "$STATE"
+FAKE_COLLECT_MS=3000 stop_run "$(spay)"
+[ "$ELAPSED_MS" -lt 2000 ] && [ "$OUT" = "{}" ]; check "i11 a 3 s collect never blocks the hook (hook took ${ELAPSED_MS} ms)" $?
+wait_runs 4
+sleep 3 # let it exit: on Windows its cwd pins ~/.claude/fleet against deletion
+
+rm -f "$FLEETDIR/collect.lock"
+printf '95' > "$(pctfile sttstI8x)"
+stop_run "$(spay)"
+case "$OUT" in *'"decision":"block"'*'95%'*) r=0;; *) r=1;; esac
+check "i12 context block decision unaffected by the refresh (got: ${OUT:0:80})" $r
+rm -f "$(pctfile sttstI8x)"
+wait_runs 5
+
+rm -f "$FLEETDIR/collect.lock"
+FLEET_PYTHON_T="$ROOT/no-such-python.exe" stop_run "$(spay)"; sleep 0.5
+[ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; r=$?
+case "$ERR" in *rror*|*ENOENT*) r=1;; esac
+check "i13 missing interpreter -> fail-open, no error output (rc=$RC err=${ERR:0:120})" $r
+
+rm -f "$FLEETDIR/collect.lock"
+FLEET_PY_T="$ROOT/no-such-fleet.py" stop_run "$(spay)"; sleep 0.5
+[ ! -f "$FLEETDIR/collect.lock" ] && [ "$OUT" = "{}" ]; check "i14 missing fleet.py -> nothing started, no lock" $?
+
+rm -rf "$FLEETDIR"; printf 'x' > "$FLEETDIR"
+stop_run "$(spay)"
+[ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; r=$?
+case "$ERR" in *rror*|*EEXIST*|*ENOTDIR*) r=1;; esac
+check "i15 ~/.claude/fleet unusable (a file) -> fail-open (rc=$RC err=${ERR:0:120})" $r
+rm -f "$FLEETDIR"; mkdir -p "$FLEETDIR"
+
+FLEET_COLLECT=0 stop_run "$(spay)"; sleep 0.5
+[ ! -f "$FLEETDIR/collect.lock" ]; check "i16 FLEET_COLLECT=0 disables the refresh" $?
+
+[ -z "$(cd "$PROJF" && git status --porcelain --ignored)" ]; r=$?; check "i17 nothing written inside the project folder (status: $(cd "$PROJF" && git status --porcelain --ignored | head -3))" $r
+
+# i18: end to end with the real tools/fleet/fleet.py when a Python is available. A fixture
+# sessions/<pid>.key must never reach state.json (collector reads only <digits>.json).
+if [ "$(uname -s | cut -c1-5)" = "MINGW" ] || [ "$(uname -s | cut -c1-4)" = "MSYS" ]; then PYCHK="py -3.13"; else PYCHK="python3"; fi
+if $PYCHK -c "import sys; sys.exit(sys.version_info < (3, 10))" >/dev/null 2>&1; then
+  rm -rf "$FLEETDIR"
+  mkdir -p "$FAKEHOME/.claude/sessions" "$FAKEHOME/.claude/harness-inbox"
+  printf 'SECRETKEYBYTES-sttst' > "$FAKEHOME/.claude/sessions/999991.sttst.key"
+  printf '{"pid":999991,"sessionId":"sess-e2e","cwd":"%s","status":"idle","kind":"interactive"}' "$PROJF" > "$FAKEHOME/.claude/sessions/999991.json"
+  printf '{"schema_version":1,"id":"20261007T120000Z-0000abcd","kind":"edit","status":"pending"}' > "$FAKEHOME/.claude/harness-inbox/20261007T120000Z-0000abcd.json"
+  OUT=$(cd "$PROJF" && printf '%s' "$(spay)" | node "$STOPHOOK" 2>"$ERRFILE"); RC=$?
+  i=0; while [ ! -s "$STATE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+  sleep 1
+  [ -s "$STATE" ]; check "i18a real fleet.py collect wrote ~/.claude/fleet/state.json (temp HOME)" $?
+  ! grep -q 'SECRETKEYBYTES' "$STATE" 2>/dev/null; check "i18b *.key bytes never reach state.json" $?
+  run_hook "$(fpay)"
+  case "$OUT" in *' | fleet 1 inbox') r=0;; *) r=1;; esac
+  check "i18c statusline reads the collected state: 'fleet 1 inbox' (got: ${OUT:0:160})" $r
+  [ -z "$(cd "$PROJF" && git status --porcelain --ignored)" ]; check "i18d real collect writes nothing inside the project folder" $?
+  rm -rf "$FAKEHOME/.claude/sessions" "$FAKEHOME/.claude/harness-inbox"
+else
+  echo "SKIP: i18 end-to-end collect (no Python >= 3.10 as '$PYCHK')"
+fi
+
 node --check "$HOOK"
 check "syntax node --check passes" $?
+node --check "$STOPHOOK"
+check "syntax node --check passes (stop hook)" $?
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

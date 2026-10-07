@@ -7,10 +7,17 @@
  * or stale (headless -p runs, agent_call: no statusline), falls back to the
  * last main-thread usage in transcript_path. Window: CLAUDE_CONTEXT_WINDOW env,
  * else 200K (1M once usage exceeds 200K, which proves the larger window).
+ *
+ * Also starts a background `fleet.py collect` (refreshes ~/.claude/fleet/state.json
+ * for the statusline fleet segment): detached, cwd ~/.claude/fleet, at most once per
+ * 2 min via collect.lock (exclusive create; mtime = last start). FLEET_COLLECT=0
+ * disables; FLEET_PYTHON / FLEET_PY override the interpreter / script (tests).
  */
-import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, writeSync, mkdirSync, renameSync, unlinkSync } from 'fs';
+import { spawn } from 'child_process';
+import { join, dirname } from 'path';
+import { tmpdir, homedir } from 'os';
+import { fileURLToPath } from 'url';
 
 const CONTEXT_THRESHOLD = 85;
 const MAX_PCT_AGE_MS = 2 * 60 * 60 * 1000; // ignore pct files older than 2h (crashed/stale sessions)
@@ -82,4 +89,41 @@ function main() {
   }
 }
 
+const FLEET_MIN_INTERVAL_MS = 2 * 60 * 1000;
+
+// Never blocks or fails the hook: every error is swallowed, the child is unref'd.
+function refreshFleet() {
+  if (process.env.FLEET_COLLECT === '0') return;
+  const here = dirname(fileURLToPath(import.meta.url));
+  // Installed: ~/.claude/hooks -> ~/.claude/tools; repo: .claude/hooks -> tools.
+  const script = process.env.FLEET_PY
+    || [join(here, '..', 'tools', 'fleet', 'fleet.py'), join(here, '..', '..', 'tools', 'fleet', 'fleet.py')].find(p => existsSync(p));
+  if (!script || !existsSync(script)) return;
+  const dir = join(homedir(), '.claude', 'fleet');
+  const now = Date.now();
+  const recent = (p) => { try { return now - statSync(p).mtimeMs < FLEET_MIN_INTERVAL_MS; } catch { return false; } };
+  if (recent(join(dir, 'state.json'))) return;
+  mkdirSync(dir, { recursive: true });
+  const lock = join(dir, 'collect.lock');
+  let fd;
+  try { fd = openSync(lock, 'wx'); } catch (e) {
+    if (e.code !== 'EEXIST' || recent(lock)) return;
+    try { renameSync(lock, `${lock}.${process.pid}.stale`); unlinkSync(`${lock}.${process.pid}.stale`); } catch { return; }
+    fd = openSync(lock, 'wx');
+  }
+  try {
+    const [cmd, pre] = process.env.FLEET_PYTHON ? [process.env.FLEET_PYTHON, []]
+      : process.platform === 'win32' ? ['py', ['-3.13']] : ['python3', []];
+    const child = spawn(cmd, [...pre, script, 'collect'], {
+      cwd: dir, detached: true, stdio: 'ignore', windowsHide: true,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    });
+    child.on('error', () => {});
+    child.unref();
+    writeSync(fd, `${child.pid || ''}
+`);
+  } finally { closeSync(fd); }
+}
+
 try { main(); } catch { console.log('{}'); }
+try { refreshFleet(); } catch {}
