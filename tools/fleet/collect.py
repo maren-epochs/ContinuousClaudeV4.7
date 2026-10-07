@@ -216,19 +216,24 @@ def process_start(pid: int) -> int | None:
     return None
 
 
+def _win_alive(pid: int, proc_start: Any) -> bool:
+    """Running, and its creation time equals ``procStart`` when both are known."""
+    running, started = _win_process(pid)
+    if not running:
+        return False
+    try:
+        expected = int(proc_start) if isinstance(proc_start, str | int) else None
+    except ValueError:
+        expected = None
+    return expected is None or started is None or started == expected
+
+
 def process_alive(pid: Any, proc_start: Any) -> bool:
     """True when ``pid`` runs and, on win32, its creation time equals ``procStart``."""
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
     if sys.platform == "win32":
-        running, started = _win_process(pid)
-        if not running:
-            return False
-        try:
-            expected = int(proc_start) if isinstance(proc_start, str | int) else None
-        except ValueError:
-            expected = None
-        return expected is None or started is None or started == expected
+        return _win_alive(pid, proc_start)
     try:
         os.kill(pid, 0)
     except PermissionError:
@@ -482,33 +487,40 @@ def newest_handoff(root: Path, now: float) -> Handoff | None:
     """Newest .yaml/.yml/.md under root by mtime, with goal/now (status.mjs rules)."""
     if not root.is_dir():
         return None
-    best: tuple[float, Path] | None = None
-    for dirpath, _dirs, files in os.walk(root):
-        for name in files:
-            if not name.endswith(HANDOFF_SUFFIXES):
-                continue
-            path = Path(dirpath) / name
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
-                continue
-            if best is None or mtime > best[0]:
-                best = (mtime, path)
+    best = _newest_handoff_file(root)
     if best is None:
         return None
     mtime, path = best
     text = read_text(path, HANDOFF_HEAD_BYTES)
-    goal = _handoff_field(text, "goal") or _handoff_field(text, "topic")
-    if not goal:
-        heading = re.search(r"^# (.+?)\s*$", text, re.MULTILINE)
-        if heading:
-            goal = heading.group(1).replace("Handoff:", "").strip()[:200] or None
     return Handoff(
         path=str(path),
         age_h=_finite(round(max(0.0, now - mtime) / 3600, 2)),
-        goal=goal,
+        goal=_handoff_goal(text),
         now=_handoff_field(text, "now"),
     )
+
+
+def _newest_handoff_file(root: Path) -> tuple[float, Path] | None:
+    """(mtime, path) of the newest handoff-suffixed file under root."""
+    best: tuple[float, Path] | None = None
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            path = Path(dirpath) / name
+            mtime = _mtime(path) if name.endswith(HANDOFF_SUFFIXES) else None
+            if mtime is not None and (best is None or mtime > best[0]):
+                best = (mtime, path)
+    return best
+
+
+def _handoff_goal(text: str) -> str | None:
+    """goal, else topic, else the first ``# `` heading minus a ``Handoff:`` prefix."""
+    goal = _handoff_field(text, "goal") or _handoff_field(text, "topic")
+    if goal:
+        return goal
+    heading = re.search(r"^# (.+?)\s*$", text, re.MULTILINE)
+    if not heading:
+        return None
+    return heading.group(1).replace("Handoff:", "").strip()[:200] or None
 
 
 # --- harness, inbox, audit ---
@@ -566,15 +578,18 @@ def rotate_audit(path: Path, warnings: list[str]) -> None:
 # --- sessions ---
 
 
-def build_session(
-    path: Path,
-    data: Mapping[str, Any],
-    projects: Path,
-    claude: Path,
-    now: float,
-    handoffs: dict[str, Handoff | None],
-) -> Session:
-    """One Session from a session file plus its transcript tail and handoff."""
+@dataclass
+class _Where:
+    """Collect-wide inputs of build_session; ``handoffs`` caches newest_handoff."""
+
+    projects: Path
+    claude: Path
+    now: float
+    handoffs: dict[str, Handoff | None] = field(default_factory=dict)
+
+
+def _session_from_file(path: Path, data: Mapping[str, Any]) -> Session:
+    """Session fields, extras and the schema alert of one session file."""
     pid = _int(data.get("pid"))
     if pid is None:
         pid = int(path.stem)
@@ -610,45 +625,65 @@ def build_session(
                 evidence=path.name,
             )
         )
-    transcript = transcript_path(projects, cwd, sid)
-    transcript_mtime = None
-    if transcript is not None:
-        try:
-            transcript_mtime = transcript.stat().st_mtime
-        except OSError:
-            transcript_mtime = None
-    reading = statusline_reading(sid, now, transcript_mtime=transcript_mtime)
+    return session
+
+
+def _mtime(path: Path | None) -> float | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _add_transcript(session: Session, transcript: Path, live_pct: Any) -> None:
+    """Model, transcript context % (when no live reading), activity, agents, issues."""
+    # Empty env: CLAUDE_CONTEXT_WINDOW here belongs to whichever session's Stop
+    # hook spawned this collect, not to the session being parsed.
+    info = parse_transcript(transcript, {})
+    session.model = info["model"]
+    if live_pct is None:
+        session.context_pct = _finite(info["context_pct"])
+        if session.context_pct is not None:
+            session.extra["context_source"] = "transcript"
+    session.last_activity = info["last_activity"]
+    session.agents_running = info["agents_running"]
+    session.extra["transcript"] = str(transcript)
+    for issue in info["issues"]:
+        session.alerts.append(
+            Alert(
+                kind="schema_unknown",
+                severity="warn",
+                session=session.session_id,
+                detail=issue,
+                evidence=transcript.name,
+            )
+        )
+
+
+def _add_handoff(session: Session, where: _Where) -> None:
+    if not session.cwd:
+        return
+    root = handoff_root(session.cwd, where.claude)
+    key = str(root)
+    if key not in where.handoffs:
+        where.handoffs[key] = newest_handoff(root, where.now)
+    session.handoff = where.handoffs[key]
+
+
+def build_session(path: Path, data: Mapping[str, Any], where: _Where) -> Session:
+    """One Session from a session file plus its transcript tail and handoff."""
+    session = _session_from_file(path, data)
+    sid = session.session_id
+    transcript = transcript_path(where.projects, session.cwd, sid)
+    reading = statusline_reading(sid, where.now, transcript_mtime=_mtime(transcript))
     live_pct = reading[0] if reading else None
     if reading is not None:
         session.context_pct, session.extra["context_source"] = reading
     if transcript is not None:
-        # Empty env: CLAUDE_CONTEXT_WINDOW here belongs to whichever session's Stop
-        # hook spawned this collect, not to the session being parsed.
-        info = parse_transcript(transcript, {})
-        session.model = info["model"]
-        if live_pct is None:
-            session.context_pct = _finite(info["context_pct"])
-            if session.context_pct is not None:
-                session.extra["context_source"] = "transcript"
-        session.last_activity = info["last_activity"]
-        session.agents_running = info["agents_running"]
-        session.extra["transcript"] = str(transcript)
-        for issue in info["issues"]:
-            session.alerts.append(
-                Alert(
-                    kind="schema_unknown",
-                    severity="warn",
-                    session=sid,
-                    detail=issue,
-                    evidence=transcript.name,
-                )
-            )
-    if cwd:
-        root = handoff_root(cwd, claude)
-        key = str(root)
-        if key not in handoffs:
-            handoffs[key] = newest_handoff(root, now)
-        session.handoff = handoffs[key]
+        _add_transcript(session, transcript, live_pct)
+    _add_handoff(session, where)
     return session
 
 
@@ -667,8 +702,7 @@ def collect_sessions(
         names = sorted(e.name for e in os.scandir(directory) if e.is_file())
     except OSError:
         return []
-    projects = claude / "projects"
-    handoffs: dict[str, Handoff | None] = {}
+    where = _Where(claude / "projects", claude, now)
     sessions = []
     for name in names:
         if not SESSION_FILE.fullmatch(name):
@@ -681,7 +715,7 @@ def collect_sessions(
             if data is not None:
                 warnings.append(f"{name}: not a JSON object")
             continue
-        sessions.append(build_session(path, data, projects, claude, now, handoffs))
+        sessions.append(build_session(path, data, where))
     sessions.sort(key=lambda s: s.started_at or "", reverse=True)
     sessions.sort(key=lambda s: not s.alive)
     return sessions

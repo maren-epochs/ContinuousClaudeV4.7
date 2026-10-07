@@ -181,22 +181,37 @@ def project_cwd(project_dir: Path) -> str | None:
     except OSError:
         return None
     for path in transcripts[:TRANSCRIPT_PROBE_FILES]:
-        try:
-            with path.open("rb") as fh:
-                budget = TRANSCRIPT_PROBE_BYTES
-                for _ in range(TRANSCRIPT_PROBE_LINES):
-                    line = fh.readline(budget) if budget > 0 else b""
-                    if not line:
-                        break
-                    budget -= len(line)
-                    try:
-                        record = json.loads(line.decode("utf-8", errors="replace"))
-                    except ValueError:
-                        continue
-                    if isinstance(record, dict) and isinstance(record.get("cwd"), str):
-                        return record["cwd"]
-        except OSError:
-            continue
+        cwd = _probe_cwd(path)
+        if cwd is not None:
+            return cwd
+    return None
+
+
+def _probe_cwd(path: Path) -> str | None:
+    """First ``cwd`` in the head of one transcript; None when absent or unreadable."""
+    try:
+        with path.open("rb") as fh:
+            budget = TRANSCRIPT_PROBE_BYTES
+            for _ in range(TRANSCRIPT_PROBE_LINES):
+                line = fh.readline(budget) if budget > 0 else b""
+                if not line:
+                    break
+                budget -= len(line)
+                cwd = _line_cwd(line)
+                if cwd is not None:
+                    return cwd
+    except OSError:
+        return None
+    return None
+
+
+def _line_cwd(line: bytes) -> str | None:
+    try:
+        record = json.loads(line.decode("utf-8", errors="replace"))
+    except ValueError:
+        return None
+    if isinstance(record, dict) and isinstance(record.get("cwd"), str):
+        return record["cwd"]
     return None
 
 
@@ -219,34 +234,49 @@ def memory_candidates(claude: Path) -> list[Candidate]:
     if not projects.is_dir():
         return out
     for pdir in sorted(p for p in projects.iterdir() if p.is_dir()):
-        files = sorted((pdir / "memory").glob("*.md"))
-        files = [f for f in files if f.name.upper() != "MEMORY.MD"]
-        if not files:
-            continue
-        cwd = project_cwd(pdir)
-        name = re.split(r"[\\/]", cwd.rstrip("\\/"))[-1] if cwd else None
-        for path in files:
-            try:
-                text = path.read_text(encoding="utf-8-sig")
-            except (OSError, UnicodeDecodeError):
-                continue
-            meta, body = parse_frontmatter(text)
-            label = (_meta(meta, "type") or "").lower()
-            if label not in MEMORY_TYPES:
-                continue
-            title = _meta(meta, "description") or _meta(meta, "name") or path.stem
-            content = body or title
-            scope = (_meta(meta, "scope") or "").lower()
-            if scope == "project":
-                specific = True
-            elif scope in ("global", "user"):
-                specific = False
-            else:
-                specific = _is_project_specific(content, name, cwd)
-            out.append(
-                Candidate("memory", label, title, content, name or pdir.name, specific)
-            )
+        out += _project_memories(pdir)
     return out
+
+
+def _project_memories(pdir: Path) -> list[Candidate]:
+    """Candidates of one project's ``memory/*.md`` (the MEMORY.md index skipped)."""
+    files = sorted((pdir / "memory").glob("*.md"))
+    files = [f for f in files if f.name.upper() != "MEMORY.MD"]
+    if not files:
+        return []
+    cwd = project_cwd(pdir)
+    name = re.split(r"[\\/]", cwd.rstrip("\\/"))[-1] if cwd else None
+    found = (_memory_candidate(path, name, cwd, pdir.name) for path in files)
+    return [c for c in found if c is not None]
+
+
+def _memory_candidate(
+    path: Path, name: str | None, cwd: str | None, fallback: str
+) -> Candidate | None:
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return None
+    meta, body = parse_frontmatter(text)
+    label = (_meta(meta, "type") or "").lower()
+    if label not in MEMORY_TYPES:
+        return None
+    title = _meta(meta, "description") or _meta(meta, "name") or path.stem
+    content = body or title
+    specific = _scoped_specific(meta, content, name, cwd)
+    return Candidate("memory", label, title, content, name or fallback, specific)
+
+
+def _scoped_specific(
+    meta: dict[str, Any], content: str, name: str | None, cwd: str | None
+) -> bool:
+    """Frontmatter scope decides (project / global|user); else the content heuristic."""
+    scope = (_meta(meta, "scope") or "").lower()
+    if scope == "project":
+        return True
+    if scope in ("global", "user"):
+        return False
+    return _is_project_specific(content, name, cwd)
 
 
 def bloks_context(home: Path) -> str | None:
@@ -283,20 +313,24 @@ def bloks_candidates(raw: str | None) -> list[Candidate]:
     out = []
     for key in BLOKS_KINDS:
         cards = data.get(key)
-        if not isinstance(cards, list):
-            continue
-        for card in cards:
-            if not isinstance(card, dict):
-                continue
-            title, body = card.get("title"), card.get("body")
-            title = title.strip() if isinstance(title, str) else ""
-            body = body.strip() if isinstance(body, str) else ""
-            content = body or title
-            if content:
-                out.append(
-                    Candidate("bloks", key[:-1], title or content, content, "bloks")
-                )
+        for card in cards if isinstance(cards, list) else []:
+            candidate = _card_candidate(key, card)
+            if candidate is not None:
+                out.append(candidate)
     return out
+
+
+def _card_candidate(key: str, card: Any) -> Candidate | None:
+    """Candidate of one rule/taste card; None for a non-object or empty card."""
+    if not isinstance(card, dict):
+        return None
+    title, body = card.get("title"), card.get("body")
+    title = title.strip() if isinstance(title, str) else ""
+    body = body.strip() if isinstance(body, str) else ""
+    content = body or title
+    if not content:
+        return None
+    return Candidate("bloks", key[:-1], title or content, content, "bloks")
 
 
 def harness_docs(claude: Path) -> list[Path]:
