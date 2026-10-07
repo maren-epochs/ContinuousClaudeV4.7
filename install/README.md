@@ -58,7 +58,7 @@ process never spawns.
 
 The template `install/settings.template.json` uses this (it lives outside `.claude/` so a
 checkout of this repo doesn't register every hook a second time on top of the global
-install; the repo's own `.claude/settings.json` holds only the repo-specific FastEdit hook).
+install; the repo has no `.claude/settings.json` of its own since the unregistered FastEdit hook was removed).
 The tldr-read handler is narrowed to the
 23 code extensions in the hook's own `CODE_EXTENSIONS` set, and post-edit-diagnostics to the
 9 extensions in its `ENABLED_EXTENSIONS` set. The in-hook extension early-exits stay as the
