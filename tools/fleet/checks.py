@@ -876,7 +876,8 @@ def _safe_rel(key: str) -> PurePosixPath | None:
     if not key or "\\" in key or ":" in key:
         return None
     rel = PurePosixPath(key)
-    if rel.is_absolute() or _BAD_PARTS.intersection(rel.parts):
+    # No parts: "." (and "./") normalize to an empty path; rel.parts[0] would raise.
+    if not rel.parts or rel.is_absolute() or _BAD_PARTS.intersection(rel.parts):
         return None
     if rel.parts[0] == "sessions" or rel.name.endswith(".key"):
         return None

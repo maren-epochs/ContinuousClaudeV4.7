@@ -791,6 +791,23 @@ class DriftTests(ChecksHome):
         state = self.run_checks()
         self.assertEqual([d.status for d in state.harness.drift], ["stale"])
 
+    def test_dot_keys_are_skipped_not_fatal(self):
+        self.put("hooks/b.mjs", b"edited\r\n")
+        self.install(
+            {
+                ".": self.entry("x", "6" * 64),
+                "./": self.entry("x", "7" * 64),
+                "hooks/b.mjs": self.entry(".claude/hooks/b.mjs", "0" * 64),
+            }
+        )
+        for key in (".", "./"):
+            with self.subTest(key=key):
+                self.assertIsNone(checks._safe_rel(key))
+        state = self.run_checks()
+        self.assertEqual(
+            [Path(d.installed_path).name for d in state.harness.drift], ["b.mjs"]
+        )
+
     def test_no_manifest_no_drift(self):
         self.assertEqual(self.run_checks().harness.drift, [])
         model.manifest_path().write_text("{broken", encoding="utf-8")

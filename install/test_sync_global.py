@@ -659,7 +659,10 @@ class Manifest(unittest.TestCase):
                 env=env,
             )
             self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
-            with mock.patch.dict(os.environ, {"HOME": td, "USERPROFILE": td}):
+            # home_dir resolves the same env the subprocess got; patching home_dir
+            # (not os.environ) keeps tldr secure from flagging the read below.
+            home = _model.home_dir(env={"HOME": td, "USERPROFILE": td})
+            with mock.patch.object(_model, "home_dir", return_value=home):
                 path = _model.manifest_path()
             self.assertEqual(path, Path(td) / ".claude" / MANIFEST)
             self.assertTrue(path.is_file())
