@@ -15,6 +15,7 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/audit.jsonl` | `AuditEvent`, one per line | fleet-audit hook, append | `audit_path()`, `append_audit`, `read_audit` |
 | `~/.claude/harness-inbox/<id>.json` | `Proposal` | harness-guard hook, lessons | `inbox_dir()`, `proposal_path(id)`, `save_proposal`, `load_proposal`, `list_proposals` |
 | `~/.claude/fleet/guard-errors.log` | text | harness-guard (fail-open errors) | `guard_errors_path()` |
+| `~/.claude/fleet/collect.err` | text, one line per failed collect | `fleet.py collect`, append, capped 256 KB | `fleet._append_err` |
 | `~/.claude/.ccv47-manifest.json` | install manifest (section below) | `install/sync_global.py --apply`, atomic replace | `manifest_path()` |
 
 Home resolution (`home_dir()`): on win32 `USERPROFILE`, then `HOME`; elsewhere `HOME`,
@@ -109,11 +110,14 @@ Keys the collector adds outside the declared fields (kept in `extra`):
 | Harness | `dirty`, `synced_at` | manifest `dirty` and `generated_at` |
 | Session | `transcript` | absolute path of the transcript read |
 | Session | `status_updated_at`, `waiting_for` | `statusUpdatedAt` (ISO), `waitingFor` |
-| Session | `context_source` | `statusline` or `transcript`: where `context_pct` came from (absent when null) |
+| Session | `context_source` | `statusline`, `statusline-idle` or `transcript`: where `context_pct` came from (absent when null) |
 
 `context_pct` prefers `<tmpdir>/claude-context-pct-<session_id[:8]>.txt`, the integer
 status.mjs writes from Claude Code's `used_percentage`, when its mtime is at most
-10 min old (and not in the future); otherwise the transcript rule of
+10 min old (and not in the future), source `statusline`. An older pct file still
+counts, source `statusline-idle`, while the session's transcript mtime is not newer
+than the pct file's mtime (idle session: no API call since, the value stands); a pct
+file older than 10 min with no transcript is ignored. Otherwise the transcript rule of
 auto-handoff-stop.mjs: input + cache tokens of the last main-chain usage vs 200K (1M
 once tokens exceed 200K). The collector never reads `CLAUDE_CONTEXT_WINDOW`: its env is
 the env of whichever session's Stop hook spawned it.
@@ -123,6 +127,13 @@ and each check step) and a watchdog thread exits the process with code 3 five se
 later when a step hangs, so a stuck collect never writes state.json and the last good
 one stays. The Stop hook treats a `collect.lock` older than 2 min (or dated in the
 future) as stale.
+
+`fleet.py collect` catches `CollectTimeout` and any other exception (including a failed
+save), keeps state.json, prints `collect failed: <class>: <message>` to stderr and exits
+3. It appends one line `<ts>\t<class>\t<message>\n` (ts ISO UTC, message on one line,
+at most 500 chars; paths under home become `~`-relative, any other absolute path
+`<path>`) to `~/.claude/fleet/collect.err`. Past 256 KB the file keeps only its newest
+half, cut at a line start. A watchdog exit (also 3) cannot log.
 
 The collector reads only `sessions/<digits>.json` (never `*.key`), the last 512 KB of
 each transcript and the last 256 KB of `audit.jsonl`, which it renames to

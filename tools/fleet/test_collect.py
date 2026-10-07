@@ -359,6 +359,61 @@ class ContextSourceTests(FleetHome):
         self.assertEqual(s.context_pct, 86.0)
         self.assertEqual(s.extra["context_source"], "transcript")
 
+    def age_transcript(self, age_s):
+        path = self.claude / "projects"
+        (transcript,) = path.glob(f"*/{self.SID}.jsonl")
+        stamp = time.time() - age_s
+        os.utime(transcript, (stamp, stamp))
+        return transcript
+
+    def test_stale_pct_file_is_trusted_while_session_idle(self):
+        self.one_m_session()
+        stale = collect.PCT_FRESH_S + 3600
+        self.age_transcript(stale + 60)
+        self.pct_file("abcdefgh", "17", age_s=stale)
+        s = self.collect_one()
+        self.assertEqual(s.context_pct, 17.0)
+        self.assertEqual(s.extra["context_source"], "statusline-idle")
+
+    def test_idle_rule_accepts_equal_mtimes(self):
+        self.one_m_session()
+        transcript = self.age_transcript(collect.PCT_FRESH_S + 120)
+        pct = self.pct_file("abcdefgh", "17")
+        stamp = transcript.stat().st_mtime
+        os.utime(pct, (stamp, stamp))
+        self.assertEqual(self.collect_one().extra["context_source"], "statusline-idle")
+
+    def test_stale_pct_file_loses_to_newer_transcript(self):
+        self.one_m_session()
+        self.age_transcript(collect.PCT_FRESH_S + 60)
+        self.pct_file("abcdefgh", "17", age_s=collect.PCT_FRESH_S + 120)
+        s = self.collect_one()
+        self.assertEqual(s.context_pct, 86.0)
+        self.assertEqual(s.extra["context_source"], "transcript")
+
+    def test_stale_pct_file_without_transcript_is_not_trusted(self):
+        self.session(4242, self.SID, self.project())
+        self.pct_file("abcdefgh", "42", age_s=collect.PCT_FRESH_S + 60)
+        s = self.collect_one()
+        self.assertIsNone(s.context_pct)
+        self.assertNotIn("context_source", s.extra)
+
+    def test_statusline_reading_direct(self):
+        now = time.time()
+        self.pct_file("abcdefgh", "33", age_s=collect.PCT_FRESH_S + 60)
+        old = now - collect.PCT_FRESH_S - 120
+        new = now - 10
+        read = collect.statusline_reading
+        self.assertEqual(
+            read("abcdefgh-1", now, self.pct_tmp, old), (33.0, "statusline-idle")
+        )
+        self.assertIsNone(read("abcdefgh-1", now, self.pct_tmp, new))
+        self.assertIsNone(read("abcdefgh-1", now, self.pct_tmp, None))
+        self.pct_file("abcdefgh", "33", age_s=5)
+        self.assertEqual(
+            read("abcdefgh-1", now, self.pct_tmp, new), (33.0, "statusline")
+        )
+
     def test_future_mtime_pct_file_is_not_fresh(self):
         self.one_m_session()
         self.pct_file("abcdefgh", "17", age_s=-3600)

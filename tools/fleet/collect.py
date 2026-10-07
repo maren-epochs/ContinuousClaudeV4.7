@@ -9,7 +9,8 @@ Sources, all read-only except the audit rotation and state.json:
   window never taken from this process's env), last activity, running subagents.
 - the statusline pct file ``<tmpdir>/claude-context-pct-<sessionId[:8]>.txt``
   (status.mjs, Claude Code's ``used_percentage``): preferred for context % when
-  its mtime is under ``PCT_FRESH_S`` old.
+  its mtime is under ``PCT_FRESH_S`` old, or older while the transcript's mtime is
+  not newer than it (idle session, ``statusline-idle``).
 - the handoff root (project ``thoughts/shared/handoffs`` else
   ``~/.claude/handoffs/<basename>``), the install manifest, the inbox, the tail of
   ``fleet/audit.jsonl`` (rotated to ``audit.jsonl.1`` past ``AUDIT_ROTATE_BYTES``).
@@ -299,23 +300,46 @@ def pct_dir() -> Path:
     return Path(tempfile.gettempdir())
 
 
-def statusline_pct(
-    session_id: str | None, now: float, directory: Path | None = None
-) -> float | None:
-    """Context % from status.mjs's pct file when fresh (< PCT_FRESH_S), else None."""
+def statusline_reading(
+    session_id: str | None,
+    now: float,
+    directory: Path | None = None,
+    transcript_mtime: float | None = None,
+) -> tuple[float, str] | None:
+    """(pct, source) from status.mjs's pct file, else None.
+
+    ``statusline`` when the file is under PCT_FRESH_S old; ``statusline-idle`` when
+    older but the transcript has not changed since it was written (no API call
+    since, so the value still stands).
+    """
     if not session_id or not SAFE_SESSION_ID.fullmatch(session_id):
         return None
     path = (directory or pct_dir()) / f"claude-context-pct-{session_id[:8]}.txt"
     try:
-        age = now - path.stat().st_mtime
+        mtime = path.stat().st_mtime
     except OSError:
         return None
-    if age < -PCT_SKEW_S or age > PCT_FRESH_S:
+    age = now - mtime
+    if age < -PCT_SKEW_S:
+        return None
+    if age <= PCT_FRESH_S:
+        source = "statusline"
+    elif transcript_mtime is not None and transcript_mtime <= mtime:
+        source = "statusline-idle"
+    else:
         return None
     text = read_text(path, 64).strip()
     if not _PCT_TEXT.fullmatch(text):
         return None
-    return float(min(100, int(text)))
+    return float(min(100, int(text))), source
+
+
+def statusline_pct(
+    session_id: str | None, now: float, directory: Path | None = None
+) -> float | None:
+    """Context % from status.mjs's pct file when fresh (< PCT_FRESH_S), else None."""
+    reading = statusline_reading(session_id, now, directory)
+    return reading[0] if reading else None
 
 
 def transcript_path(
@@ -593,10 +617,16 @@ def build_session(
             )
         )
     transcript = transcript_path(projects, cwd, sid)
-    live_pct = statusline_pct(sid, now)
-    if live_pct is not None:
-        session.context_pct = live_pct
-        session.extra["context_source"] = "statusline"
+    transcript_mtime = None
+    if transcript is not None:
+        try:
+            transcript_mtime = transcript.stat().st_mtime
+        except OSError:
+            transcript_mtime = None
+    reading = statusline_reading(sid, now, transcript_mtime=transcript_mtime)
+    live_pct = reading[0] if reading else None
+    if reading is not None:
+        session.context_pct, session.extra["context_source"] = reading
     if transcript is not None:
         # Empty env: CLAUDE_CONTEXT_WINDOW here belongs to whichever session's Stop
         # hook spawned this collect, not to the session being parsed.

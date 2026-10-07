@@ -13,17 +13,22 @@ reject <id>      set status rejected in place (the file stays: lesson dedupe)
 lessons          propose cross-project lessons (--source memory|bloks|all, --max N)
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
-Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing.
+Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
+3 collect failed (one line appended to ~/.claude/fleet/collect.err; the collector's
+watchdog also exits 3). state.json is only replaced by a complete collect.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import datetime as _dt
 import difflib
 import importlib
 import io
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -46,6 +51,14 @@ AUDIT_SHOWN = 10
 DRIFT_SHOWN = 20
 SEVERITY_ORDER = {"error": 0, "warn": 1, "info": 2}
 SYNC_HINT = "py -3.13 install/sync_global.py --apply"
+COLLECT_FAILED = 3
+COLLECT_ERR_MAX = 256 * 1024
+COLLECT_ERR_MSG_MAX = 500
+_ABS_PATH = re.compile(
+    r"\\\\[^\s'\",;]+"  # UNC and device paths
+    r"|[A-Za-z]:[\\/][^\s'\",;]*"  # drive paths
+    r"|(?<![\w~.<>\\/])/[^\s'\",;]+"  # POSIX paths
+)
 
 
 class Refused(Exception):
@@ -58,6 +71,55 @@ def _state(fresh: bool) -> FleetState:
         collect.collect_and_save()
         state = model.load_state() or FleetState()
     return state
+
+
+def _redact(text: str) -> str:
+    """One line; paths under home become ``~``-relative, other absolute paths ``<path>``."""
+    text = " ".join(text.split())
+    home = model.home_dir()
+    forms: set[str] = set()
+    for h in (str(home), os.path.realpath(home)):
+        h = h.rstrip("\\/")
+        if h:
+            forms.update((h, h.replace("\\", "/"), h.replace("/", "\\")))
+    for form in sorted(forms, key=len, reverse=True):
+        text = re.sub(re.escape(form), "~", text, flags=re.IGNORECASE)
+    return _ABS_PATH.sub("<path>", text)[:COLLECT_ERR_MSG_MAX]
+
+
+def _append_err(exc: BaseException) -> None:
+    """Append ``ts<TAB>class<TAB>message`` to collect.err; past COLLECT_ERR_MAX keep
+    only the newest half, cut at a line start."""
+    path = model.fleet_dir() / "collect.err"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ts = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"{ts}\t{type(exc).__name__}\t{_redact(str(exc))}\n".encode()
+    with path.open("ab") as fh:
+        fh.write(line)
+    if path.stat().st_size <= COLLECT_ERR_MAX:
+        return
+    data = path.read_bytes()
+    keep = data[len(data) - COLLECT_ERR_MAX // 2 :]
+    cut = keep.find(b"\n")
+    keep = keep[cut + 1 :] if 0 <= cut < len(keep) - 1 else line
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_bytes(keep)
+    os.replace(tmp, path)
+
+
+def _collect_cmd() -> int:
+    """``collect``: any failure logs one line, keeps state.json, exits COLLECT_FAILED."""
+    try:
+        state = collect.collect()
+        model.save_state(state)
+    except Exception as exc:  # noqa: BLE001 - detached run: log any failure, exit 3
+        with contextlib.suppress(Exception):
+            _append_err(exc)
+        reason = f"{type(exc).__name__}: {_redact(str(exc))}"
+        print(f"collect failed: {reason}", file=sys.stderr)
+        return COLLECT_FAILED
+    print(summary(state))
+    return 0
 
 
 def summary(state: FleetState) -> str:
@@ -733,9 +795,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "collect":
-            state = collect.collect()
-            model.save_state(state)
-            print(summary(state))
+            return _collect_cmd()
         elif args.command == "report":
             print(report(_state(args.fresh)))
         elif args.command == "json":

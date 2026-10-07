@@ -762,6 +762,98 @@ class ReportTests(CliHome):
         self.assertIn("0000aaaa", out)
 
 
+class CollectErrorTests(CliHome):
+    """fleet.py collect logs a failed collect to ~/.claude/fleet/collect.err."""
+
+    def err_path(self):
+        return model.fleet_dir() / "collect.err"
+
+    def fail_with(self, exc):
+        with mock.patch.object(fleet.collect, "collect", side_effect=exc):
+            return self.run_main("collect")
+
+    def test_collect_timeout_is_logged_and_exits_nonzero(self):
+        model.save_state(_state())
+        before = model.state_path().read_bytes()
+        code, out, err = self.fail_with(
+            fleet.collect.CollectTimeout("collect exceeded 20.0 s")
+        )
+        self.assertEqual(code, fleet.COLLECT_FAILED)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(out, "")
+        self.assertNotIn("Traceback", err)
+        self.assertIn("CollectTimeout", err)
+        lines = self.err_path().read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 1)
+        ts, cls, msg = lines[0].split("\t")
+        self.assertRegex(ts, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(cls, "CollectTimeout")
+        self.assertEqual(msg, "collect exceeded 20.0 s")
+        self.assertEqual(model.state_path().read_bytes(), before)
+
+    def test_any_exception_is_logged_one_line_per_failure(self):
+        self.fail_with(RuntimeError("first\nsecond line"))
+        code, _, _ = self.fail_with(ValueError("again"))
+        self.assertNotEqual(code, 0)
+        lines = self.err_path().read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            [line.split("\t")[1] for line in lines], ["RuntimeError", "ValueError"]
+        )
+        self.assertEqual(lines[0].split("\t")[2], "first second line")
+
+    def test_save_failure_is_logged(self):
+        with mock.patch.object(model, "save_state", side_effect=OSError("disk full")):
+            code, _, _ = self.run_main("collect")
+        self.assertEqual(code, fleet.COLLECT_FAILED)
+        self.assertIn("OSError\tdisk full", self.err_path().read_text(encoding="utf-8"))
+
+    def test_paths_are_home_relative_or_redacted(self):
+        home = str(self.home)
+        msg = (
+            f"cannot read {home}\\.claude\\projects\\x.jsonl and "
+            f"{home.replace(os.sep, '/')}/.claude/sessions/1.json, "
+            "also C:\\Windows\\Temp\\other.txt, \\\\server\\share\\f and /var/tmp/z"
+        )
+        self.fail_with(OSError(msg))
+        line = self.err_path().read_text(encoding="utf-8")
+        self.assertNotIn(home, line)
+        self.assertNotIn(home.replace(os.sep, "/"), line)
+        self.assertIn("~\\.claude\\projects\\x.jsonl", line)
+        self.assertIn("~/.claude/sessions/1.json", line)
+        for gone in ("Windows", "server", "/var/tmp"):
+            self.assertNotIn(gone, line)
+        self.assertEqual(line.count("<path>"), 3)
+
+    def test_log_is_capped_by_dropping_the_oldest_half(self):
+        path = self.err_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = "".join(f"old-{i:06d}\t{'x' * 100}\n" for i in range(3000))
+        path.write_bytes(old.encode())
+        self.assertGreater(path.stat().st_size, fleet.COLLECT_ERR_MAX)
+        self.fail_with(RuntimeError("newest"))
+        data = path.read_bytes()
+        self.assertLessEqual(len(data), fleet.COLLECT_ERR_MAX // 2 + 200)
+        self.assertGreater(len(data), fleet.COLLECT_ERR_MAX // 2 - 200)
+        text = data.decode()
+        self.assertTrue(text.startswith("old-"), text[:40])
+        self.assertNotIn("old-000000", text)
+        self.assertIn("old-002999", text)
+        self.assertTrue(text.endswith("RuntimeError\tnewest\n"))
+
+    def test_log_write_failure_still_exits_cleanly(self):
+        with mock.patch.object(fleet, "_append_err", side_effect=OSError("ro")):
+            code, _, err = self.fail_with(RuntimeError("boom"))
+        self.assertEqual(code, fleet.COLLECT_FAILED)
+        self.assertNotIn("Traceback", err)
+
+    def test_success_writes_no_log(self):
+        with mock.patch.object(fleet.collect, "collect", return_value=_state()):
+            code, out, err = self.run_main("collect")
+        self.assertEqual(code, 0, err)
+        self.assertIn("collected 3 sessions", out)
+        self.assertFalse(self.err_path().exists())
+
+
 class DashboardTests(CliHome):
     def test_missing_dashboard_module_exits_2(self):
         model.save_state(_state())
