@@ -9,6 +9,13 @@ repos:
       - id: ruff-check  # lint only, no --fix
       - id: ruff-format
         args: [--check]  # report, never rewrite during commit
+  # Reads the executable bit from git's index, so it catches on Windows what ruff
+  # EXE001/EXE002 only reports on Linux (a shebang file not marked +x, or the reverse).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-shebang-scripts-are-executable
+      - id: check-executables-have-shebangs
   - repo: local
     hooks:
       - id: privacy-guard
