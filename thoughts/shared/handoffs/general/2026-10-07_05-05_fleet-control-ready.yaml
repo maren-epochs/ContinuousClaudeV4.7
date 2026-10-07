@@ -1,0 +1,95 @@
+---
+session: general
+date: 2026-10-07
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "keep-list + hook guard + tldr in CI + resume-handoff fixed; fleet-control contract written (not started)"
+now: "Start the fleet-control build: /autonomous on continuum/autonomous/fleet-control/contract.json, premortem first"
+test: "make test; gh run list -R maren-epochs/ContinuousClaudeV4.7 --branch main --limit 1"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  The harness repo builds ~/.claude via install/sync_global.py --apply (user runs it). New today:
+  a user-level keep-list ~/.claude/.ccv47-keep (pinned paths are never written; currently empty -
+  user wants resume-handoff to keep improving through the repo); setup_deps.py keeps an existing
+  pre-commit hook unless --force-hook/FORCE_HOOK=1/-ForceHook; CI (ubuntu-24.04 + windows-2025)
+  installs tldr pinned to TLDR_REV in ci.yml (cached) and runs with CCV_REQUIRE_TLDR=1 so
+  tldr-dependent tests must run; concurrency cancels superseded runs on the same ref.
+  pre-commit now also checks shebang<->executable bit from the git index (ruff EXE001 only fires
+  on Linux). resume-handoff is model-invocable (no disable-model-invocation) so sessions asked in
+  words can load it.
+  Incident (2026-10-07): a session in another project could not see resume-handoff (it was
+  user-only), claimed it was not installed, overwrote ~/.claude/skills/resume-handoff/SKILL.md
+  without reading it, then copied the harness version back. Net content unchanged; bytes restored
+  to the sync-installed form. This is the motivation for fleet-control's guard + inbox.
+  Fleet-control design (user-approved, see contract decisions): data in ~/.claude/fleet and
+  ~/.claude/harness-inbox only (never tracked); live sessions from ~/.claude/sessions/<pid>.json
+  (pid, sessionId, cwd, status busy/idle, version); transcripts ~/.claude/projects/<slug>/<id>.jsonl;
+  global PreToolUse guard blocks tool writes to sync-installed paths and saves the intended change
+  as a proposal; /fleet apply puts it into the REPO with A-D approval + tests + commit, then sync.
+  Hooks need settings.json registration, which the agent may not edit: VAL-811 ships a user-run
+  install/register_hooks.py.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "local suites green; CI main 24d5799 in progress at handoff (previous ef7eac4 cancelled by concurrency, 4cd49cf failed on EXE001 - fixed in 5e72a30)"
+  test_command: "make test"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main == origin/main 24d5799 (+ this handoff); ci-linux and ci-tldr merged and deleted"
+  dirty_files: []
+  warnings: "live ~/.claude not yet synced for 24d5799 (resume-handoff change pending: user runs sync); untracked install/settings.template.json.bak-20261005-reportcheck-if"
+  context: "peak 59% (589K) | resume-handoff +70K, premortem +47K, autonomous +18K"
+
+done_this_session:
+  - task: "VAL-701..704 (options objects, CI, clean-env, privacy terms) + VAL-711..713 (tldr in CI, hook guard, keep-list)"
+    files: [".github/workflows/ci.yml", "install/sync_global.py", "install/setup_deps.py", "tools/privacy_guard.py", "tools/exa_search.py", "tools/ouros_harness.py", "tools/viz/export.py"]
+  - task: "Executable bits + pre-commit shebang checks (5e72a30)"
+    files: [".pre-commit-config.yaml", ".claude/hooks/*", "scripts/*.sh"]
+  - task: "resume-handoff model-invocable + /resume-handoff spelling (24d5799)"
+    files: ["harness/skills/resume-handoff/SKILL.md", "harness/skills/autonomous-research/SKILL.md"]
+  - task: "fleet-control contract (11 assertions, 5 milestones) written; premortem not run"
+    files: ["continuum/autonomous/fleet-control/contract.json (gitignored)"]
+
+decisions:
+  - name: fleet_scope
+    chose: "A fleet view + guardrails; views /fleet + statusline + dashboard; guard block+redirect+inbox; inbox surface + one-command apply"
+    over: ["view only", "full control/steering"]
+    because: "user choices 2026-10-07"
+  - name: fleet_queued
+    chose: "defer usage per project, daily digest, broadcast notices, per-project policy"
+    over: ["building them now"]
+    because: "user A: build current set first"
+  - name: handoff_now
+    chose: "hand off at 59% before the build"
+    over: ["build here"]
+    because: "build estimated +150-250K tokens; would approach the 85% stop"
+
+findings:
+  critical:
+    - "Never commit fleet data or anything naming other projects: the repo is public; fleet state/inbox/audit live under ~/.claude only; the dashboard is a private Artifact."
+    - "Agent cannot edit ~/.claude/settings.json: hook registration must be a user-run script/command."
+    - "Workers stop at 60 turns: split by file ownership, write reports early; give worktree agents an absolute main-repo report path (ignored dirs vanish with auto-removed worktrees)."
+    - "Pre-commit stashes unstaged changes: do not commit while workers edit tracked files in the same tree."
+  useful:
+    - "Background shells get reaped under memory pressure: watch CI with one-shot `gh run view`, not long `gh run watch` in the background."
+    - "gh needs -R maren-epochs/ContinuousClaudeV4.7 (two remotes)."
+
+next:
+  - "User: py -3.13 install/sync_global.py --apply (resume-handoff change)"
+  - "Confirm CI on main 24d5799 is green (gh run list ... --branch main --limit 1)"
+  - "Fleet build: /autonomous continuum/autonomous/fleet-control/contract.json - premortem first, then m1-core (VAL-801 schema, VAL-802 manifest) before parallel waves"
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-07_05-05_fleet-control-ready.yaml in the
+  ccv47-readme-fix repo. First: check CI on main (`gh run list -R maren-epochs/ContinuousClaudeV4.7
+  --branch main --limit 1`) and confirm the user ran `py -3.13 install/sync_global.py --apply`.
+  Then build the fleet view + harness control plane with /autonomous from the saved contract
+  continuum/autonomous/fleet-control/contract.json (11 assertions, decisions recorded in it):
+  premortem first, then m1-core (schema + install manifest) before parallel waves split by file
+  ownership. Fleet data and anything naming other projects stay under ~/.claude, never in tracked
+  files. Hook registration is a user-run script. Ask only via A-D options with a recommendation.
