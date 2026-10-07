@@ -220,7 +220,8 @@ C="$(field command)"
 case "$C" in *Zq9*) r=1;; *) r=0;; esac; check "secret straddling the 4000-char cut is redacted" $r
 [ "${#C}" -le 4003 ] && [ "${C: -3}" = "..." ]; check "long command truncated to 4000 chars + ... (len ${#C})" $?
 
-# pathological 100k-char inputs: in-process audit work (categorize + truncate + redact) < 50 ms each
+# pathological 100k-char inputs: in-process audit work (categorize + truncate + redact), min of 3
+# runs < 150 ms each. Load-tolerant (~25 ms idle) yet a quadratic regex regression takes 5-46 s.
 node --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const { auditCommand } = await import(pathToFileURL(process.argv[1]).href + "?lib");
@@ -252,16 +253,19 @@ const cases = {
 };
 let bad = 0;
 for (const [name, cmd] of Object.entries(cases)) {
-  const t0 = performance.now();
-  const r = auditCommand(cmd, "C:/work/project-A", { users: ["zedtester"], terms: ["acmeproj"] });
-  const ms = performance.now() - t0;
-  const ok = ms < 50 && (r.command === null || r.command.length <= 4003);
+  let ms = Infinity, r;
+  for (let i = 0; i < 3; i++) {
+    const t0 = performance.now();
+    r = auditCommand(cmd, "C:/work/project-A", { users: ["zedtester"], terms: ["acmeproj"] });
+    ms = Math.min(ms, performance.now() - t0);
+  }
+  const ok = ms < 150 && (r.command === null || r.command.length <= 4003);
   if (!ok) bad++;
   console.log(`${ok ? "PASS" : "FAIL"}: 100k ${name}: ${ms.toFixed(1)} ms (len ${cmd.length}, cats ${r.cats.join(",") || "none"})`);
 }
 process.exit(bad ? 1 : 0);
 ' "$HOOK"
-check "100k-char pathological inputs each finish < 50 ms in-process" $?
+check "100k-char pathological inputs each finish < 150 ms in-process (min of 3)" $?
 BIGP="$WORK/big.json" # via a file: a 100k argv exceeds the Windows command-line limit
 node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({session_id:"sess-a1",cwd:"C:/work/project-A",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git push --force " + "-".repeat(100000)}}))' "$BIGP"
 rm -f "$AUDIT"

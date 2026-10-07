@@ -308,7 +308,7 @@ appendFileSync(join(homedir(), '.claude', 'fleet', 'fake-runs.log'), JSON.string
   argv: process.argv.slice(2), cwd: process.cwd(), nobytecode: process.env.PYTHONDONTWRITEBYTECODE || '',
 }) + '\n');
 const ms = Number(process.env.FAKE_COLLECT_MS || 0);
-if (ms) setTimeout(() => {}, ms);
+if (ms) setTimeout(() => appendFileSync(join(homedir(), '.claude', 'fleet', 'fake-done.log'), 'done'), ms);
 EOF
 stop_run() { # <payload> — runs the Stop hook from inside the project dir
   local t0 t1
@@ -319,9 +319,9 @@ stop_run() { # <payload> — runs the Stop hook from inside the project dir
   ERR=$(cat "$ERRFILE" 2>/dev/null || true)
 }
 runs() { if [ -f "$RUNLOG" ]; then grep -c . "$RUNLOG"; else echo 0; fi; }
-wait_runs() { # <n> — up to 10 s for the fake collector to log n runs
+wait_runs() { # <n> — up to 30 s for the fake collector to log n runs
   local i=0
-  while [ "$(runs)" -lt "$1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  while [ "$(runs)" -lt "$1" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
 }
 spay() { printf '{"session_id":"sttstI8x-0000-4000-8000-tail","stop_hook_active":false}'; }
 SIDS="$SIDS sttstI8x"
@@ -362,15 +362,19 @@ stop_run "$(spay)"; wait_runs 4
 age_file "$STATE" 180; age_file "$FLEETDIR/collect.lock" -3600
 stop_run "$(spay)"; wait_runs 5
 [ "$(runs)" -eq 5 ]; r=$?; check "i20 collect.lock mtime in the future -> stale, reclaimed, collect runs (runs: $(runs))" $r
-age_file "$FLEETDIR/collect.lock" 119
+age_file "$FLEETDIR/collect.lock" 110
 stop_run "$(spay)"; sleep 1
-[ "$(runs)" -eq 5 ]; r=$?; check "i21 lock 119 s old -> still held, no collect (runs: $(runs))" $r
+[ "$(runs)" -eq 5 ]; r=$?; check "i21 lock 110 s old (< 2 min) -> still held, no collect (runs: $(runs))" $r
 
 rm -f "$FLEETDIR/collect.lock" "$STATE"
+# Load-tolerant: the hook must return before the collect's done marker exists, not under a wall-clock budget.
+DONE="$FLEETDIR/fake-done.log"; rm -f "$DONE"
 FAKE_COLLECT_MS=3000 stop_run "$(spay)"
-[ "$ELAPSED_MS" -lt 2000 ] && [ "$OUT" = "{}" ]; check "i11 a 3 s collect never blocks the hook (hook took ${ELAPSED_MS} ms)" $?
+[ ! -f "$DONE" ] && [ "$OUT" = "{}" ]; check "i11 a 3 s collect never blocks the hook (returned before collect finished; ${ELAPSED_MS} ms)" $?
 wait_runs 6
-sleep 3 # let it exit: on Windows its cwd pins ~/.claude/fleet against deletion
+i=0; while [ ! -f "$DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+[ -f "$DONE" ]; check "i11b the background collect ran to completion after the hook returned" $?
+sleep 1 # let it exit: on Windows its cwd pins ~/.claude/fleet against deletion
 
 rm -f "$FLEETDIR/collect.lock"
 printf '95' > "$(pctfile sttstI8x)"
