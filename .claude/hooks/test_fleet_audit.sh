@@ -3,6 +3,9 @@
 #   each risky category appends one AuditEvent line to ~/.claude/fleet/audit.jsonl;
 #   non-risky commands (incl. temp-dir deletes, venv installs) append nothing;
 #   secrets / home paths / username / UUIDs / private terms are redacted;
+#   more credential shapes (URL userinfo, curl -u, JSON/YAML, headers, token prefixes,
+#   ConvertTo-SecureString, mysql -p<pass>); truncation before redaction; 100k-char
+#   pathological inputs < 50 ms in-process; unreadable worktree .git keeps the event;
 #   malformed stdin and write failures fail open (exit 0, no stdout);
 #   every line loads with tools/fleet/model.py AuditEvent.from_dict.
 # Self-contained; run from anywhere: bash .claude/hooks/test_fleet_audit.sh
@@ -159,6 +162,113 @@ check "redacted command keeps its shape (got: ${C:0:90})" $r
 [ "$(cats)" = force-push ]; check "redacted command still categorized" $?
 echo "$C" | grep -q "C:/$U/<redacted>/repo"; check "home path keeps its prefix like privacy_guard" $?
 
+# credential shapes beyond KEY=value (m2 review); each line: <command><TAB><secret that must not survive>
+# token prefixes are assembled at runtime so no secret-scanner shape lands in the repo
+pfx() { printf '%s%s' "$1" "$2"; }
+SKL="$(pfx sk_ live_)"; SKT="$(pfx sk_ test_)"; RKT="$(pfx rk_ test_)"; GLP="$(pfx glp at-)"
+NPMP="$(pfx np m_)"; HFP="$(pfx h f_)"; XB="$(pfx xo xb-)"; XP="$(pfx xo xp-)"; XA="$(pfx xo xa-)"
+while IFS="$(printf '\t')" read -r cmd leak; do
+  [ -n "$cmd" ] || continue
+  run "git push --force && $cmd"
+  C="$(field command)"
+  case "$C" in *"$leak"*|'') r=1;; *) r=0;; esac
+  check "redacts: ${cmd:0:60} (got: ${C:18:70})" $r
+done <<EOF
+git clone https://${GLP}AbCdEfGhIjKlMnOpQrSt@gitlab.com/o/r.git	AbCdEfGhIjKl
+git clone https://oauthTok12345678@github.com/o/r.git	oauthTok12345678
+git remote add o https://deploy:Pw0rdSecret9@host.example/r	Pw0rdSecret9
+curl -u admin:s3cretPw https://x.example	s3cretPw
+curl --user admin:s3cretPw2 https://x.example	s3cretPw2
+curl -uadmin:s3cretPw3 https://x.example	s3cretPw3
+curl -d '{"token":"tokJson123"}' https://x.example	tokJson123
+curl -d "{\"password\": \"pwJson456\"}" https://x.example	pwJson456
+curl -d '{"client_secret": "csJson457", "api_key": "akJson458"}' https://x.example	csJson457
+curl -d '{"client_secret": "csJson457", "api_key": "akJson458"}' https://x.example	akJson458
+printf 'api_key: yamlKey789\n' > c.yml	yamlKey789
+printf 'password: yamlPw790\n' > c.yml	yamlPw790
+curl -H "x-api-key: hdrKey111" https://x.example	hdrKey111
+curl -H 'Authorization: token ghAuth222' https://x.example	ghAuth222
+curl -H "X-Auth-Key: authKey333" https://x.example	authKey333
+curl -H "Private-Token: privTok334" https://x.example	privTok334
+stripe ${SKL}AbCdEfGhIjKlMnOpQrStUvWx	AbCdEfGhIjKl
+stripe ${SKT}ZyXwVuTsRqPoNmLkJiHg	ZyXwVuTsRq
+stripe ${RKT}QwErTyUiOpAsDfGh	QwErTyUiOp
+npm config set //r/:_authToken ${NPMP}AbCdEfGhIjKlMnOpQrStUvWxYz0123456789	AbCdEfGhIjKl
+hf auth login --add ${HFP}AbCdEfGhIjKlMnOpQrStUvWxYz01234567	AbCdEfGhIjKl
+slack ${XB}1234567890-abcdefghij	1234567890
+slack ${XP}1234567890-abcdefghij	1234567890
+slack ${XA}1234567890-abcdefghij	1234567890
+\$p = ConvertTo-SecureString "PlainPw444" -AsPlainText -Force	PlainPw444
+\$p = ConvertTo-SecureString -AsPlainText -Force -String 'PlainPw555'	PlainPw555
+\$p = 'PlainPw666' | ConvertTo-SecureString -AsPlainText -Force	PlainPw666
+\$p = ConvertTo-SecureString PlainPw667 -AsPlainText -Force	PlainPw667
+mysql -u root -phunter2secret db	hunter2secret
+mysqldump -pdumpPw777 shop	dumpPw777
+mysql.exe -p'quotedPw778' shop	quotedPw778
+EOF
+run 'git push --force && mysql -p mydb && ssh://git@github.com/o/r && mkdir -p build'
+case "$(field command)" in *"-p mydb"*"git@github.com"*"-p build"*) r=0;; *) r=1;; esac
+check "non-attached -p and ssh git@ user kept (got: $(field command))" $r
+run 'git push -u origin main && git push --force'
+case "$(field command)" in *"-u origin main"*) r=0;; *) r=1;; esac
+check "git push -u origin (no colon) not redacted" $r
+
+# truncation happens before redaction, without leaking a secret that straddles the cut
+PAD="$(node -e 'process.stdout.write("x".repeat(3990))')"
+run "git push --force $PAD TOKEN=Zq9StraddleSecretValue0123456789abcdef"
+C="$(field command)"
+case "$C" in *Zq9*) r=1;; *) r=0;; esac; check "secret straddling the 4000-char cut is redacted" $r
+[ "${#C}" -le 4003 ] && [ "${C: -3}" = "..." ]; check "long command truncated to 4000 chars + ... (len ${#C})" $?
+
+# pathological 100k-char inputs: in-process audit work (categorize + truncate + redact) < 50 ms each
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { auditCommand } = await import(pathToFileURL(process.argv[1]).href + "?lib");
+const N = 100000;
+const cases = {
+  "dash run": "git push -f " + "-".repeat(N),
+  "KEY run": "git push -f " + "KEY".repeat(N / 3),
+  "token flag run": "git push -f --" + "token".repeat(N / 5),
+  "unclosed redirect quotes": "git push -f && " + "x>\x27a ".repeat(N / 5),
+  "open( run": "git push -f && node -e " + "open(".repeat(N / 5),
+  "settings run": "git push -f && " + "settings".repeat(N / 8),
+  "-fff run": "git push -" + "f".repeat(N) + "!",
+  "sudo prefixes": "sudo ".repeat(N / 5) + "git push -f",
+  "unclosed double quote": "git push -f \"" + "a".repeat(N),
+  "assignments": "git push -f " + "a=b ".repeat(N / 4),
+  ":// run": "git push -f " + "://".repeat(N / 3),
+  "userinfo run": "git push -f https://" + "a:".repeat(N / 2),
+  "SecureString run": "git push -f; " + "ConvertTo-SecureString ".repeat(N / 23),
+  "mysql -p run": "git push -f; mysql " + "-p".repeat(N / 2),
+  "json key run": "git push -f " + "\"token\":".repeat(N / 8),
+  "header run": "git push -f -H " + "x-key-".repeat(N / 6),
+  "word run": "git push -f " + "x".repeat(N),
+  "rm path": "rm -rf " + "/a".repeat(N / 2),
+  "settings redirects": "git push -f; " + "echo {} > settings.json; ".repeat(N / 25),
+  "newlines": "git push -f\n".repeat(N / 12),
+  "nested shells": "bash -c \"" + "bash -c ".repeat(N / 8) + "git push -f\"",
+  "user run": "git push -f " + "zedtester".repeat(N / 9),
+  "home path run": "git push -f " + "C:/Users/".repeat(N / 9),
+};
+let bad = 0;
+for (const [name, cmd] of Object.entries(cases)) {
+  const t0 = performance.now();
+  const r = auditCommand(cmd, "C:/work/project-A", { users: ["zedtester"], terms: ["acmeproj"] });
+  const ms = performance.now() - t0;
+  const ok = ms < 50 && (r.command === null || r.command.length <= 4003);
+  if (!ok) bad++;
+  console.log(`${ok ? "PASS" : "FAIL"}: 100k ${name}: ${ms.toFixed(1)} ms (len ${cmd.length}, cats ${r.cats.join(",") || "none"})`);
+}
+process.exit(bad ? 1 : 0);
+' "$HOOK"
+check "100k-char pathological inputs each finish < 50 ms in-process" $?
+BIGP="$WORK/big.json" # via a file: a 100k argv exceeds the Windows command-line limit
+node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({session_id:"sess-a1",cwd:"C:/work/project-A",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git push --force " + "-".repeat(100000)}}))' "$BIGP"
+rm -f "$AUDIT"
+S0=$(node -p 'Date.now()'); OUT=$(env USERNAME=zedtester node "$HOOK" < "$BIGP" 2>/dev/null); RC=$?; S1=$(node -p 'Date.now()')
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "$(cats)" = force-push ] && [ "$(field command | wc -c)" -le 4003 ]
+check "100k-char command end to end: logged, truncated ($((S1 - S0)) ms incl. node spawn)" $?
+
 # placeholder home names are not redacted (privacy_guard PLACEHOLDER_NAMES)
 run "rm -rf C:/$U/user/old"
 case "$(field command)" in *"C:/$U/user/old"*) r=0;; *) r=1;; esac
@@ -184,6 +294,26 @@ rm -rf "$HOME/.claude/fleet"; printf 'x' > "$HOME/.claude/fleet"
 run_raw "$(payload 'git push --force')"
 [ "$RC" -eq 0 ] && [ -z "$OUT" ]; check "unwritable fleet dir: exit 0" $?
 rm -f "$HOME/.claude/fleet"
+
+# an unreadable worktree .git file must not drop the event (terms from it are just skipped)
+WT="$WORK/wt"; mkdir -p "$WT"; printf 'gitdir: ../nowhere/.git/worktrees/wt\n' > "$WT/.git"
+LOCKED=1
+WTN="$WT"
+if [ "$(node -p process.platform)" = win32 ]; then
+  WTN="$(cd "$WT" && pwd -W)"; WTGIT="$WTN/.git"
+  MSYS2_ARG_CONV_EXCL='*' icacls "$WTGIT" /deny "${USERNAME}:(R)" >/dev/null 2>&1 || LOCKED=0
+  unlock() { MSYS2_ARG_CONV_EXCL='*' icacls "$WTGIT" /remove:d "${USERNAME}" >/dev/null 2>&1; }
+else
+  chmod 000 "$WT/.git"; unlock() { chmod 644 "$WT/.git"; }
+fi
+if [ "$LOCKED" -eq 1 ] && ! cat "$WT/.git" >/dev/null 2>&1; then
+  rm -f "$AUDIT"
+  run_raw "$(payload 'git push --force' Bash "$WTN")" USERNAME=zedtester
+  [ "$RC" -eq 0 ] && [ "$(cats)" = force-push ]; check "unreadable worktree .git: event still logged" $?
+else
+  echo "SKIP: cannot make a file unreadable here (running as root?)"
+fi
+unlock
 
 echo
 echo "Results: $PASS passed, $FAIL failed"

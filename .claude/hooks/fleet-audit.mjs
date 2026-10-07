@@ -12,11 +12,19 @@
  *                     Set-Content/Out-File, scripted writeFileSync/WriteAllText/open(..,'w'))
  *   global-install    pip install outside a venv, npm/pnpm -g, yarn global, cargo install,
  *                     winget, choco
- * The command is stored with secrets redacted: credential shapes plus the rules ported
- * from tools/privacy_guard.py (user-home paths, OS username, UUID-shaped ids, private
- * terms from CCV_PRIVACY_TERMS, ~/.claude/privacy-terms and .git/info/privacy-terms).
- * Heuristic, quote-aware tokenizing; nested `bash -c` / `cmd /c` / `pwsh -Command` are
- * analyzed. Never blocks: always exit 0, no stdout; any failure is a note on stderr.
+ * The command is cut to 4000 chars (600-char lookahead so a secret crossing the cut is
+ * still recognized) and then stored with secrets redacted: credential shapes (KEY=v,
+ * --token v, JSON/YAML "token"/"password"/"secret"/"api_key": v, x-*-key / Authorization /
+ * Private-Token headers, Bearer/Basic, URL userinfo, curl -u user:pass, gh*_/github_pat_/
+ * glpat-/sk-/sk_live_/sk_test_/rk_/npm_/hf_/xox*-/AKIA/AIza tokens, ConvertTo-SecureString
+ * plaintext, attached mysql -p<pass>) plus the rules ported from tools/privacy_guard.py
+ * (user-home paths, OS username, UUID-shaped ids, private terms from CCV_PRIVACY_TERMS,
+ * ~/.claude/privacy-terms and .git/info/privacy-terms; an unreadable .git is skipped).
+ * Every regex is bounded (no nested or unbounded quantifiers) and the scanners are linear:
+ * a 100k-char command costs well under 50 ms. Heuristic, quote-aware tokenizing; nested
+ * `bash -c` / `cmd /c` / `pwsh -Command` are analyzed. Never blocks: always exit 0, no
+ * stdout; any failure is a note on stderr. Imported as `fleet-audit.mjs?lib` it only
+ * exports (auditCommand, categorize, redact) for tests.
  */
 import { readFileSync, appendFileSync, mkdirSync, statSync } from 'fs';
 import { homedir, tmpdir, userInfo } from 'os';
@@ -24,6 +32,7 @@ import { join, dirname, resolve, posix } from 'path';
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const MAX_COMMAND = 4000;
+const REDACT_MARGIN = 600;
 const REDACTED = '<redacted>';
 
 // --- redaction (ported from tools/privacy_guard.py) ---
@@ -36,14 +45,79 @@ const HOME_PATTERNS = [
   /(?<![A-Za-z])(?<pre>[A-Za-z]--Users-)(?<name><[^>\s]*>|[A-Za-z0-9_.]+)/gi,
 ];
 const UUID_RE = /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi;
-// Credential shapes; group 1 (when present) is the secret, else the whole match.
+// Credential shapes; group `s` (when present) is the secret, else the whole match.
+// Linear by construction: every quantifier is bounded and none is nested.
+const VAL = String.raw`(?<s>\\"[^"]{0,512}"|"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&]{1,512})`;
+const SECRET_NAME = String.raw`(?:token|password|passwd|secret|api[_-]?key)`;
 const SECRET_PATTERNS = [
-  /\b[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]*\s*=\s*("[^"]*"|'[^']*'|[^\s;|&]+)/dgi,
-  /--?[\w-]*(?:token|password|passwd|secret|api-?key)[\w-]*(?:=|\s+)("[^"]*"|'[^']*'|[^\s;|&]+)/dgi,
-  /\b(?:Bearer|Basic)\s+([A-Za-z0-9._~+/=-]{6,})/dgi,
-  /:\/\/[^\s/:@]+:([^\s/@]+)@/dg,
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})\b/dg,
+  new RegExp(String.raw`[A-Za-z0-9_]{0,64}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]{0,64}[ \t]{0,8}=[ \t]{0,8}${VAL}`, 'dgi'),
+  new RegExp(String.raw`(?<![\w-])--?[\w-]{0,32}${SECRET_NAME}[\w-]{0,32}(?:[=:]|[ \t]{1,8})${VAL}`, 'dgi'),
+  // JSON / YAML key: value (optionally quoted or \"-escaped key)
+  new RegExp(String.raw`(\\?["']?)[\w-]{0,32}${SECRET_NAME}[\w-]{0,32}\1[ \t]{0,8}:[ \t]{0,8}(?<s>\\"[^"]{0,512}"|"[^"]{0,512}"|'[^']{0,512}'|[^\s,;}'"|&]{1,512})`, 'dgi'),
+  // headers: x-*-key/token/auth/secret, Authorization, Private-Token
+  /(?<![\w-])(?:x-[\w-]{0,32}(?:key|token|auth|secret)[\w-]{0,32}|authorization|proxy-authorization|private-token)[ \t]{0,8}:[ \t]{0,8}(?:(?:Bearer|Basic|Token|Digest)[ \t]{1,8})?(?<s>[^\s"']{1,512})/dgi,
+  /\b(?:Bearer|Basic)[ \t]{1,8}(?<s>[A-Za-z0-9._~+/=-]{6,512})/dgi,
+  // URL userinfo (user:pass@ or a bare token@), except the conventional ssh `git@`
+  /:\/\/(?!git@)(?<s>[^\s/@:]{1,256}(?::[^\s/@]{0,256})?)@/dg,
+  // curl -u / --user user:pass (needs the colon, so `git push -u origin` is untouched)
+  /(?<![\w-])(?:-u|--user)(?:[ \t]{1,8}|=)?(?<s>"[^"\s]{0,256}:[^"]{1,256}"|'[^'\s]{0,256}:[^']{1,256}'|[^\s"':;|&]{0,256}:[^\s"';|&]{1,256})/dg,
+  /(?<![A-Za-z0-9_-])(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255}|glpat-[A-Za-z0-9_-]{16,255}|sk-[A-Za-z0-9_-]{16,255}|[sr]k_(?:live|test)_[A-Za-z0-9]{8,255}|npm_[A-Za-z0-9]{20,255}|hf_[A-Za-z0-9]{20,255}|xox[abprs]-[A-Za-z0-9-]{10,255}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,255})/dg,
 ];
+const MYSQL_RE = /(?<![\w.-])(?:mysql|mysqldump|mysqladmin|mysqlimport|mysqlshow|mysqlcheck|mariadb(?:-dump|-admin)?)(?:\.exe)?(?![\w-])/i;
+const MYSQL_PW_RE = /(?<!\S)-p(?<s>"[^"]{0,256}"|'[^']{0,256}'|[^\s;|&]{1,256})/dg;
+const SECURE_RE = /ConvertTo-SecureString(?![\w-])/gi;
+const PS_TOKEN_RE = /[ \t]{1,8}(?<t>-[A-Za-z]{1,32}(?::[^\s;|&]{0,64})?|"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&()]{1,512})/y;
+
+// ConvertTo-SecureString's plaintext: -String value, first positional, or the piped-in value.
+function secureStringSpans(text, spans) {
+  for (const m of text.matchAll(SECURE_RE)) {
+    let pos = m.index + m[0].length;
+    let found = false;
+    let takeNext = false;
+    let skipNext = false;
+    for (let k = 0; k < 8; k++) {
+      PS_TOKEN_RE.lastIndex = pos;
+      const t = PS_TOKEN_RE.exec(text);
+      if (!t) break;
+      pos = PS_TOKEN_RE.lastIndex;
+      const tok = t.groups.t;
+      const start = pos - tok.length;
+      if (skipNext) { skipNext = false; continue; }
+      if (!takeNext && tok.startsWith('-')) {
+        const name = tok.slice(1).split(':')[0].toLowerCase();
+        const inline = tok.includes(':');
+        if ('string'.startsWith(name) && name.length >= 1) {
+          if (inline) { spans.push([start + name.length + 2, pos]); found = true; break; }
+          takeNext = true;
+        } else if (['key', 'securekey'].includes(name) && !inline) skipNext = true;
+        continue;
+      }
+      spans.push([start, pos]);
+      found = true;
+      break;
+    }
+    if (!found) { const v = pipedValue(text, m.index); if (v) spans.push(v); }
+  }
+}
+
+// [start, end) of the value piped into the command at `at` (`'x' | ConvertTo-...`), else null
+function pipedValue(text, at) {
+  const ws = (c) => c === ' ' || c === '\t';
+  let j = at - 1;
+  while (j >= 0 && ws(text[j])) j--;
+  if (text[j] !== '|' || text[j - 1] === '|') return null;
+  j--;
+  while (j >= 0 && ws(text[j])) j--;
+  if (j < 0) return null;
+  const end = j + 1;
+  if (text[j] === '"' || text[j] === "'") {
+    const k = text.lastIndexOf(text[j], j - 1);
+    return k >= 0 && end - k <= 514 ? [k, end] : null;
+  }
+  let k = j;
+  while (k >= 0 && end - k <= 512 && !/[\s|;&]/.test(text[k])) k--;
+  return [k + 1, end];
+}
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -63,7 +137,9 @@ function cloneTermsFile(cwd) {
     try { st = statSync(dotgit); } catch {}
     if (st && st.isDirectory()) return join(dotgit, 'info', 'privacy-terms');
     if (st && st.isFile()) {
-      const m = readFileSync(dotgit, 'utf-8').match(/^gitdir:\s*(.+)$/m);
+      let body = '';
+      try { body = readFileSync(dotgit, 'utf-8'); } catch { return null; }
+      const m = body.match(/^gitdir:\s*(.+)$/m);
       if (!m) return null;
       const gitdir = resolve(dir, m[1].trim());
       let common = gitdir;
@@ -96,14 +172,16 @@ function usernames() {
   return [...seen.values()];
 }
 
-function redact(text, { users = usernames(), terms = [] } = {}) {
+// Redacted text[0, limit); spans are found over all of text so a secret crossing the
+// limit is still recognized (callers pass a lookahead margin past the limit).
+export function redact(text, { users = usernames(), terms = [], limit = text.length } = {}) {
   const spans = [];
+  const secret = (m) => (m.indices.groups && m.indices.groups.s) || m.indices[0];
   for (const re of SECRET_PATTERNS) {
-    for (const m of text.matchAll(re)) {
-      const [s, e] = m.indices[1] || m.indices[0];
-      spans.push([s, e]);
-    }
+    for (const m of text.matchAll(re)) spans.push(secret(m));
   }
+  if (MYSQL_RE.test(text)) for (const m of text.matchAll(MYSQL_PW_RE)) spans.push(secret(m));
+  secureStringSpans(text, spans);
   for (const re of HOME_PATTERNS) {
     for (const m of text.matchAll(re)) {
       const { pre, name } = m.groups;
@@ -120,55 +198,68 @@ function redact(text, { users = usernames(), terms = [] } = {}) {
   spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
   let out = '', pos = 0;
   for (const [s, e] of spans) {
+    if (s >= limit) break;
     if (e <= pos) continue;
     if (s >= pos) { out += text.slice(pos, s) + REDACTED; pos = e; }
     else pos = e; // overlap: extend the redaction already emitted
   }
-  return out + text.slice(pos);
+  return pos < limit ? out + text.slice(pos, limit) : out;
 }
 
 // --- command analysis ---
 
 // Split on unquoted ; && || | & and newlines (not the & of 2>&1 / &>).
+// Index after the quote closing the one at i (`\"` escapes inside double quotes);
+// length + 1 when unclosed, so slice(i + 1, end - 1) is always the quoted body.
+function quoteEnd(s, i) {
+  const q = s[i];
+  for (let j = i + 1; ;) {
+    const k = s.indexOf(q, j);
+    if (k < 0) return s.length + 1;
+    if (q === '"' && s[k - 1] === '\\') { j = k + 1; continue; }
+    return k + 1;
+  }
+}
+
+// Scans jump between special characters (no per-character string building): linear.
 function segments(cmd) {
   const out = [];
-  let cur = '', q = null;
-  for (let i = 0; i < cmd.length; i++) {
+  const re = /[;\n\r|&"']/g;
+  let start = 0, m;
+  while ((m = re.exec(cmd))) {
+    let i = m.index;
     const c = cmd[i];
-    if (q) {
-      cur += c;
-      if (c === q) q = null;
-      else if (c === '\\' && q === '"' && cmd[i + 1] === '"') cur += cmd[++i];
-      continue;
-    }
-    if (c === '"' || c === "'") { q = c; cur += c; continue; }
-    const amp = c === '&' && cmd[i - 1] !== '>' && cmd[i + 1] !== '>';
-    if (c === ';' || c === '\n' || c === '\r' || c === '|' || amp) {
-      if ((c === '|' || c === '&') && cmd[i + 1] === c) i++;
-      out.push(cur); cur = '';
-      continue;
-    }
-    cur += c;
+    if (c === '"' || c === "'") { re.lastIndex = quoteEnd(cmd, i); continue; }
+    if (c === '&' && (cmd[i - 1] === '>' || cmd[i + 1] === '>')) continue;
+    out.push(cmd.slice(start, i));
+    if ((c === '|' || c === '&') && cmd[i + 1] === c) i++;
+    start = re.lastIndex = i + 1;
   }
-  out.push(cur);
+  out.push(cmd.slice(start));
   return out.map((s) => s.trim()).filter(Boolean);
 }
 
 function tokens(seg) {
   const out = [];
-  let cur = '', q = null, has = false;
-  for (let i = 0; i < seg.length; i++) {
+  const re = /["'\s]/g;
+  let cur = '', has = false, pos = 0, m;
+  while ((m = re.exec(seg))) {
+    const i = m.index;
     const c = seg[i];
-    if (q) {
-      if (c === q) q = null;
-      else if (c === '\\' && q === '"' && seg[i + 1] === '"') cur += seg[++i];
-      else cur += c;
+    if (i > pos) { cur += seg.slice(pos, i); has = true; }
+    if (c === '"' || c === "'") {
+      const end = quoteEnd(seg, i);
+      const body = seg.slice(i + 1, end - 1);
+      cur += c === '"' ? body.replace(/\\"/g, '"') : body;
+      has = true;
+      pos = re.lastIndex = end;
       continue;
     }
-    if (c === '"' || c === "'") { q = c; has = true; continue; }
-    if (/\s/.test(c)) { if (has) out.push(cur); cur = ''; has = false; continue; }
-    cur += c; has = true;
+    if (has) out.push(cur);
+    cur = ''; has = false;
+    pos = re.lastIndex = i + 1;
   }
+  if (pos < seg.length) { cur += seg.slice(pos); has = true; }
   if (has) out.push(cur);
   return out;
 }
@@ -177,12 +268,12 @@ const PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'xa
   '&', '.', '!', 'then', 'do', 'else', 'elif']);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'cmd', 'pwsh', 'powershell']);
 const RM = new Set(['rm', 'remove-item', 'ri', 'del', 'erase', 'rd', 'rmdir']);
-const SETTINGS_RE = /settings[\w.-]*\.json/i;
+const SETTINGS_RE = /settings[\w.-]{0,64}\.json/i;
 const WRITE_ANY_ARG = new Set(['rm', 'del', 'erase', 'remove-item', 'ri', 'truncate', 'set-content', 'sc',
   'add-content', 'ac', 'out-file', 'clear-content', 'clc', 'new-item', 'ni', 'touch', 'ln', 'tee', 'tee-object']);
 const COPY_MOVE = new Set(['cp', 'mv', 'copy', 'move', 'copy-item', 'cpi', 'move-item', 'mi', 'install', 'rsync', 'xcopy']);
-const SCRIPT_WRITE_RE = /writeFileSync|writeFile\(|appendFileSync|WriteAllText|WriteAllLines|WriteAllBytes|write_text|write_bytes|json\.dump|open\([^)]*['"][wax]\+?['"]/;
-const REDIRECT_RE = /(?:^|[^<>=-])(?:\d|&)?>>?\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&<>"']+))/g;
+const SCRIPT_WRITE_RE = /writeFileSync|writeFile\(|appendFileSync|WriteAllText|WriteAllLines|WriteAllBytes|write_text|write_bytes|json\.dump|open\([^)]{0,256}['"][wax]\+?['"]/;
+const REDIRECT_RE = /(?:^|[^<>=-])(?:\d|&)?>>?\s{0,8}(?:"([^"]{1,512})"|'([^']{1,512})'|([^\s;|&<>"']{1,512}))/g;
 const NPM_SUBS = new Set(['install', 'i', 'in', 'isntall', 'add', 'update', 'up', 'upgrade', 'uninstall', 'un',
   'remove', 'rm', 'r', 'unlink', 'link', 'ln']);
 const VENV_PATH_RE = /(^|[/\\])\.?venv[/\\]|[/\\]env[/\\](Scripts|bin)[/\\]|virtualenv/i;
@@ -221,7 +312,7 @@ function gitCategories(argv, add) {
   }
   const sub = argv[i], rest = argv.slice(i + 1);
   if (sub === 'push' && rest.some((t) => t === '--force' || t.startsWith('--force-with-lease')
-    || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(t) || (t.length > 1 && t.startsWith('+')))) add('force-push');
+    || (t.length <= 64 && /^-[a-zA-Z]*f[a-zA-Z]*$/.test(t)) || (t.length > 1 && t.startsWith('+')))) add('force-push');
   if (sub === 'filter-branch' || sub === 'filter-repo') add('history-rewrite');
   if (sub === 'reset' && rest.includes('--hard')) add('hard-reset');
 }
@@ -289,13 +380,15 @@ function isSettingsEdit(seg, argv) {
   return SCRIPT_WRITE_RE.test(seg);
 }
 
-function categorize(cmd, cwd, depth = 0) {
+export function categorize(cmd, cwd, depth = 0) {
   const found = [];
   const add = (c) => { if (!found.includes(c)) found.push(c); };
   const ctx = { venv: Boolean(process.env.VIRTUAL_ENV) };
   for (const seg of segments(cmd)) {
-    const argv = tokens(seg);
-    while (argv.length && (PREFIXES.has(argv[0]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[0]))) argv.shift();
+    const words = tokens(seg);
+    let k = 0;
+    while (k < words.length && (PREFIXES.has(words[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k]))) k++;
+    const argv = k ? words.slice(k) : words;
     if (argv.length) argv[0] = argv[0].replace(/^[({]+/, '');
     if (!argv.length || !argv[0]) continue;
     const name = cmdName(argv[0]);
@@ -317,6 +410,17 @@ function categorize(cmd, cwd, depth = 0) {
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 const baseName = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || null;
 
+// Categories + the stored command: cut to MAX_COMMAND before redaction (with a lookahead
+// margin so a secret crossing the cut is still recognized), so redaction cost is bounded.
+export function auditCommand(cmd, cwd, opts = {}) {
+  const cats = categorize(cmd, cwd);
+  if (!cats.length) return { cats, command: null, opts: null };
+  const o = { users: opts.users ?? usernames(), terms: opts.terms ?? loadTerms(cwd) };
+  let command = redact(cmd.slice(0, MAX_COMMAND + REDACT_MARGIN), { ...o, limit: MAX_COMMAND });
+  if (cmd.length > MAX_COMMAND || command.length > MAX_COMMAND) command = `${command.slice(0, MAX_COMMAND)}...`;
+  return { cats, command, opts: o };
+}
+
 function main() {
   let raw = '';
   try { raw = readFileSync(0, 'utf-8'); } catch { return; }
@@ -327,11 +431,8 @@ function main() {
   const cmd = data.tool_input && data.tool_input.command;
   if (typeof cmd !== 'string' || !cmd.trim()) return;
   const cwd = typeof data.cwd === 'string' && data.cwd ? data.cwd : null;
-  const cats = categorize(cmd, cwd);
+  const { cats, command, opts } = auditCommand(cmd, cwd);
   if (!cats.length) return;
-  const opts = { users: usernames(), terms: loadTerms(cwd) };
-  let command = redact(cmd, opts);
-  if (command.length > MAX_COMMAND) command = `${command.slice(0, MAX_COMMAND)}...`;
   const base = {
     ts: nowIso(),
     project: cwd ? redact(baseName(cwd) || '', opts) || null : null,
@@ -343,5 +444,8 @@ function main() {
   appendFileSync(join(dir, 'audit.jsonl'), lines.join(''), 'utf-8');
 }
 
-try { main(); } catch (e) { process.stderr.write(`fleet-audit: ${e && e.message ? e.message : e}\n`); }
+// Imported as `fleet-audit.mjs?lib` (tests): exports only, no stdin read.
+if (new URL(import.meta.url).search !== '?lib') {
+  try { main(); } catch (e) { process.stderr.write(`fleet-audit: ${e && e.message ? e.message : e}\n`); }
+}
 process.exitCode = 0;
