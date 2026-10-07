@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 11 skills, 2 agents, 7 hooks (+ tldr-shim helper).
+Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 9 hooks (+ tldr-shim helper).
 
 ## Skills
 
@@ -17,6 +17,7 @@ Autonomous SDLC pipeline for Claude Code. 11 skills, 2 agents, 7 hooks (+ tldr-s
 | `/resume-handoff` | Session start | Resume from handoff document |
 | `/upgrade-harness` | Extend Ouros | Add new external functions to Ouros sandbox |
 | `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
+| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, HTML dashboard; all via `tools/fleet/fleet.py` |
 
 ## Agents
 
@@ -36,8 +37,10 @@ Autonomous SDLC pipeline for Claude Code. 11 skills, 2 agents, 7 hooks (+ tldr-s
 | `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff; falls back to transcript usage when no statusline ran (headless) |
 | `worker-report-check.mjs` | PostToolUse (settings, unfiltered - the hook self-filters on `reports/*.json` paths, ~80ms otherwise) + SubagentStop (worker frontmatter) | Validates report JSON with `tools/validate_report.py`; PostToolUse feedback reaches a running worker on Edit and Write (verified live; a settings `if: Edit(...)` filter matched Edit only, so it was removed), SubagentStop is a late second check. VALIDATE's schema gate stays binding |
 | `session-start.mjs` | SessionStart (registered for `compact`) | After compaction: injects the newest handoff from the handoff root. startup/clear bloks injection available but not registered (~2K tokens/session) |
+| `harness-guard.mjs` | PreToolUse:Write\|Edit\|MultiEdit\|NotebookEdit\|Bash\|PowerShell (unfiltered) | Denies writes to installed harness files listed in `~/.claude/.ccv47-manifest.json` (file tools and shell write targets; case, `/c/`, `~`, 8.3 and realpath spellings normalized in the hook) and saves the intended change as a proposal in `~/.claude/harness-inbox/`; kept paths allowed; fails open before a managed target is identified. Unfiltered because a live check (CLI 2.1.293) showed a `Write(~/...)` `if` filter misses 8.3 short-name spellings |
+| `fleet-audit.mjs` | PostToolUse:Bash\|PowerShell (unfiltered) | Appends risky shell commands (force-push, history rewrite, hard reset, recursive delete, settings edit, global install) to `~/.claude/fleet/audit.jsonl`, secrets and private terms redacted; never blocks |
 
-Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. Tests: `.claude/hooks/test_*.sh`.
+Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. The two fleet hooks are added by `py -3.13 install/register_hooks.py` (user-run). Tests: `.claude/hooks/test_*.sh`.
 
 **Handoff root (all handoff readers/writers):** project `thoughts/shared/handoffs/` if it exists, else `~/.claude/handoffs/<project-dir-basename>/` — user repos never get a `thoughts/` dir.
 
@@ -55,7 +58,8 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `Makefile` — `setup` (`install/setup_deps.py`: requirements.lock, then plotly-resampler `--no-deps`; Playwright Chromium; pre-commit hook), `test` (pytest + `.claude/hooks/test_*.sh` + `scripts/test_readiness.sh`), `lint`, `format`, `typecheck`, `readiness`, `sync` (writes `~/.claude`). POSIX sh recipes (Git Bash); `PYTHON=` overrides `py -3.13`. Without make: `pwsh install/setup.ps1 -Setup -Test -Lint -Format -Typecheck -Readiness` (no sync switch)
 - `scripts/readiness.sh` — assess project health (27 criteria, 5 levels); a failed tldr sub-analysis is SKIP with a reason, never a fabricated pass. Run it in the FOREGROUND: background shells get reaped under memory pressure (its tldr jobs peak ~0.1 GB, ~30-50 s). tech_debt scans a copy of tracked source minus test files (user decision; other tldr checks still scan tests); `file_grep` passes grep flags before the file arg; `harness/skills/*/SKILL.md` counts as skills. Tests: `scripts/test_readiness.sh`
 - `scripts/readiness-fix.sh` — auto-remediate readiness gaps
-- `install/sync_global.py` — repo -> `~/.claude` install (dry run default, `--apply` writes with backups); `<target>/.ccv47-keep` (untracked, one install-relative path per line, `#` comments) pins paths it never writes, shown as `keep    <path>`
+- `install/sync_global.py` — repo -> `~/.claude` install (dry run default, `--apply` writes with backups); `<target>/.ccv47-keep` (untracked, one install-relative path per line, `#` comments) pins paths it never writes, shown as `keep    <path>`; `--apply` also writes `<target>/.ccv47-manifest.json` (installed path -> repo path + sha256), which harness-guard and fleet drift read
+- `install/register_hooks.py` — user-run, idempotent: adds harness-guard (PreToolUse) and fleet-audit (PostToolUse) to `~/.claude/settings.json` (`--settings PATH`) as absolute `node "<home>/.claude/hooks/<x>.mjs"` commands, backup `settings.json.bak-<ts>-register-hooks` first, `--dry-run` prints the diff; never duplicates, keeps all other keys, order, indent and EOL; refuses without Node 18+ or the installed hook files. Exit 0 done / 1 refused
 
 ## Tool Bridges (in tools/)
 
@@ -87,6 +91,19 @@ Host CPython only (`py -3.13`); install: `tools/requirements-viz.txt` + `py -3.1
 Chrome: kaleido (plotly PNG/SVG) uses an installed Chrome or `kaleido.get_chrome_sync()`; on failure `export.py` falls back to Playwright Chromium. bokeh pinned 3.9.2 (panel 1.9.4 breaks on 3.10.0).
 
 Consumers import `from ccv_viz import ...` after the one-line PRELUDE in `/visualize` (a project's own `tools/` package would shadow `tools.viz`); in-repo `from tools.viz import ...` also works.
+
+## Fleet (tools/fleet)
+
+Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
+
+| Path | What |
+|------|------|
+| `~/.claude/fleet/state.json` | Collected FleetState (sessions, alerts, collisions, drift); refreshed by the existing Stop hook (`auto-handoff-stop.mjs` spawns a detached `fleet.py collect` at most every 2 min; `FLEET_COLLECT=0` disables) and read by the statusline `fleet N live \| M inbox \| K alert` segment |
+| `~/.claude/fleet/audit.jsonl` | fleet-audit events |
+| `~/.claude/harness-inbox/<id>.json` | Proposals: edits harness-guard redirected, plus lessons; `apply` writes into the repo file, never `~/.claude` |
+| `~/.claude/.ccv47-manifest.json` | Install manifest written by `sync_global.py --apply`; no manifest = guard allows everything |
+
+Setup (user-run, both write `~/.claude`): `py -3.13 install/sync_global.py --apply`, then `py -3.13 install/register_hooks.py` (`--dry-run` first), then restart sessions. Shapes: `tools/fleet/schema.md`. Never open `~/.claude/sessions/*.key`.
 
 ## Ouros Sandbox
 

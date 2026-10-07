@@ -37,6 +37,13 @@ It never touches `settings.json`, `CLAUDE.md`, `.env`, or `*.orig` backups. The 
 registered in `settings.json` once, by hand, using absolute `node "<home>/.claude/hooks/<hook>.mjs"`
 commands. The FastEdit PreToolUse hook is left out because FastEdit targets Apple-Silicon MLX.
 
+The fleet hooks (harness-guard PreToolUse, fleet-audit PostToolUse) are registered by
+`py -3.13 install/register_hooks.py` (user-run; `--dry-run` prints the diff, `--settings PATH`
+targets another file). It backs up the file, never duplicates an entry, and registers both
+hooks without `if` filters: a live check against Claude Code 2.1.293 showed `Write(~/...)`
+does not fire for an 8.3 short-name spelling of the same path, while the CLI itself normalized
+`/c/...`, `~`, forward slashes and case before matching.
+
 ### Hook spawn filtering (`if` conditions)
 
 Verified against the [hooks reference](https://code.claude.com/docs/en/hooks): the `matcher`

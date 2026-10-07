@@ -17,7 +17,8 @@ count as drift.
 --apply also writes <target>/.ccv47-manifest.json (atomic replace): every
 installed path -> its repo path, sha256 of the installed bytes, and a kept flag
 (shape: tools/fleet/schema.md). The manifest itself is never a synced file.
-Hook registration in settings.json is a one-time manual step (see README);
+Hook registration in settings.json is a one-time manual step (see README;
+the fleet hooks: `py -3.13 install/register_hooks.py`);
 the dry run only READS settings.json to warn about installed-but-unregistered
 hooks, and compares .ccv47-installed against git HEAD. Those drift checks are
 informational: exit codes stay 1 = file drift, 0 = in sync.
@@ -69,10 +70,12 @@ def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
         (re.compile(r"`tools/ouros_harness\.py`"), f"`{harness}`"),
         (
             re.compile(
-                r"\b(?:py -3\.13|python3?) tools/(validate_report\.py|viz/[\w-]+\.py)"
+                r"\b(?:py -3\.13|python3?) tools/(validate_report\.py|(?:viz|fleet)/[\w-]+\.py)"
             ),
             rf"{python} {dest}/tools/\1",
         ),
+        # /fleet's repo-or-installed prefix: the installed fallback names the real target
+        (re.compile(r'"\$HOME/\.claude/tools/fleet/'), f'"{dest}/tools/fleet/'),
         (
             re.compile(r"\bbash scripts/(readiness(?:-fix)?\.sh)"),
             rf"bash {dest}/scripts/\1",

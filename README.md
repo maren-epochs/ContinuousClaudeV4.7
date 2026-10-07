@@ -6,10 +6,10 @@ Autonomous software development pipeline for Claude Code. Skills orchestrate; wo
 
 ```
 harness/
-  skills/          9 workflow skills
+  skills/          12 workflow skills
   agents/          worker + oracle
 .claude/
-  hooks/           7 hooks + tldr-shim helper (.mjs — cross-platform), test_*.sh per hook
+  hooks/           9 hooks + tldr-shim helper (.mjs — cross-platform), test_*.sh per hook
   settings.json    hook wiring + env config
 scripts/
   readiness.sh     assess project health (27 criteria, 5 levels)
@@ -19,6 +19,10 @@ tools/
   exa_search.py    web search bridge (requires EXA_API_KEY)
   nia_docs.py      documentation search bridge (requires NIA_API_KEY)
   context_ledger.py per-skill main-context token ledger from a session transcript (stdlib)
+  fleet/           cross-session fleet view + harness inbox (stdlib, /fleet)
+install/
+  sync_global.py   repo -> ~/.claude install (+ install manifest)
+  register_hooks.py adds the fleet hooks to ~/.claude/settings.json (user-run)
 ```
 
 **Visualization suite (optional).** `tools/viz/` is a charting toolkit driven by the `/visualize` skill: one palette (`palette.json`) validated by a six-check palette validator, a chart-form recommender that refuses known anti-patterns (dual axes, crowded pies, more than 8 hues), a single house style for matplotlib, seaborn, plotly, altair and bokeh, an exporter that saves any of those plus great_tables and holoviews to PNG/SVG/HTML (Playwright Chromium for HTML rasterizing), and a builder for self-contained interactive pages. It runs on host CPython: `py -3.13 -m pip install -r tools/requirements-viz.txt` then `py -3.13 -m playwright install chromium` (details in `install/README.md`).
@@ -36,6 +40,7 @@ tools/
 | `/create-handoff` | Serialize session context for transfer |
 | `/resume-handoff` | Resume an autonomous session from handoff |
 | `/upgrade-harness` | Add new external functions to the Ouros sandbox |
+| `/fleet` | What every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox: show, apply, reject proposals; file cross-project lessons; HTML dashboard |
 
 ## Hooks
 
@@ -50,6 +55,8 @@ All hooks are plain `.mjs` (ES modules). No build step, no dependencies — Node
 | `auto-handoff-stop.mjs` | Stop | Blocks at 85% context usage to force handoff; uses transcript usage when no statusline ran (headless) |
 | `worker-report-check.mjs` | SubagentStop (worker frontmatter) | Validates the worker's report JSON; advisory — the VALIDATE schema gate is binding |
 | `session-start.mjs` | SessionStart (opt-in) | bloks context on startup/clear; newest handoff after compaction |
+| `harness-guard.mjs` | PreToolUse (file tools + Bash/PowerShell, unfiltered) | Denies writes to installed harness files under `~/.claude` and files the intended change in the harness inbox, naming the repo file to change instead |
+| `fleet-audit.mjs` | PostToolUse (Bash/PowerShell) | Logs risky shell commands (force-push, hard reset, recursive delete, settings edits, global installs) to `~/.claude/fleet/audit.jsonl`, secrets redacted; never blocks |
 
 Hooks that use `tldr` (tldr-read, post-edit-diagnostics) fall through silently if tldr is not installed.
 
@@ -167,6 +174,17 @@ py -3.13 install/sync_global.py --apply    # write into ~/.claude
 ```
 
 This syncs skills, agents, hooks, scripts, and tools into `~/.claude` with repo-relative paths rewritten to absolute ones. See `install/README.md`.
+
+### Fleet (optional)
+
+`/fleet` shows every Claude Code session on the machine and the harness inbox. All of its data stays under `~/.claude`: `fleet/state.json` (collected state, refreshed by the existing Stop hook at most every 2 minutes, shown in the statusline), `fleet/audit.jsonl` (risky shell commands), `harness-inbox/` (proposals: edits harness-guard redirected, lessons) and `.ccv47-manifest.json` (written by `sync_global.py --apply`; harness-guard protects exactly the files it lists). After the global install, register the two fleet hooks once:
+
+```bash
+py -3.13 install/register_hooks.py --dry-run   # show the settings.json diff
+py -3.13 install/register_hooks.py             # back up and write ~/.claude/settings.json
+```
+
+It needs Node 18+, never duplicates entries and keeps everything else in `settings.json`. Restart running sessions afterwards.
 
 ### Then
 

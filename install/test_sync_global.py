@@ -303,6 +303,40 @@ class ToolsInstall(unittest.TestCase):
             ],
         )
 
+    def test_fleet_paths_rewritten_like_viz(self) -> None:
+        """VAL-811: installed skill docs reference the installed tools/fleet/fleet.py."""
+        dest, python = "C:/Users/x/.claude", "py -3.13"
+        rules = rewrites(dest, python)
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            md = Path(td) / "SKILL.md"
+            md.write_text(
+                "py -3.13 tools/fleet/fleet.py report --fresh\n"
+                'F=tools/fleet/fleet.py; [ -f "$F" ] || F="$HOME/.claude/tools/fleet/fleet.py"\n'
+                "py -3.13 tools/fleet/model.py\n",
+                encoding="utf-8",
+            )
+            out = render(md, rules, "\n").decode("utf-8").splitlines()
+        self.assertEqual(
+            out,
+            [
+                f"{python} {dest}/tools/fleet/fleet.py report --fresh",
+                f'F=tools/fleet/fleet.py; [ -f "$F" ] || F="{dest}/tools/fleet/fleet.py"',
+                f"{python} {dest}/tools/fleet/model.py",
+            ],
+        )
+
+    def test_fleet_installed_and_skill_points_at_it(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertTrue((target / "tools" / "fleet" / "fleet.py").is_file())
+            skill = (target / "skills" / "fleet" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("$HOME/.claude/tools/fleet/", skill)
+            self.assertIn(f'F="{target.as_posix()}/tools/fleet/fleet.py"', skill)
+
     def test_user_privacy_terms_never_planned(self) -> None:
         """VAL-704: the sync only writes mapped subtrees, never ~/.claude/privacy-terms."""
         with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
