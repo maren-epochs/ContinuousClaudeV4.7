@@ -446,9 +446,12 @@ class PathContainmentTests(unittest.TestCase):
 
     def test_traversal_session_ids_refused(self):
         rel_outside = os.path.relpath(self.outside.with_suffix(""), self.folder)
+        # Backslash separates paths only on Windows; on POSIX "..\\other-project\\x"
+        # is one (missing) file name inside the folder, not a traversal.
+        backslash = ("..\\other-project\\x",) if sys.platform == "win32" else ()
         for sid in (
             "../other-project/x",
-            "..\\other-project\\x",
+            *backslash,
             f"{self.sid}/../../other-project/x",
             rel_outside,
             str(self.outside.with_suffix("")),

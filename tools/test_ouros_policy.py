@@ -23,6 +23,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -108,6 +109,9 @@ class RunCommandLegitTests(unittest.TestCase):
         self.assertEqual(r.get("returncode"), 0, r)
         self.assertRegex(r["stdout"].strip(), r"^[0-9a-f]{40}$")
 
+    @unittest.skipUnless(
+        sys.platform == "win32", "backslash path separator is Windows-only"
+    )
     def test_grep_quoted_alternation_and_backslash_path(self):
         r = oh._call_run_command(r'grep -cE "def |class " tools\validate_report.py')
         self.assertEqual(r.get("returncode"), 0, r)

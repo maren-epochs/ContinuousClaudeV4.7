@@ -200,7 +200,11 @@ class MatplotlibStyle(unittest.TestCase):
             rc = style.apply_matplotlib("light")
             families = rc["font.family"]
             self.assertEqual(families[0], family)
-            self.assertEqual(families[-1], "DejaVu Sans")
+            # DejaVu Sans is the floor: last, unless it is also the resolved
+            # primary font (no palette font installed, e.g. a bare Linux CI).
+            self.assertIn("DejaVu Sans", families)
+            if family != "DejaVu Sans":
+                self.assertEqual(families[-1], "DejaVu Sans")
             self.assertEqual(len(families), len(set(families)))
             for name in families:
                 self.assertIn(name, installed, name)
