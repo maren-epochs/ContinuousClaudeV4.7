@@ -269,11 +269,21 @@ null
 {"sessions":[null,1,"x",{"alive":"yes","alerts":"x"}],"inbox_count":-3}
 {"sessions":[{"alive":1,"alerts":[1,2]}],"inbox_count":true}
 EOF
-printf '{"sessions":[{"alive":true,"alerts":"x"},{"alive":true,"alerts":[{}]}],"inbox_count":2.5,"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
+printf '{"sessions":[{"alive":true,"alerts":"x"},{"alive":true,"alerts":[{},{"severity":"warn"}]}],"inbox_count":2.5,"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
 run_hook "$(fpay)"
 case "$OUT" in *' | fleet 2 live | 1 alert') r=0;; *) r=1;; esac
 [ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
 check "h11 wrong-typed fields tolerated, non-integer inbox ignored (got: ${OUT:0:160})" $r
+
+# only warn/error alerts count; info (drift after a sync, question turns) and unknown don't
+printf '{"sessions":[{"alive":true,"alerts":[{"severity":"info"},{"severity":"warn"},{"severity":"error"},{"severity":"INFO"},{"severity":"critical"},{"severity":null}]},{"alive":true,"alerts":[{"severity":"info"},{"severity":"info"}]}],"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 2 live | 2 alert') r=0;; *) r=1;; esac
+check "h14 alert count = warn + error only, info/other severities ignored (got: ${OUT:0:160})" $r
+printf '{"sessions":[{"alive":true,"alerts":[{"severity":"info"}]}],"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 1 live') r=0;; *) r=1;; esac
+check "h15 info-only alerts -> no alert part (got: ${OUT:0:160})" $r
 
 rm -f "$STATE"; mkdir -p "$STATE"
 run_hook "$(fpay)"
@@ -345,10 +355,21 @@ age_file "$STATE" 180
 stop_run "$(spay)"; wait_runs 3
 [ "$(runs)" -eq 3 ]; r=$?; check "i10 state.json older than 2 min, no lock -> collect (runs: $(runs))" $r
 
+# future mtimes (clock skew, restored backup) are stale, never 'recent' until the clock catches up
+rm -f "$FLEETDIR/collect.lock"; printf '{}' > "$STATE"; age_file "$STATE" -3600
+stop_run "$(spay)"; wait_runs 4
+[ "$(runs)" -eq 4 ]; r=$?; check "i19 state.json mtime in the future -> not recent, collect runs (runs: $(runs))" $r
+age_file "$STATE" 180; age_file "$FLEETDIR/collect.lock" -3600
+stop_run "$(spay)"; wait_runs 5
+[ "$(runs)" -eq 5 ]; r=$?; check "i20 collect.lock mtime in the future -> stale, reclaimed, collect runs (runs: $(runs))" $r
+age_file "$FLEETDIR/collect.lock" 119
+stop_run "$(spay)"; sleep 1
+[ "$(runs)" -eq 5 ]; r=$?; check "i21 lock 119 s old -> still held, no collect (runs: $(runs))" $r
+
 rm -f "$FLEETDIR/collect.lock" "$STATE"
 FAKE_COLLECT_MS=3000 stop_run "$(spay)"
 [ "$ELAPSED_MS" -lt 2000 ] && [ "$OUT" = "{}" ]; check "i11 a 3 s collect never blocks the hook (hook took ${ELAPSED_MS} ms)" $?
-wait_runs 4
+wait_runs 6
 sleep 3 # let it exit: on Windows its cwd pins ~/.claude/fleet against deletion
 
 rm -f "$FLEETDIR/collect.lock"
@@ -357,7 +378,7 @@ stop_run "$(spay)"
 case "$OUT" in *'"decision":"block"'*'95%'*) r=0;; *) r=1;; esac
 check "i12 context block decision unaffected by the refresh (got: ${OUT:0:80})" $r
 rm -f "$(pctfile sttstI8x)"
-wait_runs 5
+wait_runs 7
 
 rm -f "$FLEETDIR/collect.lock"
 FLEET_PYTHON_T="$ROOT/no-such-python.exe" stop_run "$(spay)"; sleep 0.5

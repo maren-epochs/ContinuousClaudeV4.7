@@ -3,17 +3,19 @@
 Runs after the collector (``collect.collect``) on the sessions it built. Inputs per
 session: ``extra.transcript`` (re-read here, last ``TAIL_BYTES``, with absolute
 line numbers for evidence), ``extra.status_updated_at``/``waiting_for``, ``alive``,
-``status``, ``agents_running``, ``started_at``. Subagent transcripts
-(``<transcript stem>/**/*.jsonl``) modified since the tail began add their writes.
+``status``, ``agents_running``, ``started_at``, ``last_activity``. Subagent
+transcripts (``<transcript stem>/**/*.jsonl``) modified in the last 30 min add their
+writes (newest ``SUBAGENT_MAX_FILES`` only, read once per session).
 
 - collision: two alive sessions wrote the same absolute path in the last 30 min
-  (Write/Edit/MultiEdit/NotebookEdit), or two alive sessions sit in one git repo.
+  (Write/Edit/MultiEdit/NotebookEdit), or two alive sessions active in the last
+  30 min (``last_activity``) sit in one git repo.
 - stuck (alive sessions): an AskUserQuestion, a ``waiting`` status or a prose
   question unanswered for 20 min; the same tool call failing 3+ times in a row at
   the end of the transcript; a subagent stopped at its turn limit with no report.
 - compliance: model not ``claude-opus-5-5`` with no user message naming another
   model; completed turns ending in a question without AskUserQuestion; writes into
-  another project's folder.
+  another project's folder (main and subagent transcripts).
 - drift: installed files whose sha256 differs from the manifest (kept entries
   skipped); one ``stale`` entry instead when the manifest does not match the
   ``.ccv47-installed`` marker; alive sessions started before the last sync.
@@ -30,7 +32,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -40,6 +42,7 @@ from .model import Alert, Collision, DriftEntry, FleetState, Session
 
 TAIL_BYTES = 512 * 1024
 COLLISION_WINDOW_S = 30 * 60
+SUBAGENT_MAX_FILES = 16
 STUCK_WAIT_S = 20 * 60
 REPEAT_FAILS = 3
 STALE_SLACK_S = 60
@@ -72,6 +75,8 @@ _OUTPUT_KEY = re.compile(r'"output"\s*:\s*"([^"]+?\.json)"')
 _REPORT_PATH = re.compile(
     r"(?:[A-Za-z]:)?[\\/][^\s\"'<>|*?]*?reports[\\/][A-Za-z0-9._-]+\.json"
 )
+_UNC = re.compile(r"^[\\/]{2}")
+_TOKEN_STOP = frozenset(" \t\r\n\"'<>|`()[]{},;")
 _QUESTION_TAIL = "*_`)\"'”’]> \t\r\n"
 
 
@@ -195,6 +200,7 @@ class _Scan:
     turns: list[_Turn] = field(default_factory=list)
     model: tuple[str, int] | None = None
     model_named: bool = False
+    subagent_writes: list[_Write] | None = None
 
 
 def _is_prompt(record: Mapping[str, Any]) -> bool:
@@ -304,21 +310,27 @@ def _scan_assistant(
 
 
 def _subagent_writes(scan: _Scan, now: float) -> list[_Write]:
+    """Writes of the newest SUBAGENT_MAX_FILES subagent transcripts touched in the
+    collision window; computed once per scan."""
+    if scan.subagent_writes is not None:
+        return scan.subagent_writes
+    scan.subagent_writes = []
     folder = scan.path.with_suffix("")
     if not folder.is_dir():
-        return []
+        return scan.subagent_writes
     since = now - COLLISION_WINDOW_S
-    if scan.first_ts is not None:
-        since = min(since, scan.first_ts)
-    writes = []
-    for path in sorted(folder.rglob("*.jsonl")):
+    recent: list[tuple[float, Path]] = []
+    for path in folder.rglob("*.jsonl"):
         try:
-            if path.stat().st_mtime < since:
-                continue
+            mtime = path.stat().st_mtime
         except OSError:
             continue
-        writes.extend(_scan(path).writes)
-    return writes
+        if mtime >= since:
+            recent.append((mtime, path))
+    recent.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
+    for _mtime, path in sorted(recent[:SUBAGENT_MAX_FILES], key=lambda i: str(i[1])):
+        scan.subagent_writes.extend(_scan(path).writes)
+    return scan.subagent_writes
 
 
 # --- paths and repos ---
@@ -449,6 +461,9 @@ def check_collisions(
     for i, s in enumerate(sessions):
         if not s.alive or not s.cwd:
             continue
+        active = _epoch(s.last_activity)
+        if active is None or now - active > COLLISION_WINDOW_S:
+            continue
         cwd = _norm(s.cwd, None)
         root = roots.repo(cwd) if cwd else None
         if root:
@@ -465,7 +480,10 @@ def check_collisions(
                 kind="repo",
                 target=root,
                 sessions=[_label(s) for s in members],
-                detail=f"{len(members)} alive sessions work in this repo",
+                detail=(
+                    f"{len(members)} alive sessions active within 30 min work in"
+                    " this repo"
+                ),
             )
         )
         for i in idx:
@@ -507,7 +525,16 @@ def _report_path(prompt: Any) -> str | None:
     match = _OUTPUT_KEY.search(prompt) or _REPORT_PATH.search(prompt)
     if not match:
         return None
-    return (match.group(1) if match.groups() else match.group(0)).replace("\\\\", "\\")
+    if match.groups():
+        raw = token = match.group(1)
+    else:
+        raw, start = match.group(0), match.start()
+        while start > 0 and prompt[start - 1] not in _TOKEN_STOP:
+            start -= 1
+        token = prompt[start : match.end()]
+    if _UNC.match(token):
+        return None  # UNC / device path: a stat would be network I/O
+    return raw.replace("\\\\", "\\")
 
 
 def check_stuck(session: Session, scan: _Scan | None, now: float) -> None:
@@ -617,6 +644,7 @@ def check_compliance(
     roots: _Roots,
     project_roots: Iterable[str],
     claude: str,
+    now: float | None = None,
 ) -> None:
     """Model preference, question turns without AskUserQuestion, foreign writes."""
     if scan is None:
@@ -661,7 +689,8 @@ def check_compliance(
     own = roots.repo(cwd) or cwd
     known = sorted(project_roots, key=len, reverse=True)
     foreign: dict[str, tuple[str, str]] = {}
-    for w in scan.writes:
+    subagent = _subagent_writes(scan, now) if now is not None else []
+    for w in scan.writes + subagent:
         path = _norm(w.raw, session.cwd)
         if path is None or _inside(path, claude) or _inside(path, own):
             continue
@@ -797,14 +826,23 @@ def check_session_sync(
         )
 
 
-def run_checks(state: FleetState, now: float | None = None) -> FleetState:
-    """Add check alerts, ``collisions`` and ``harness.drift`` to ``state``."""
+def run_checks(
+    state: FleetState,
+    now: float | None = None,
+    tick: Callable[[], None] | None = None,
+) -> FleetState:
+    """Add check alerts, ``collisions`` and ``harness.drift`` to ``state``.
+
+    ``tick`` runs before each per-session step (the collector's deadline check).
+    """
     now = time.time() if now is None else now
+    tick = tick or (lambda: None)
     claude = os.path.normpath(str(model.claude_dir()))
     roots = _Roots(str(model.home_dir()))
     sessions = state.sessions
     scans: list[_Scan | None] = []
     for s in sessions:
+        tick()
         transcript = s.extra.get("transcript")
         scans.append(_scan(Path(transcript)) if isinstance(transcript, str) else None)
     project_roots = set()
@@ -818,7 +856,8 @@ def run_checks(state: FleetState, now: float | None = None) -> FleetState:
     state.collisions = check_collisions(sessions, scans, roots, now)
     last_sync = check_drift(state, now)
     for s, scan in zip(sessions, scans, strict=True):
+        tick()
         check_stuck(s, scan, now)
-        check_compliance(s, scan, roots, project_roots, claude)
+        check_compliance(s, scan, roots, project_roots, claude, now)
         check_session_sync(s, scan, last_sync)
     return state

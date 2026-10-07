@@ -141,9 +141,11 @@ function getContinuityInfo(dir) {
 
 // Fleet summary from ~/.claude/fleet/state.json (tools/fleet/schema.md), written by
 // `fleet.py collect` (refreshed from auto-handoff-stop.mjs). Read only, never collects.
-// Live = alive sessions; alerts counted on alive sessions only; '?' = older than 15 min
-// or unknown age. Empty string when the file is absent/unreadable or all counts are 0.
+// Live = alive sessions; alerts counted on alive sessions only, severity warn/error
+// only (info = post-sync drift, question turns); '?' = older than 15 min or unknown
+// age. Empty string when the file is absent/unreadable or all counts are 0.
 const FLEET_STALE_MS = 15 * 60 * 1000;
+const COUNTED = new Set(['warn', 'error']);
 function getFleetInfo() {
   let s;
   try { s = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'state.json'), 'utf-8')); } catch { return ''; }
@@ -153,7 +155,7 @@ function getFleetInfo() {
   for (const x of sessions) {
     if (!x || typeof x !== 'object' || x.alive !== true) continue;
     live++;
-    if (Array.isArray(x.alerts)) alerts += x.alerts.filter(a => a && typeof a === 'object').length;
+    if (Array.isArray(x.alerts)) alerts += x.alerts.filter(a => a && typeof a === 'object' && COUNTED.has(a.severity)).length;
   }
   const inbox = Number.isInteger(s.inbox_count) && s.inbox_count > 0 ? s.inbox_count : 0;
   const counts = [];

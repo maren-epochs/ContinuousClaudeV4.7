@@ -80,7 +80,7 @@ rejects them).
 | `started_at` | str\|null | `startedAt` (epoch ms converted to ISO UTC) |
 | `updated_at` | str\|null | `updatedAt` / `statusUpdatedAt` (epoch ms converted to ISO UTC) |
 | `model` | str\|null | last assistant `message.model` in the transcript |
-| `context_pct` | float\|null | last usage vs window (auto-handoff-stop.mjs rule) |
+| `context_pct` | float\|null | statusline `used_percentage` when fresh, else last transcript usage vs window (see Collector extras) |
 | `last_activity` | str\|null | newest transcript record time |
 | `handoff` | Handoff\|null | newest handoff of the project |
 | `agents_running` | int | spawned minus finished subagents |
@@ -109,6 +109,20 @@ Keys the collector adds outside the declared fields (kept in `extra`):
 | Harness | `dirty`, `synced_at` | manifest `dirty` and `generated_at` |
 | Session | `transcript` | absolute path of the transcript read |
 | Session | `status_updated_at`, `waiting_for` | `statusUpdatedAt` (ISO), `waitingFor` |
+| Session | `context_source` | `statusline` or `transcript`: where `context_pct` came from (absent when null) |
+
+`context_pct` prefers `<tmpdir>/claude-context-pct-<session_id[:8]>.txt`, the integer
+status.mjs writes from Claude Code's `used_percentage`, when its mtime is at most
+10 min old (and not in the future); otherwise the transcript rule of
+auto-handoff-stop.mjs: input + cache tokens of the last main-chain usage vs 200K (1M
+once tokens exceed 200K). The collector never reads `CLAUDE_CONTEXT_WINDOW`: its env is
+the env of whichever session's Stop hook spawned it.
+
+`collect()` raises `CollectTimeout` once 20 s have passed (checked before each session
+and each check step) and a watchdog thread exits the process with code 3 five seconds
+later when a step hangs, so a stuck collect never writes state.json and the last good
+one stays. The Stop hook treats a `collect.lock` older than 2 min (or dated in the
+future) as stale.
 
 The collector reads only `sessions/<digits>.json` (never `*.key`), the last 512 KB of
 each transcript and the last 256 KB of `audit.jsonl`, which it renames to
@@ -119,7 +133,8 @@ each transcript and the last 256 KB of `audit.jsonl`, which it renames to
 
 `collect()` ends with `checks.run_checks(state, now)`, which re-reads each session's
 `extra.transcript` tail (512 KB, absolute line numbers) plus subagent transcripts
-under `<transcript stem>/` modified since that tail began, and fills `collisions`,
+under `<transcript stem>/` modified in the last 30 min (newest 16 files, read once per
+session; their writes count for path collisions and foreign writes), and fills `collisions`,
 `harness.drift` and per-session `alerts`. Evidence is `<transcript path>:<line>`
 (`<pid>.json` when a session has no transcript). Session files and `*.key` are never
 opened; manifest keys that are absolute, contain `..`, sit under `sessions/` or end in
@@ -128,13 +143,13 @@ opened; manifest keys that are absolute, contain `..`, sit under `sessions/` or 
 | Alert kind | Severity | Raised when |
 |------------|----------|-------------|
 | `collision` | `error` | 2+ alive sessions wrote the same absolute path (Write/Edit/MultiEdit/NotebookEdit `file_path`/`notebook_path`; case-insensitive on win32, `/c/` form accepted) within the last 30 min; also a `Collision` of kind `path` |
-| `collision` | `warn` | 2+ alive sessions whose cwd lies in one git root (`.git` dir or file; separate worktrees differ; home is never a root); also a `Collision` of kind `repo` |
+| `collision` | `warn` | 2+ alive sessions with `last_activity` within the last 30 min whose cwd lies in one git root (`.git` dir or file; separate worktrees differ; home is never a root); idle members are neither listed nor alerted; also a `Collision` of kind `repo` |
 | `stuck` | `warn` | alive only: an AskUserQuestion without a result for > 20 min; else status `waiting` for > 20 min (`status_updated_at`, `waiting_for` in the detail); else the final completed turn ends in a question > 20 min old with `agents_running == 0` and status not `busy` |
 | `stuck` | `warn` | alive only: the last 3+ tool calls are the same tool with the same input and every result is `is_error` |
-| `stuck` | `warn` | alive only: an Agent/Task result (`toolUseResult` status/subtype/stop_reason, the result text or a `<task-notification>`) says it stopped at its turn limit, and the report path in its prompt (`"output": "...json"`, else the first `.../reports/<name>.json`) does not exist |
+| `stuck` | `warn` | alive only: an Agent/Task result (`toolUseResult` status/subtype/stop_reason, the result text or a `<task-notification>`) says it stopped at its turn limit, and the report path in its prompt (`"output": "...json"`, else the first `.../reports/<name>.json`) does not exist; UNC/device paths (leading `\\`, `//`) are never stat'ed and count as no path |
 | `compliance` | `warn` | last main-chain assistant model does not start with `claude-opus-5-5` and no user prompt in the tail (system reminders stripped) names another model (`sonnet`, `haiku`, `opus 1-4`, `claude-...`, `/model`) |
 | `compliance` | `info` | completed turns (closed by a user prompt, or the final turn when status is not `busy` and no tool call is pending) whose last block is text ending in `?` with no AskUserQuestion in the turn; one alert with the count, evidence = newest |
-| `compliance` | `warn` | a write outside the session's own root (git root of cwd, else cwd) into another git root or another session's cwd; `~/.claude` excluded; one alert per foreign root |
+| `compliance` | `warn` | a write (main or subagent transcript) outside the session's own root (git root of cwd, else cwd) into another git root or another session's cwd; `~/.claude` excluded; one alert per foreign root |
 | `drift` | `info` | alive session `started_at` before the last sync (max of manifest `generated_at` and the `.ccv47-installed` mtime) |
 
 **Drift entries**: for every non-kept manifest file with a `sha256`, the sha256 of

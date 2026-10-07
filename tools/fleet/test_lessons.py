@@ -62,8 +62,11 @@ class LessonsTestCase(unittest.TestCase):
         no_clone_terms = mock.patch.object(
             lessons.privacy_guard, "default_terms_file", return_value=None
         )
-        no_clone_terms.start()
+        self.cwd_terms = no_clone_terms.start()
         self.addCleanup(no_clone_terms.stop)
+        no_own_repo = mock.patch.object(lessons, "HARNESS_DIR", None)
+        no_own_repo.start()
+        self.addCleanup(no_own_repo.stop)
         self.claude = self.home / ".claude"
         self.claude.mkdir()
         (self.claude / "CLAUDE.md").write_text(
@@ -94,6 +97,48 @@ class LessonsTestCase(unittest.TestCase):
 
     def inbox(self):
         return model.list_proposals(self.claude / "harness-inbox")
+
+
+class ProjectCwdProbe(LessonsTestCase):
+    def write(self, pdir, first_line):
+        record = {"type": "user", "cwd": str(self.repo), "sessionId": "sess-a1"}
+        (pdir / "sess-a1.jsonl").write_text(
+            first_line + "\n" + json.dumps(record) + "\n", encoding="utf-8"
+        )
+
+    def test_cwd_found_within_the_byte_budget(self):
+        pdir = self.project()
+        self.write(pdir, '{"type":"mode"}')
+        self.assertEqual(lessons.project_cwd(pdir), str(self.repo))
+
+    def test_reads_stop_at_the_byte_budget(self):
+        pdir = self.project()
+        self.write(pdir, json.dumps({"type": "summary", "pad": "x" * 500}))
+        with mock.patch.object(lessons, "TRANSCRIPT_PROBE_BYTES", 300):
+            self.assertIsNone(lessons.project_cwd(pdir))
+        self.assertEqual(lessons.project_cwd(pdir), str(self.repo))
+
+    def test_one_huge_line_is_not_read_whole(self):
+        pdir = self.project()
+        self.write(pdir, "x" * (lessons.TRANSCRIPT_PROBE_BYTES * 4))
+        real_open = Path.open
+        reads = []
+
+        def counting_open(path, *args, **kwargs):
+            fh = real_open(path, *args, **kwargs)
+            real_readline = fh.readline
+
+            def readline(size=-1):
+                line = real_readline(size)
+                reads.append(len(line))
+                return line
+
+            fh.readline = readline
+            return fh
+
+        with mock.patch.object(Path, "open", counting_open):
+            self.assertIsNone(lessons.project_cwd(pdir))
+        self.assertLessEqual(sum(reads), lessons.TRANSCRIPT_PROBE_BYTES)
 
 
 class MemoryScan(LessonsTestCase):
@@ -292,6 +337,42 @@ class Masking(LessonsTestCase):
             self.memory(pdir, "m.md", memory_text("m", "feedback", body))
             (p,) = self.run_lessons()
         self.assertNotIn("quokkaworks", (p.change.content or "").lower())
+
+    def git_repo(self, name, term):
+        repo = self.home / "clones" / name
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=30)
+        terms = repo / ".git" / "info" / "privacy-terms"
+        terms.parent.mkdir(parents=True, exist_ok=True)
+        terms.write_text(f"{term}\n", encoding="utf-8")
+        return repo, terms
+
+    def test_clone_terms_come_from_the_manifest_repo_not_cwd(self):
+        repo, terms = self.git_repo("harness", "quokkacorp")
+        model.manifest_path().write_text(
+            json.dumps({"repo": str(repo)}), encoding="utf-8"
+        )
+        found = lessons.clone_terms_file(self.claude)
+        self.assertEqual(found.resolve(), terms.resolve())
+        guard = lessons.default_guard(self.home)
+        self.assertEqual(lessons.mask("ship quokkacorp", guard), f"ship {lessons.MASK}")
+        self.cwd_terms.assert_not_called()
+
+    def test_clone_terms_fall_back_to_the_harness_dir(self):
+        repo, terms = self.git_repo("installed-from", "quokkacorp")
+        with mock.patch.object(lessons, "HARNESS_DIR", repo):
+            found = lessons.clone_terms_file(self.claude)
+        self.assertEqual(found.resolve(), terms.resolve())
+
+    def test_clone_terms_none_without_manifest_or_repo(self):
+        self.assertIsNone(lessons.clone_terms_file(self.claude))
+        model.manifest_path().write_text(
+            json.dumps({"repo": str(self.home / "nowhere")}), encoding="utf-8"
+        )
+        self.assertIsNone(lessons.clone_terms_file(self.claude))
+        model.manifest_path().write_text("not json", encoding="utf-8")
+        self.assertIsNone(lessons.clone_terms_file(self.claude))
+        self.cwd_terms.assert_not_called()
 
     def test_mask_uses_privacy_guard(self):
         guard = lessons.privacy_guard.Guard([], [("Wombat", "t")], [])

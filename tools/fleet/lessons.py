@@ -12,7 +12,9 @@ Dedupe: ``content_hash`` (sha256 of the normalized lesson text) is stored in the
 proposal's ``extra``; any inbox file carrying that hash, in any status and any subdir,
 blocks a new proposal, so a rejected lesson is never proposed again. Private terms are
 masked with ``tools/privacy_guard.py`` (env, ``~/.claude/privacy-terms``, per-clone
-terms file, home paths, usernames, session ids). Stdlib only.
+terms file, home paths, usernames, session ids). The per-clone file is resolved from
+the install manifest's ``repo`` (else the repo holding this file), never the cwd.
+Stdlib only.
 """
 
 from __future__ import annotations
@@ -45,6 +47,9 @@ SHINGLE = 4
 PRESENT_RATIO = 0.6
 TRANSCRIPT_PROBE_FILES = 3
 TRANSCRIPT_PROBE_LINES = 50
+TRANSCRIPT_PROBE_BYTES = 256 * 1024
+GIT_TIMEOUT = 5
+HARNESS_DIR: Path | None = Path(__file__).resolve().parent
 _PATH_TOKEN = re.compile(r"(?<![\w/~.:-])[\w.-]+(?:/[\w.-]+)+")
 
 BloksRunner = Callable[[Path], str | None]
@@ -72,9 +77,46 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(normalize(text).encode("utf-8")).hexdigest()
 
 
+def _git_terms_path(repo: Path) -> Path | None:
+    if not repo.is_dir():
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--git-path", "info/privacy-terms"],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = proc.stdout.strip()
+    if proc.returncode != 0 or not out:
+        return None
+    path = Path(out)
+    return path if path.is_absolute() else repo / path
+
+
+def clone_terms_file(claude: Path) -> Path | None:
+    """Harness clone's ``.git/info/privacy-terms``: manifest ``repo``, else HARNESS_DIR."""
+    try:
+        data = json.loads((claude / ".ccv47-manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    repo = data.get("repo") if isinstance(data, dict) else None
+    candidates = [Path(repo)] if isinstance(repo, str) and repo else []
+    if HARNESS_DIR is not None:
+        candidates.append(HARNESS_DIR)
+    for candidate in candidates:
+        found = _git_terms_path(candidate)
+        if found is not None:
+            return found
+    return None
+
+
 def default_guard(home: Path) -> privacy_guard.Guard:
     """Privacy guard over every privacy_guard term source plus the home dir name."""
-    terms = privacy_guard.load_terms(privacy_guard.default_terms_file())
+    terms = privacy_guard.load_terms(clone_terms_file(home / ".claude"))
     users = privacy_guard.detect_usernames()
     if home.name.lower() not in privacy_guard.SERVICE_ACCOUNTS:
         users.append(home.name)
@@ -136,7 +178,10 @@ def _meta(meta: dict[str, Any], key: str) -> str | None:
 
 
 def project_cwd(project_dir: Path) -> str | None:
-    """Session cwd recorded in the project's newest transcripts, if any."""
+    """Session cwd recorded in the project's newest transcripts, if any.
+
+    Reads at most TRANSCRIPT_PROBE_LINES lines and TRANSCRIPT_PROBE_BYTES per file.
+    """
     try:
         transcripts = sorted(
             project_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
@@ -145,10 +190,15 @@ def project_cwd(project_dir: Path) -> str | None:
         return None
     for path in transcripts[:TRANSCRIPT_PROBE_FILES]:
         try:
-            with path.open(encoding="utf-8", errors="replace") as fh:
-                for _, line in zip(range(TRANSCRIPT_PROBE_LINES), fh, strict=False):
+            with path.open("rb") as fh:
+                budget = TRANSCRIPT_PROBE_BYTES
+                for _ in range(TRANSCRIPT_PROBE_LINES):
+                    line = fh.readline(budget) if budget > 0 else b""
+                    if not line:
+                        break
+                    budget -= len(line)
                     try:
-                        record = json.loads(line)
+                        record = json.loads(line.decode("utf-8", errors="replace"))
                     except ValueError:
                         continue
                     if isinstance(record, dict) and isinstance(record.get("cwd"), str):

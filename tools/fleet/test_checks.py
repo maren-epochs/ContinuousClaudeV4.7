@@ -300,9 +300,11 @@ class CollisionTests(ChecksHome):
     def test_two_alive_sessions_in_the_same_repo(self):
         repo = self.repo("project-A")
         (repo / "sub").mkdir()
-        a = self.sess("sess-a1", repo, [prompt("hi")])
-        b = self.sess("sess-b1", repo / "sub", [prompt("hi")])
-        c = self.sess("sess-c1", self.repo("project-B"), [prompt("hi")])
+        a = self.sess("sess-a1", repo, [prompt("hi")], last_activity=iso(5))
+        b = self.sess("sess-b1", repo / "sub", [prompt("hi")], last_activity=iso(29))
+        c = self.sess(
+            "sess-c1", self.repo("project-B"), [prompt("hi")], last_activity=iso(1)
+        )
         state = self.run_checks(a, b, c)
         repos = [x for x in state.collisions if x.kind == "repo"]
         self.assertEqual(len(repos), 1)
@@ -310,6 +312,88 @@ class CollisionTests(ChecksHome):
         self.assertEqual(os.path.normcase(repos[0].target), os.path.normcase(str(repo)))
         self.assertEqual(len(self.alerts(a, "collision")), 1)
         self.assertEqual(self.alerts(c, "collision"), [])
+
+    def test_repo_collision_needs_two_members_active_within_30_min(self):
+        repo = self.repo("project-A")
+        idle = [
+            self.sess("sess-i1", repo, [prompt("hi")], last_activity=iso(31)),
+            self.sess("sess-i2", repo, [prompt("hi")], kind="bg"),
+            self.sess("sess-i3", repo, [prompt("hi")], last_activity="garbage"),
+        ]
+        one = self.sess("sess-a1", repo, [prompt("hi")], last_activity=iso(2))
+        state = self.run_checks(one, *idle)
+        self.assertEqual(state.collisions, [])
+        for s in (one, *idle):
+            self.assertEqual(self.alerts(s, "collision"), [])
+
+    def test_repo_collision_lists_and_alerts_only_active_members(self):
+        repo = self.repo("project-A")
+        a = self.sess("sess-a1", repo, [prompt("hi")], last_activity=iso(2))
+        b = self.sess("sess-b1", repo, [prompt("hi")], last_activity=iso(10))
+        idle = self.sess("sess-i1", repo, [prompt("hi")], last_activity=iso(600))
+        state = self.run_checks(a, b, idle)
+        repos = [x for x in state.collisions if x.kind == "repo"]
+        self.assertEqual(len(repos), 1)
+        self.assertEqual(sorted(repos[0].sessions), ["sess-a1", "sess-b1"])
+        self.assertEqual(len(self.alerts(a, "collision")), 1)
+        self.assertNotIn("sess-i1", self.alerts(a, "collision")[0].detail)
+        self.assertEqual(self.alerts(idle, "collision"), [])
+
+    def test_path_collisions_ignore_activity(self):
+        a_dir = self.repo("project-A")
+        f = str(a_dir / "x.py")
+        a = self.sess("sess-a1", a_dir, [say(use("w1", "Write", file_path=f), ago=3)])
+        b = self.sess(
+            "sess-b1",
+            self.plain_dir("b"),
+            [say(use("w2", "Write", file_path=f), ago=4)],
+        )
+        state = self.run_checks(a, b)
+        self.assertEqual([c.kind for c in state.collisions], ["path"])
+
+    def test_subagent_reads_are_capped_newest_first(self):
+        a_dir = self.repo("project-A")
+        a = self.sess("sess-a1", a_dir, [prompt("spawn", ago=5)])
+        sub = Path(a.extra["transcript"]).with_suffix("") / "subagents"
+        sub.mkdir(parents=True)
+        cap = checks.SUBAGENT_MAX_FILES
+        files = []
+        for i in range(cap + 5):
+            path = sub / f"agent-{i:02d}.jsonl"
+            rec = say(use(f"w{i}", "Edit", file_path=str(a_dir / f"f{i}.py")), ago=3)
+            path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+            stamp = NOW - 600 + i
+            os.utime(path, (stamp, stamp))
+            files.append(path)
+        with mock.patch.object(checks, "_scan", wraps=checks._scan) as scan:
+            self.run_checks(a)
+        read = [c.args[0] for c in scan.call_args_list if c.args[0].parent == sub]
+        self.assertEqual(sorted(read), sorted(files[-cap:]))
+
+    def test_subagent_window_is_not_widened_to_the_tail_start(self):
+        a_dir = self.repo("project-A")
+        a = self.sess("sess-a1", a_dir, [prompt("long session", ago=300)])
+        sub = Path(a.extra["transcript"]).with_suffix("") / "subagents"
+        sub.mkdir(parents=True)
+        old = sub / "agent-old.jsonl"
+        rec = say(use("w1", "Edit", file_path=str(a_dir / "x.py")), ago=60)
+        old.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+        os.utime(old, (NOW - 3600, NOW - 3600))
+        with mock.patch.object(checks, "_scan", wraps=checks._scan) as scan:
+            self.run_checks(a)
+        self.assertNotIn(old, [c.args[0] for c in scan.call_args_list])
+
+    def test_subagent_writes_are_read_once_per_session(self):
+        a_dir = self.repo("project-A")
+        a = self.sess("sess-a1", a_dir, [prompt("spawn", ago=5)])
+        sub = Path(a.extra["transcript"]).with_suffix("") / "subagents"
+        sub.mkdir(parents=True)
+        rec = say(use("w1", "Edit", file_path=str(a_dir / "x.py")), ago=3)
+        (sub / "agent-1.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+        with mock.patch.object(checks, "_scan", wraps=checks._scan) as scan:
+            self.run_checks(a)
+        read = [c for c in scan.call_args_list if c.args[0].parent == sub]
+        self.assertEqual(len(read), 1)
 
     def test_worktrees_non_repos_and_dead_sessions_are_not_repo_collisions(self):
         main = self.repo("project-A")
@@ -443,6 +527,48 @@ class StuckTests(ChecksHome):
         expected = [self.line_of(s, '"a1"') + 1, self.line_of(s, "a4</tool-use-id>")]
         self.assertEqual(lines, expected)
 
+    def test_unc_report_paths_are_rejected_before_any_stat(self):
+        for raw in (
+            "\\\\server\\share\\reports\\w1.json",
+            "//server/share/reports/w1.json",
+            "\\\\?\\C:\\x\\reports\\w1.json",
+            "/\\server\\share\\reports\\w1.json",
+        ):
+            with self.subTest(raw=raw):
+                self.assertIsNone(checks._report_path(f"write to {raw} now"))
+                self.assertIsNone(checks._report_path(json.dumps({"output": raw})))
+        self.assertEqual(
+            checks._report_path("write to C:/x/reports/w1.json now"),
+            "C:/x/reports/w1.json",
+        )
+        self.assertEqual(
+            checks._report_path('{"output": "C:\\\\x\\\\reports\\\\w1.json"}'),
+            "C:\\x\\reports\\w1.json",
+        )
+
+    def test_unc_report_path_never_reaches_is_file(self):
+        cwd = self.repo("project-A")
+        unc = json.dumps({"output": "\\\\server\\share\\reports\\w1.json"})
+        limit = {"status": "error_max_turns", "content": []}
+        records = [
+            prompt("go", ago=50),
+            say(use("a1", "Agent", prompt=unc), ago=49),
+            result("a1", ago=40, content="partial", meta=limit),
+        ]
+        s = self.sess("sess-a1", cwd, records)
+        real = Path.is_file
+
+        def guarded(path):
+            if str(path).startswith(("\\\\", "//")):
+                raise AssertionError(f"UNC stat: {path}")
+            return real(path)
+
+        with mock.patch.object(checks.Path, "is_file", guarded):
+            self.run_checks(s)
+        found = [a for a in self.alerts(s, "stuck") if "turn limit" in a.detail]
+        self.assertEqual(len(found), 1)
+        self.assertNotIn("server", found[0].detail)
+
 
 def s_lines(session):
     text_ = Path(session.extra["transcript"]).read_text(encoding="utf-8")
@@ -534,6 +660,22 @@ class ComplianceTests(ChecksHome):
         self.assertEqual(len(found), 1, s.alerts)
         self.assertIn("project-B", found[0].detail)
         self.assertEqual(found[0].evidence, f"{s.extra['transcript']}:3")
+
+    def test_subagent_write_into_another_projects_folder(self):
+        a_dir = self.repo("project-A")
+        b_dir = self.repo("project-B")
+        s = self.sess("sess-a1", a_dir, [prompt("spawn", ago=10)])
+        sub = Path(s.extra["transcript"]).with_suffix("") / "subagents"
+        sub.mkdir(parents=True)
+        rec = say(
+            use("w1", "Edit", file_path=str(b_dir / "theirs.py")), ago=3, sidechain=True
+        )
+        (sub / "agent-1.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+        self.run_checks(s)
+        found = [a for a in self.alerts(s, "compliance") if "project" in a.detail]
+        self.assertEqual(len(found), 1, s.alerts)
+        self.assertIn("project-B", found[0].detail)
+        self.assertEqual(found[0].evidence, f"{sub / 'agent-1.jsonl'}:1")
 
     def test_write_into_a_session_folder_without_git(self):
         a_dir = self.repo("project-A")
@@ -694,7 +836,7 @@ class CollectWiringTests(ChecksHome):
             (self.claude / "sessions" / f"{pid}.json").write_text(
                 json.dumps(data), encoding="utf-8"
             )
-            self.transcript(sid, [prompt("hi"), say(text("ok"))], cwd)
+            self.transcript(sid, [prompt("hi"), say(text("ok"), ago=5)], cwd)
         self.put_manifest()
         state = collect.collect()
         kinds = sorted({a.kind for s in state.sessions for a in s.alerts})

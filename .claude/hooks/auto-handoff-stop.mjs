@@ -10,8 +10,11 @@
  *
  * Also starts a background `fleet.py collect` (refreshes ~/.claude/fleet/state.json
  * for the statusline fleet segment): detached, cwd ~/.claude/fleet, at most once per
- * 2 min via collect.lock (exclusive create; mtime = last start). FLEET_COLLECT=0
- * disables; FLEET_PYTHON / FLEET_PY override the interpreter / script (tests).
+ * 2 min via collect.lock (exclusive create; mtime = last start; a lock older than
+ * 2 min or dated in the future is stale and reclaimed). collect.py aborts itself
+ * after 20 s (watchdog hard exit 5 s later), so reclaimed locks never pile up hung
+ * collectors. FLEET_COLLECT=0 disables; FLEET_PYTHON / FLEET_PY override the
+ * interpreter / script (tests).
  */
 import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, writeSync, mkdirSync, renameSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
@@ -101,7 +104,8 @@ function refreshFleet() {
   if (!script || !existsSync(script)) return;
   const dir = join(homedir(), '.claude', 'fleet');
   const now = Date.now();
-  const recent = (p) => { try { return now - statSync(p).mtimeMs < FLEET_MIN_INTERVAL_MS; } catch { return false; } };
+  // A future mtime (clock skew, restored backup) is stale, not recent.
+  const recent = (p) => { try { const age = now - statSync(p).mtimeMs; return age >= 0 && age < FLEET_MIN_INTERVAL_MS; } catch { return false; } };
   if (recent(join(dir, 'state.json'))) return;
   mkdirSync(dir, { recursive: true });
   const lock = join(dir, 'collect.lock');

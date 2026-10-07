@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -22,7 +23,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from tools.fleet import collect, model
-from tools.fleet.model import Machine, Proposal
+from tools.fleet.model import FleetState, Machine, Proposal
 
 FLEET_PY = Path(REPO_ROOT) / "tools" / "fleet" / "fleet.py"
 KEY_SECRET = "KEY-SECRET-BYTES-7f3a9c"
@@ -107,6 +108,18 @@ class FleetHome(unittest.TestCase):
         git = mock.patch.object(collect, "git_head", return_value=None)
         git.start()
         self.addCleanup(git.stop)
+        self.pct_tmp = self.root / "tmp"
+        self.pct_tmp.mkdir()
+        pct = mock.patch.object(collect, "pct_dir", return_value=self.pct_tmp)
+        pct.start()
+        self.addCleanup(pct.stop)
+
+    def pct_file(self, sid8, value, age_s=0.0) -> Path:
+        path = self.pct_tmp / f"claude-context-pct-{sid8}.txt"
+        path.write_text(value, encoding="utf-8")
+        stamp = time.time() - age_s
+        os.utime(path, (stamp, stamp))
+        return path
 
     def project(self, name="project-A") -> Path:
         cwd = self.root / "work" / name
@@ -311,12 +324,84 @@ class TranscriptTests(FleetHome):
         self.assertEqual(collect.context_pct({"input_tokens": "9"}, {}), 0.0)
         self.assertIsNone(collect.context_pct("nope", {}))
 
-    def test_context_window_env_from_os(self):
+    def test_spawning_session_window_env_is_never_applied(self):
         cwd = self.project()
         self.session(4242, "sess-a1", cwd)
         self.transcript(cwd, "sess-a1", [assistant("m", usage(100000))])
         with mock.patch.dict(os.environ, {"CLAUDE_CONTEXT_WINDOW": "1000000"}):
-            self.assertEqual(self.collect_one().context_pct, 10.0)
+            s = self.collect_one()
+        self.assertEqual(s.context_pct, 50.0)
+        self.assertEqual(s.extra["context_source"], "transcript")
+
+
+class ContextSourceTests(FleetHome):
+    """Fresh statusline pct file (status.mjs used_percentage) beats the transcript."""
+
+    SID = "abcdefgh-0000-4000-8000-tail"
+
+    def one_m_session(self):
+        cwd = self.project()
+        self.session(4242, self.SID, cwd)
+        # 172K tokens: the transcript rule assumes a 200K window -> 86%.
+        self.transcript(cwd, self.SID, [assistant("m", usage(2000, 170000))])
+
+    def test_fresh_statusline_pct_is_preferred(self):
+        self.one_m_session()
+        self.pct_file("abcdefgh", "17", age_s=30)
+        s = self.collect_one()
+        self.assertEqual(s.context_pct, 17.0)
+        self.assertEqual(s.extra["context_source"], "statusline")
+
+    def test_stale_pct_file_falls_back_to_transcript(self):
+        self.one_m_session()
+        self.pct_file("abcdefgh", "17", age_s=collect.PCT_FRESH_S + 60)
+        s = self.collect_one()
+        self.assertEqual(s.context_pct, 86.0)
+        self.assertEqual(s.extra["context_source"], "transcript")
+
+    def test_future_mtime_pct_file_is_not_fresh(self):
+        self.one_m_session()
+        self.pct_file("abcdefgh", "17", age_s=-3600)
+        self.assertEqual(self.collect_one().extra["context_source"], "transcript")
+
+    def test_pct_file_is_keyed_by_the_8_char_session_prefix(self):
+        self.one_m_session()
+        self.pct_file("abcdefgX", "17")
+        self.assertEqual(self.collect_one().context_pct, 86.0)
+
+    def test_garbage_pct_file_falls_back(self):
+        self.one_m_session()
+        for body in ("", "x", "NaN", "1e3", "-4", "12.5"):
+            with self.subTest(body=body):
+                self.pct_file("abcdefgh", body)
+                self.assertEqual(self.collect_one().context_pct, 86.0)
+
+    def test_pct_is_capped_at_100(self):
+        self.one_m_session()
+        self.pct_file("abcdefgh", "250")
+        self.assertEqual(self.collect_one().context_pct, 100.0)
+
+    def test_statusline_pct_without_transcript(self):
+        self.session(4242, self.SID, self.project())
+        self.pct_file("abcdefgh", "42")
+        s = self.collect_one()
+        self.assertEqual(s.context_pct, 42.0)
+        self.assertEqual(s.extra["context_source"], "statusline")
+
+    def test_no_source_records_nothing(self):
+        self.session(4242, self.SID, self.project())
+        s = self.collect_one()
+        self.assertIsNone(s.context_pct)
+        self.assertNotIn("context_source", s.extra)
+
+    def test_statusline_pct_direct(self):
+        now = time.time()
+        self.pct_file("abcdefgh", "33\n", age_s=5)
+        self.assertEqual(collect.statusline_pct("abcdefgh-1", now, self.pct_tmp), 33.0)
+        self.assertIsNone(collect.statusline_pct("../../x", now, self.pct_tmp))
+        self.assertIsNone(collect.statusline_pct(None, now, self.pct_tmp))
+        self.assertIsNone(collect.statusline_pct("zzzzzzzz", now, self.pct_tmp))
+        self.assertEqual(collect.PCT_FRESH_S, 600)
 
     def test_agents_running_is_spawned_minus_finished(self):
         cwd = self.project()
@@ -646,6 +731,76 @@ class StateTests(FleetHome):
         elapsed = time.perf_counter() - t
         self.assertEqual(len(state.sessions), 15)
         self.assertLess(elapsed, 5.0)
+
+
+class DeadlineTests(FleetHome):
+    """collect aborts after COLLECT_DEADLINE_S and never replaces a good state.json."""
+
+    def good_state(self) -> str:
+        path = model.save_state(FleetState(generated_at="2026-01-01T00:00:00Z"))
+        return path.read_text(encoding="utf-8")
+
+    def test_default_deadline_is_20_s(self):
+        self.assertEqual(collect.COLLECT_DEADLINE_S, 20.0)
+
+    def test_slow_collect_raises_and_keeps_last_good_state(self):
+        before = self.good_state()
+        for i in range(5):
+            self.session(1000 + i, f"sess-{i}", self.project(f"project-{i}"))
+        real = collect.build_session
+
+        def slow(*args, **kwargs):
+            time.sleep(0.1)
+            return real(*args, **kwargs)
+
+        with (
+            mock.patch.object(collect, "build_session", side_effect=slow),
+            mock.patch.object(collect, "_hard_exit") as hard,
+            self.assertRaises(collect.CollectTimeout),
+        ):
+            collect.collect_and_save(deadline_s=0.15)
+        hard.assert_not_called()
+        self.assertEqual(model.state_path().read_text(encoding="utf-8"), before)
+
+    def test_watchdog_is_cancelled_after_a_normal_collect(self):
+        self.session(4242)
+        with mock.patch.object(collect, "_hard_exit") as hard:
+            collect.collect(deadline_s=5)
+            for t in threading.enumerate():
+                if t.name == collect.WATCHDOG_NAME:
+                    t.join(2)
+            alive = [
+                t
+                for t in threading.enumerate()
+                if t.name == collect.WATCHDOG_NAME and t.is_alive()
+            ]
+        self.assertEqual(alive, [])
+        hard.assert_not_called()
+
+    def test_hung_collect_is_hard_killed_by_the_watchdog(self):
+        before = self.good_state()
+        script = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {REPO_ROOT!r})\n"
+            "from tools.fleet import collect\n"
+            "collect.WATCHDOG_GRACE_S = 0.1\n"
+            "collect.collect_sessions = lambda *a, **k: time.sleep(60)\n"
+            "collect.collect_and_save(deadline_s=0.3)\n"
+            "print('not reached')\n"
+        )
+        t = time.perf_counter()
+        out = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=dict(os.environ),
+            timeout=30,
+        )
+        elapsed = time.perf_counter() - t
+        self.assertEqual(out.returncode, collect.WATCHDOG_EXIT, out.stderr)
+        self.assertNotIn("not reached", out.stdout)
+        self.assertLess(elapsed, 15)
+        self.assertEqual(model.state_path().read_text(encoding="utf-8"), before)
 
 
 class MachineTests(unittest.TestCase):

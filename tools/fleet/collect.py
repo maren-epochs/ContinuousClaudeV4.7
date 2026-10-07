@@ -5,8 +5,11 @@ Sources, all read-only except the audit rotation and state.json:
 - ``sessions/<digits>.json`` only; ``<pid>.<hash>.key`` files are secrets and are
   never opened (the file-name regex admits digits + ``.json`` and nothing else).
 - each session's transcript ``projects/<slug>/<sessionId>.jsonl``, last
-  ``TAIL_BYTES`` only: model, context % (auto-handoff-stop.mjs rule), last
-  activity, running subagents.
+  ``TAIL_BYTES`` only: model, context % (auto-handoff-stop.mjs transcript rule,
+  window never taken from this process's env), last activity, running subagents.
+- the statusline pct file ``<tmpdir>/claude-context-pct-<sessionId[:8]>.txt``
+  (status.mjs, Claude Code's ``used_percentage``): preferred for context % when
+  its mtime is under ``PCT_FRESH_S`` old.
 - the handoff root (project ``thoughts/shared/handoffs`` else
   ``~/.claude/handoffs/<basename>``), the install manifest, the inbox, the tail of
   ``fleet/audit.jsonl`` (rotated to ``audit.jsonl.1`` past ``AUDIT_ROTATE_BYTES``).
@@ -15,6 +18,9 @@ Claude Code's files are undocumented: every key is optional, wrong types become
 null, and vanished keys raise a ``schema_unknown`` alert instead of an error.
 ``collect()`` ends with ``checks.run_checks`` (alerts, collisions, per-file
 drift); the harness summary here is HEAD vs the sha recorded at the last sync.
+It raises ``CollectTimeout`` past ``COLLECT_DEADLINE_S`` (checked between steps) and a
+watchdog thread hard-exits the process ``WATCHDOG_GRACE_S`` later when a step hangs
+(e.g. a network stat), so a stuck collect never replaces the last good state.json.
 """
 
 from __future__ import annotations
@@ -27,8 +33,10 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +73,18 @@ HANDOFF_SUFFIXES = (".yaml", ".yml", ".md")
 _NOTIFICATION = re.compile(r"<task-notification>.*?</task-notification>", re.DOTALL)
 _TOOL_USE_ID = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 _STATUS = re.compile(r"<status>([^<]+)</status>")
+PCT_FRESH_S = 600
+PCT_SKEW_S = 5
+_PCT_TEXT = re.compile(r"\d{1,6}")
+COLLECT_DEADLINE_S = 20.0
+WATCHDOG_GRACE_S = 5.0
+WATCHDOG_EXIT = 3
+WATCHDOG_NAME = "fleet-collect-watchdog"
+_hard_exit = os._exit
+
+
+class CollectTimeout(Exception):
+    """collect() ran past its deadline; nothing was saved."""
 
 
 # --- small helpers ---
@@ -272,6 +292,30 @@ def context_pct(usage: Any, env: Mapping[str, str]) -> float | None:
     if window <= 0:
         window = 1_000_000 if tokens > 200_000 else 200_000
     return float(min(100, tokens * 100 // window))
+
+
+def pct_dir() -> Path:
+    """Directory status.mjs writes its pct files to (Node ``os.tmpdir()``)."""
+    return Path(tempfile.gettempdir())
+
+
+def statusline_pct(
+    session_id: str | None, now: float, directory: Path | None = None
+) -> float | None:
+    """Context % from status.mjs's pct file when fresh (< PCT_FRESH_S), else None."""
+    if not session_id or not SAFE_SESSION_ID.fullmatch(session_id):
+        return None
+    path = (directory or pct_dir()) / f"claude-context-pct-{session_id[:8]}.txt"
+    try:
+        age = now - path.stat().st_mtime
+    except OSError:
+        return None
+    if age < -PCT_SKEW_S or age > PCT_FRESH_S:
+        return None
+    text = read_text(path, 64).strip()
+    if not _PCT_TEXT.fullmatch(text):
+        return None
+    return float(min(100, int(text)))
 
 
 def transcript_path(
@@ -549,10 +593,19 @@ def build_session(
             )
         )
     transcript = transcript_path(projects, cwd, sid)
+    live_pct = statusline_pct(sid, now)
+    if live_pct is not None:
+        session.context_pct = live_pct
+        session.extra["context_source"] = "statusline"
     if transcript is not None:
-        info = parse_transcript(transcript, os.environ)
+        # Empty env: CLAUDE_CONTEXT_WINDOW here belongs to whichever session's Stop
+        # hook spawned this collect, not to the session being parsed.
+        info = parse_transcript(transcript, {})
         session.model = info["model"]
-        session.context_pct = _finite(info["context_pct"])
+        if live_pct is None:
+            session.context_pct = _finite(info["context_pct"])
+            if session.context_pct is not None:
+                session.extra["context_source"] = "transcript"
         session.last_activity = info["last_activity"]
         session.agents_running = info["agents_running"]
         session.extra["transcript"] = str(transcript)
@@ -575,8 +628,16 @@ def build_session(
     return session
 
 
-def collect_sessions(claude: Path, now: float, warnings: list[str]) -> list[Session]:
-    """Every ``sessions/<digits>.json``, alive first, newest start first."""
+def collect_sessions(
+    claude: Path,
+    now: float,
+    warnings: list[str],
+    tick: Callable[[], None] | None = None,
+) -> list[Session]:
+    """Every ``sessions/<digits>.json``, alive first, newest start first.
+
+    ``tick`` runs before each session file (deadline check).
+    """
     directory = claude / "sessions"
     try:
         names = sorted(e.name for e in os.scandir(directory) if e.is_file())
@@ -588,6 +649,8 @@ def collect_sessions(claude: Path, now: float, warnings: list[str]) -> list[Sess
     for name in names:
         if not SESSION_FILE.fullmatch(name):
             continue
+        if tick is not None:
+            tick()
         path = directory / name
         data = _load_json(path, warnings, name)
         if not isinstance(data, Mapping):
@@ -600,34 +663,68 @@ def collect_sessions(claude: Path, now: float, warnings: list[str]) -> list[Sess
     return sessions
 
 
-def collect() -> FleetState:
-    """Build a FleetState from the current ``~/.claude``; never raises on bad data."""
+def _watchdog_fire() -> None:
+    try:
+        sys.stderr.write("fleet collect: deadline exceeded, aborted\n")
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+    _hard_exit(WATCHDOG_EXIT)
+
+
+def collect(deadline_s: float | None = COLLECT_DEADLINE_S) -> FleetState:
+    """Build a FleetState from the current ``~/.claude``; never raises on bad data.
+
+    Raises ``CollectTimeout`` once ``deadline_s`` has passed (None: no deadline); a
+    step still hung ``WATCHDOG_GRACE_S`` later hard-exits the process.
+    """
     started = time.perf_counter()
-    now = time.time()
-    claude = model.claude_dir()
-    warnings: list[str] = []
-    sessions = collect_sessions(claude, now, warnings)
-    audit = model.audit_path()
-    recent = audit_recent(audit)
-    rotate_audit(audit, warnings)
-    memory = machine_memory()
-    state = FleetState(
-        generated_at=model.now_iso(),
-        harness=harness_info(warnings),
-        sessions=sessions,
-        inbox_count=inbox_count(),
-        audit_recent=recent,
-        machine=Machine(
-            mem_total_gb=_finite(memory.mem_total_gb),
-            mem_free_gb=_finite(memory.mem_free_gb),
-        ),
-    )
-    checks.run_checks(state, now)
+    expires = None if deadline_s is None else started + deadline_s
+
+    def tick() -> None:
+        if expires is not None and time.perf_counter() > expires:
+            raise CollectTimeout(f"collect exceeded {deadline_s} s")
+
+    watchdog = None
+    if deadline_s is not None:
+        watchdog = threading.Timer(deadline_s + WATCHDOG_GRACE_S, _watchdog_fire)
+        watchdog.name = WATCHDOG_NAME
+        watchdog.daemon = True
+        watchdog.start()
+    try:
+        now = time.time()
+        claude = model.claude_dir()
+        warnings: list[str] = []
+        sessions = collect_sessions(claude, now, warnings, tick)
+        tick()
+        audit = model.audit_path()
+        recent = audit_recent(audit)
+        rotate_audit(audit, warnings)
+        memory = machine_memory()
+        state = FleetState(
+            generated_at=model.now_iso(),
+            harness=harness_info(warnings),
+            sessions=sessions,
+            inbox_count=inbox_count(),
+            audit_recent=recent,
+            machine=Machine(
+                mem_total_gb=_finite(memory.mem_total_gb),
+                mem_free_gb=_finite(memory.mem_free_gb),
+            ),
+        )
+        tick()
+        checks.run_checks(state, now, tick)
+        tick()
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
     state.extra["warnings"] = warnings
     state.extra["collect_s"] = round(time.perf_counter() - started, 3)
     return state
 
 
-def collect_and_save(path: Path | None = None) -> Path:
+def collect_and_save(
+    path: Path | None = None, deadline_s: float | None = COLLECT_DEADLINE_S
+) -> Path:
     """Collect and write state.json atomically; returns the path."""
-    return model.save_state(collect(), path)
+    return model.save_state(collect(deadline_s), path)
