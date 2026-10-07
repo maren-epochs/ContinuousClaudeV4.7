@@ -14,9 +14,12 @@ import contextlib
 import io
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.request
 from unittest import mock
@@ -222,15 +225,71 @@ class PlotlyBranch(ExportCase):
             layout={"width": 400, "height": 300},
         )
 
+    def backend(self, res, fmt):
+        """The one note recording which backend produced (or skipped) `fmt`."""
+        notes = [n for n in res["notes"] if n.startswith(f"plotly {fmt} ")]
+        self.assertEqual(len(notes), 1, res["notes"])
+        return notes[0]
+
     def test_png_svg_html(self):
+        """Each format is checked on its own: kaleido may fail for one format
+        (Chrome contention, unclean kill) and succeed for the other."""
         res = self.save_quiet(self.fig(), "plotly")
-        self.assert_png(res["png"])
         self.assert_file(res["html"], "plotly")
-        joined = " ".join(res["notes"])
-        if "kaleido" in joined and "fallback" not in joined:
+        self.assert_png(res["png"])  # kaleido or the render_html fallback
+        self.assertRegex(
+            self.backend(res, "png"),
+            r"^plotly png via (kaleido|render_html fallback \(kaleido failed: .*\))$",
+        )
+        svg_note = self.backend(res, "svg")
+        if svg_note == "plotly svg via kaleido":
             self.assert_file(res["svg"], "<svg")
-        else:  # no usable Chrome for kaleido: browser fallback, no svg
+        else:  # no browser fallback for svg: None plus the recorded reason
+            self.assertTrue(svg_note.startswith("plotly svg skipped"), svg_note)
             self.assertIsNone(res["svg"])
+        self.assertEqual(
+            sorted(os.listdir(self.out)),
+            sorted(os.path.basename(res[f]) for f in export.FORMATS if res[f]),
+        )
+
+    def fake_write_image(self, fail):
+        """write_image stand-in: raises for formats in `fail`, writes a minimal
+        valid file otherwise (no Chrome involved)."""
+
+        def write_image(fig, path, format=None, **kw):
+            if format in fail:
+                raise RuntimeError(f"{format}: Resorting to unclean kill browser")
+            data = PNG_MAGIC + b"\0" * 16 if format == "png" else b"<svg></svg>"
+            with open(path, "wb") as fh:
+                fh.write(data)
+
+        return write_image
+
+    def test_svg_kaleido_fails_png_kaleido_succeeds(self):
+        fig = self.fig()
+        with mock.patch.object(
+            type(fig), "write_image", self.fake_write_image({"svg"})
+        ):
+            res = self.save_quiet(fig, "mixed", formats=("png", "svg"))
+        self.assert_png(res["png"])
+        self.assertEqual(self.backend(res, "png"), "plotly png via kaleido")
+        self.assertIsNone(res["svg"])
+        self.assertIn("kaleido failed", self.backend(res, "svg"))
+        self.assertEqual(os.listdir(self.out), ["mixed.png"])
+
+    @needs_browser
+    def test_png_kaleido_fails_svg_kaleido_succeeds(self):
+        fig = self.fig()
+        with mock.patch.object(
+            type(fig), "write_image", self.fake_write_image({"png"})
+        ):
+            res = self.save_quiet(fig, "mixed", formats=("png", "svg"))
+        self.assert_png(res["png"])
+        self.assertIn("render_html fallback", self.backend(res, "png"))
+        self.assertIn(rgb("#1060e0"), png_colors(res["png"]))
+        self.assert_file(res["svg"], "<svg")
+        self.assertEqual(self.backend(res, "svg"), "plotly svg via kaleido")
+        self.assertEqual(sorted(os.listdir(self.out)), ["mixed.png", "mixed.svg"])
 
     @needs_browser
     def test_kaleido_failure_falls_back_to_render_html(self):
@@ -568,6 +627,221 @@ class RenderHtml(ExportCase):
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("nope.html", proc.stderr)
+
+
+class CloseBrowser(unittest.TestCase):
+    """close_browser is time-limited: a hung close kills the driver and returns."""
+
+    def setUp(self):
+        released.clear()
+
+    def close_with(self, browser_close, timeout=0.5):
+        kills = []
+
+        class Browser:
+            close = staticmethod(browser_close)
+
+        class Playwright:
+            def stop(self):
+                pass
+
+        def kill(pid):
+            kills.append(pid)
+            released.set()
+
+        with (
+            mock.patch.dict(
+                export._STATE, {"browser": Browser(), "playwright": Playwright()}
+            ),
+            mock.patch.object(export, "_driver_pid", return_value=4242),
+            mock.patch.object(export, "_kill_tree", side_effect=kill),
+        ):
+            start = time.monotonic()
+            clean = export.close_browser(timeout=timeout)
+            elapsed = time.monotonic() - start
+            self.assertIsNone(export._STATE["browser"])
+            self.assertIsNone(export._STATE["playwright"])
+        return clean, kills, elapsed
+
+    def test_hung_close_kills_driver_and_returns(self):
+        clean, kills, elapsed = self.close_with(lambda: released.wait(30))
+        self.assertFalse(clean)
+        self.assertEqual(kills, [4242])
+        self.assertLess(elapsed, 10)
+        self.assertEqual(
+            [t.name for t in threading.enumerate() if t.name.startswith("viz-export")],
+            [],
+            "close_browser left a watchdog thread behind",
+        )
+
+    def test_prompt_close_does_not_kill(self):
+        clean, kills, _ = self.close_with(lambda: None, timeout=10)
+        self.assertTrue(clean)
+        self.assertEqual(kills, [])
+
+    def test_nothing_open_is_noop(self):
+        with mock.patch.dict(export._STATE, {"browser": None, "playwright": None}):
+            self.assertTrue(export.close_browser())
+
+
+released = threading.Event()  # set by the fake driver kill; unblocks a hung close
+
+EXIT_BUDGET_S = 45  # a clean exit takes a few seconds; the hang was minutes
+
+RENDER_THEN_EXIT = """
+import sys, threading
+sys.path.insert(0, {root!r})
+from tools.viz import export
+export.render_html("<p>x</p>", {png!r}, width=200, height=100)
+if {close!r}:
+    print(export.close_browser())
+    for t in threading.enumerate():
+        if t is not threading.main_thread():
+            t.join(5)
+    print(sorted(t.name for t in threading.enumerate()
+                 if not t.daemon and t is not threading.main_thread()))
+"""
+
+# kaleido -> choreographer -> logistro.getPipeLogger: a NON-daemon thread reads
+# Chrome's stderr pipe until EOF. A Chrome child that outlives an unclean kill
+# keeps the write end open, so threading._shutdown joined that thread forever.
+BLOCKED_READER_THEN_EXIT = """
+import os, subprocess, sys
+sys.path.insert(0, {root!r})
+import logistro
+from tools.viz import export
+w, _ = logistro.getPipeLogger("browser_proc")
+child = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(120)"],
+    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=w)
+os.close(w)
+with open({pidfile!r}, "w") as fh:
+    fh.write(str(child.pid))
+if {no_cancel!r}:  # the non-Windows path: no way to cancel the read
+    export._cancel_blocking_read = lambda thread: False
+    export.EXIT_GRACE_S = 0.5
+"""
+
+
+# Playwright's sync API marks the calling thread as running its event loop after
+# every call; asyncio.run() then fails in that thread while the browser lives.
+LOOP_MARK = """
+import asyncio, os, sys
+sys.path.insert(0, {root!r})
+from tools.viz import export
+png = os.path.join({tmp!r}, "a.png")
+def run_ok():
+    try:
+        asyncio.run(asyncio.sleep(0))
+        return "ok"
+    except RuntimeError as exc:
+        return "fail"
+export.render_html("<p>x</p>", png, width=200, height=100)
+print("released", export._release_loop_mark(), run_ok())
+ctx = export.get_browser().new_context()  # get_browser re-marks for direct use
+ctx.close()
+export.render_html("<p>y</p>", png, width=200, height=100)
+print("reused", "ok")
+export.close_browser()
+print("closed", run_ok())
+"""
+
+
+@unittest.skipIf(BROWSER_SKIP is not None, BROWSER_SKIP or "")
+class LoopMark(unittest.TestCase):
+    def test_release_mark_then_reuse_and_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(
+                [sys.executable, "-c", LOOP_MARK.format(root=REPO_ROOT, tmp=tmp)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=EXIT_BUDGET_S * 2,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            proc.stdout.splitlines(),
+            ["released True ok", "reused ok", "closed ok"],
+            proc.stderr,
+        )
+
+
+class ExitNeverBlocks(unittest.TestCase):
+    """The interpreter exits on its own after export was used."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_script(self, code):
+        start = time.monotonic()
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=EXIT_BUDGET_S * 2,
+        )
+        return proc, time.monotonic() - start
+
+    def render_script(self, close):
+        png = os.path.join(self.root, "once.png")
+        proc, elapsed = self.run_script(
+            RENDER_THEN_EXIT.format(root=REPO_ROOT, png=png, close=close)
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertLess(elapsed, EXIT_BUDGET_S)
+        with open(png, "rb") as fh:
+            self.assertEqual(fh.read(8), PNG_MAGIC)
+        return proc.stdout.split()
+
+    @needs_browser
+    def test_render_once_then_exit(self):
+        """No explicit close: the exit hook closes the shared browser."""
+        self.assertEqual(self.render_script(close=False), [])
+
+    @needs_browser
+    def test_close_browser_leaves_no_non_daemon_threads(self):
+        self.assertEqual(self.render_script(close=True), ["True", "[]"])
+
+    def blocked_reader_exit(self, no_cancel):
+        try:
+            import logistro  # noqa: F401 - kaleido's logging dependency
+        except ImportError as exc:
+            self.skipTest(f"logistro not importable: {exc}")
+        pidfile = os.path.join(self.root, "child.pid")
+        try:
+            proc, elapsed = self.run_script(
+                BLOCKED_READER_THEN_EXIT.format(
+                    root=REPO_ROOT, pidfile=pidfile, no_cancel=no_cancel
+                )
+            )
+        finally:
+            with contextlib.suppress(OSError, ValueError), open(pidfile) as fh:
+                os.kill(int(fh.read()), signal.SIGTERM)
+        self.assertLess(elapsed, EXIT_BUDGET_S, "exit blocked on the pipe reader")
+        return proc
+
+    def test_exit_releases_blocked_browser_pipe_reader(self):
+        proc = self.blocked_reader_exit(no_cancel=False)
+        if sys.platform == "win32":  # the blocked read is cancelled: clean exit
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("forcing exit", proc.stderr)
+        else:  # no portable cancel: bounded forced exit with the reason
+            self.assertIn("forcing exit", proc.stderr)
+
+    def test_uncancellable_reader_forces_bounded_exit(self):
+        proc = self.blocked_reader_exit(no_cancel=True)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("stderr reader thread(s) still blocked", proc.stderr)
+        self.assertIn("forcing exit", proc.stderr)
+
+
+def tearDownModule():
+    export.close_browser()
 
 
 if __name__ == "__main__":

@@ -33,6 +33,18 @@ in <head> (before load). The browser lives on the thread that started it; call
 the browser-backed functions from one thread and not inside a running asyncio
 loop (Playwright sync API restriction).
 
+Interpreter exit never blocks on a browser. Importing this module registers
+_on_exit with threading's pre-join exit hooks (it runs before non-daemon
+threads are joined, i.e. before atexit). It (1) closes the shared browser with
+close_browser(), which is time-limited: past CLOSE_TIMEOUT_S the Playwright
+driver process tree is killed, which fails the pending call; and (2) releases
+kaleido's Chrome stderr readers: choreographer logs Chrome's stderr through
+logistro.getPipeLogger, a NON-daemon thread that reads the pipe until EOF. A
+Chrome child that survives an unclean kill keeps the write end open, so that
+thread - and with it interpreter shutdown - waited forever. On Windows the
+blocked read is cancelled (CancelSynchronousIo); a reader still alive after
+EXIT_GRACE_S forces exit (os._exit(1), reason on stderr) instead of hanging.
+
 No function prints; nothing is written outside the directory of `path` /
 `png_path`. Chart libraries and Playwright are imported lazily.
 
@@ -46,7 +58,10 @@ import atexit
 import contextlib
 import os
 import pathlib
+import subprocess
 import sys
+import threading
+import time
 
 READY_HOOK = "window.__chartsReady"
 FORMATS = ("png", "svg", "html")
@@ -58,8 +73,12 @@ INSTALL_HINT = (
     "py -3.13 -m pip install playwright && py -3.13 -m playwright install chromium"
 )
 _EXTENSIONS = (".png", ".svg", ".html", ".htm")
+CLOSE_TIMEOUT_S = 10.0  # browser.close + playwright.stop before the driver is killed
+EXIT_GRACE_S = 5.0  # browser stderr readers at exit, before forcing exit
+_KILL_TIMEOUT_S = 10.0
+_EXIT_BACKSTOP_S = CLOSE_TIMEOUT_S + _KILL_TIMEOUT_S + EXIT_GRACE_S + 10.0
 
-_STATE = {"playwright": None, "browser": None, "atexit": False}
+_STATE = {"playwright": None, "browser": None}
 
 # Polled by page.wait_for_function. A thenable is watched once and reported
 # through a private global so a rejection can be surfaced.
@@ -119,6 +138,7 @@ def get_browser():
     """Return the shared Playwright chromium, launching it on first use."""
     browser = _STATE["browser"]
     if browser is not None and browser.is_connected():
+        _mark_loop(_STATE["playwright"])
         return browser
     close_browser()
     try:
@@ -140,22 +160,219 @@ def get_browser():
             f"{INSTALL_HINT}"
         ) from exc
     _STATE["playwright"], _STATE["browser"] = pw, browser
-    if not _STATE["atexit"]:
-        atexit.register(close_browser)
-        _STATE["atexit"] = True
     return browser
 
 
-def close_browser():
-    """Close the shared browser (idempotent). Registered with atexit."""
+def close_browser(timeout=CLOSE_TIMEOUT_S):
+    """Close the shared browser (idempotent; the exit hook calls it too).
+
+    Returns True when browser.close + playwright.stop finished within `timeout`
+    seconds, False when a daemon watchdog had to kill the Playwright driver
+    process tree (which fails the pending call so this returns). Call it from
+    the thread that started the browser.
+    """
     browser, pw = _STATE["browser"], _STATE["playwright"]
     _STATE["browser"] = _STATE["playwright"] = None
-    if browser is not None:
-        with contextlib.suppress(Exception):
-            browser.close()
-    if pw is not None:
-        with contextlib.suppress(Exception):
-            pw.stop()
+    if browser is None and pw is None:
+        return True
+    pid = _driver_pid(pw)
+    finished = threading.Event()
+    killed = []
+
+    def watchdog():
+        if not finished.wait(timeout) and pid is not None:
+            killed.append(pid)
+            _kill_tree(pid)
+
+    guard = threading.Thread(
+        target=watchdog, name="viz-export-close-watchdog", daemon=True
+    )
+    guard.start()
+    _mark_loop(pw)
+    try:
+        if browser is not None:
+            with contextlib.suppress(Exception):
+                browser.close()
+        if pw is not None:
+            with contextlib.suppress(Exception):
+                pw.stop()
+    finally:
+        finished.set()
+        guard.join(_KILL_TIMEOUT_S + 1)
+        _release_loop_mark(pw)  # the loop is closed now
+    return not killed
+
+
+def _pw_loop(pw):
+    loop = getattr(pw, "_loop", None)  # SyncBase._loop: the dispatcher's loop
+    return loop if hasattr(loop, "is_closed") else None
+
+
+def _mark_loop(pw):
+    """Re-mark this thread as running Playwright's loop when the mark was cleared.
+
+    Playwright's sync API sets that mark (asyncio's running loop) after every
+    call and needs it for the next one; _release_loop_mark clears it.
+    """
+    import asyncio
+
+    loop = _pw_loop(pw)
+    if (
+        loop is not None
+        and not loop.is_closed()
+        and asyncio.events._get_running_loop() is None
+    ):
+        asyncio.events._set_running_loop(loop)
+
+
+def _release_loop_mark(pw=None):
+    """Clear this thread's running-loop mark if it is (shared) Playwright's.
+
+    While it is set, asyncio.run() in this thread raises "cannot be called from
+    a running event loop". The next get_browser()/render_html() re-marks. Returns
+    True when the thread has no running-loop mark afterwards.
+    """
+    import asyncio
+
+    current = asyncio.events._get_running_loop()
+    if current is None:
+        return True
+    ours = _pw_loop(pw if pw is not None else _STATE["playwright"])
+    if current is ours or current.is_closed():
+        asyncio.events._set_running_loop(None)
+        return True
+    return False
+
+
+def _driver_pid(pw):
+    """pid of the Playwright node driver (private attribute chain), or None."""
+    obj = pw
+    for name in ("_impl_obj", "_connection", "_transport", "_proc"):
+        obj = getattr(obj, name, None)
+    pid = getattr(obj, "pid", None)
+    return pid if isinstance(pid, int) else None
+
+
+def _kill_tree(pid):
+    """Kill a process and its children (best effort, bounded)."""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_KILL_TIMEOUT_S,
+                check=False,
+            )
+        else:
+            import signal
+
+            os.kill(pid, signal.SIGKILL)
+
+
+# ---------------------------------------------------------------- exit hook
+
+
+def _browser_pipe_readers():
+    """Live non-daemon logistro pipe readers (choreographer's Chrome stderr)."""
+    current = threading.current_thread()
+    readers = []
+    for thread in threading.enumerate():
+        target = getattr(thread, "_target", None)  # deleted once run() returns
+        module = str(getattr(target, "__module__", None) or "")
+        if (
+            thread is not current
+            and not thread.daemon
+            and thread.is_alive()
+            and module.split(".")[0] == "logistro"
+        ):
+            readers.append(thread)
+    return readers
+
+
+def _cancel_blocking_read(thread):
+    """Windows: abort the synchronous read `thread` is blocked in. True if sent."""
+    if sys.platform != "win32" or thread.native_id is None:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    thread_terminate = 0x0001  # access right CancelSynchronousIo requires
+    handle = kernel32.OpenThread(thread_terminate, False, thread.native_id)
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.CancelSynchronousIo(handle))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _release_pipe_readers(grace=EXIT_GRACE_S):
+    """Unblock browser stderr readers; return the ones still alive after `grace`.
+
+    A reader whose read is cancelled sees an OSError, flushes its buffered
+    lines and returns (logistro treats any read error as end of stream).
+    """
+    deadline = time.monotonic() + grace
+    readers = _browser_pipe_readers()
+    while readers and time.monotonic() < deadline:
+        for thread in readers:
+            _cancel_blocking_read(thread)  # retried: the thread may be mid-log
+            thread.join(0.05)
+        readers = [t for t in readers if t.is_alive()]
+    return readers
+
+
+def _force_exit(reason):
+    with contextlib.suppress(Exception):
+        sys.stderr.write(f"export.py: {reason}; forcing exit\n")
+        sys.stderr.flush()
+    os._exit(1)
+
+
+def _on_exit():
+    """Pre-join exit hook: close the browser, release blocked stderr readers.
+
+    A daemon backstop timer forces exit if this cleanup itself hangs.
+    """
+    backstop = threading.Timer(
+        _EXIT_BACKSTOP_S,
+        _force_exit,
+        args=(f"exit cleanup did not finish within {_EXIT_BACKSTOP_S:g}s",),
+    )
+    backstop.daemon = True
+    backstop.start()
+    try:
+        close_browser()
+        stuck = _release_pipe_readers(EXIT_GRACE_S)
+    except Exception:  # noqa: BLE001 - never raise into interpreter shutdown
+        stuck = []
+    finally:
+        backstop.cancel()
+    if stuck:
+        _force_exit(
+            f"{len(stuck)} browser stderr reader thread(s) still blocked after "
+            f"{EXIT_GRACE_S:g}s (a browser child process holds the pipe open)"
+        )
+
+
+def _register_exit_hook():
+    """Run _on_exit before non-daemon threads are joined (atexit runs after)."""
+    register = getattr(threading, "_register_atexit", None)
+    if register is None:
+        atexit.register(_on_exit)
+        return
+    with contextlib.suppress(RuntimeError):  # already shutting down
+        register(_on_exit)
+
+
+_register_exit_hook()
 
 
 # ---------------------------------------------------------------- render_html
