@@ -19,7 +19,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/ped-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 printf 'import os\n' > "$WORK/dirty.py"
-printf 'x = 1\nprint(x)\n' > "$WORK/clean.py"
+printf '"""Clean fixture: no lint findings under the project ruff config."""\n\nx = 1\nprint(x)\n' > "$WORK/clean.py"
 printf 'export const x = 1;\nconsole.log(x);\n' > "$WORK/sample.mjs"
 
 # Windows-usable (mixed) paths for embedding in JSON payloads
