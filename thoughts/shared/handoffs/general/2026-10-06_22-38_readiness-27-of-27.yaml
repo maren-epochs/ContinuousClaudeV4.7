@@ -1,0 +1,142 @@
+---
+session: general
+date: 2026-10-06
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "readiness 12/27 (L3) -> 27/27 (L5) with real fixes: pyproject/ruff/mypy/pytest/coverage, lock, pre-commit privacy guard, Makefile+setup.ps1, integration tests, security 0, complexity, debt 5.6%, clones 0"
+now: "Confirm user ran sync_global --apply and pushed; then pick from next: (exa/llm param objects, export private-API hardening, Linux CI for pre-commit)"
+test: "make test   (or: py -3.13 -m pytest -q; bash scripts/test_readiness.sh; bash scripts/readiness.sh in the FOREGROUND)"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  scripts/readiness.sh is this repo's own grader. Changed only where the user approved: file_grep
+  takes grep flags (last arg = file), harness/skills/*/SKILL.md counts as skills, and tech_debt
+  runs `tldr debt` on a temp copy of git-tracked source minus test files (user decision B).
+  .tldrignore is unchanged, so cognitive/secure/clones still scan tests.
+  Run readiness in the FOREGROUND: Claude Code reaps idle background shells under memory pressure;
+  its tldr jobs peak ~0.1 GB and take 30-50 s.
+  pyproject.toml makes the repo "python" for the checker: ruff (default rules + D1 for non-test
+  source; vendored tools/viz/validate_palette.py excluded; format skips **/*.md and continuum/**
+  so the /visualize PRELUDE stays byte-identical), mypy (non-strict; tools+install), pytest
+  (testpaths tools install tests; `integration` marker), coverage (patch subprocess).
+  requirements.lock = 196 exact pins from this host (regen/--check: tools/lock_requirements.py);
+  plotly-resampler installed separately with --no-deps (declares plotly<7).
+  pre-commit: ruff check + ruff format --check + privacy guard (tools/privacy_guard.py; private
+  terms read from untracked .git/info/privacy-terms + OS username + home paths + session UUIDs).
+  Every commit runs it; it stashes unstaged changes, so do not commit while workers edit tracked files.
+  tools/api_common.py = shared HTTP layer for exa_search/nia_docs; tools/_testing.py = shared test
+  helpers (not collected). ouros_harness llm_call: fixed endpoint table + per-request URL check,
+  30x refused, auth headers unredirected. context_ledger --session must resolve inside the project.
+  tools/viz/export.py registers an exit hook (threading._register_atexit) that releases kaleido's
+  logistro reader threads and time-limits browser close; worst case it os._exit(1)s instead of hanging.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "pytest 532 unit + 12 integration (1 skip: rg missing); 7 hook suites; test_readiness 13/13; ruff, format, mypy, pre-commit --all-files clean; readiness 27/27 L5"
+  test_command: "make test"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main, 18 commits ahead of origin (93c3e87..89a157c + this handoff)"
+  dirty_files: []
+  warnings: "LF->CRLF warnings benign; untracked install/settings.template.json.bak-20261005-reportcheck-if; live ~/.claude NOT synced for this run; bloks under the PowerShell tool writes a different card store - run bloks from Bash"
+  context: "peak 46% (458K) | resume-handoff +70K, premortem +47K, autonomous +18K"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: "Readiness measured in the foreground: ~0.1 GB tldr peak, 46 s; earlier kill was system memory pressure"
+    files: []
+  - task: "VAL-601 pyproject (ruff/format/mypy/pytest/coverage) + 59 mypy fixes + one-time format"
+    files: ["pyproject.toml", "tools/**/*.py", "install/*.py"]
+  - task: "VAL-602 requirements.lock + dependency groups; VAL-605 tests/integration"
+    files: ["requirements.lock", "tools/lock_requirements.py", "tools/test_deps_lock.py", "tests/integration/*"]
+  - task: "VAL-603 pre-commit + privacy guard (portable hook)"
+    files: [".pre-commit-config.yaml", "tools/privacy_guard.py", "tools/test_privacy_guard.py", ".privacy-allow"]
+  - task: "VAL-604 Makefile + install/setup.ps1 + install/setup_deps.py; export exit-hang fix"
+    files: ["Makefile", "install/setup.ps1", "install/setup_deps.py", "tools/viz/export.py", "conftest.py"]
+  - task: "VAL-606 CODEOWNERS; VAL-607 readiness.sh file_grep + harness/skills"
+    files: [".github/CODEOWNERS", "scripts/readiness.sh", "scripts/test_readiness.sh"]
+  - task: "VAL-611 security 18->0 (context_ledger traversal hole closed; llm_call allowlist; sandbox policy table test)"
+    files: ["tools/context_ledger.py", "tools/ouros_harness.py", "tools/test_ouros_security_table.py"]
+  - task: "VAL-612/613/615 complexity 12->2, debt 75.5%->5.6%, clones 15->0 with characterization tests first"
+    files: ["tools/*", "install/*", "tools/viz/*", "tools/api_common.py", "tools/_testing.py"]
+  - task: "VAL-621 docs + review round (redirect refusal, portable hook, ruff D1 replaces count test)"
+    files: ["CLAUDE.md", "README.md", "install/README.md", "tools/ouros_harness.py", "tools/test_ouros_policy.py"]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: debt_scope
+    chose: "tests excluded from the tldr debt scan only (readiness.sh temp copy)"
+    over: ["docstrings on every test", ".tldrignore test exclusion"]
+    because: "user B; .tldrignore would hide tests from complexity/security too (side-agent note, confirmed: tldr has no per-command exclude)"
+  - name: checker_edits
+    chose: "fix file_grep -i bug + count harness/skills"
+    over: ["copy skills into .claude/skills", "Makefile-only workaround"]
+    because: "user A; both were real checker defects; A/B over 27 criteria showed only those two flipped"
+  - name: debt_target
+    chose: "refactor until <10% with stop-and-ask guard"
+    over: ["cap effort", "docstrings only"]
+    because: "user A; residual param-list/coupling items left (public APIs) since target was met"
+  - name: redirect_refusal
+    chose: "unredirected auth headers + pre-filled redirect_dict via urlopen"
+    over: ["private opener"]
+    because: "security-table test patches urllib.request.urlopen; a private opener would bypass it and hit real hosts"
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - "Run scripts/readiness.sh and long suites in the FOREGROUND (background shells get reaped under memory pressure)."
+    - "pre-commit stashes unstaged changes on every commit: never commit while workers edit tracked files."
+    - "Workers stop at 60 turns: tell them to write the report early and overwrite it; split big work by file ownership."
+    - "Never put private terms in tracked files; they live only in .git/info/privacy-terms (untracked)."
+  useful:
+    - "subprocess 'bash' on Windows hits System32 WSL bash first; use Git Bash via git --exec-path."
+    - "tldr counts and/or in conditions toward cyclomatic; small boolean chains can trip 'complexity.high'."
+    - "Digest characterization tests: regenerate with --print-digests only for intended behavior changes."
+    - "Bash tool once failed with 'Argument list too long' on a long py -c; use a script file or PowerShell."
+  fyi:
+    - "bloks: 93 cards in the Bash store; a stray PowerShell store holds 5 duplicates."
+
+worked:
+  - "Measuring before planning (debt probe showed docstrings alone could not reach 10%)"
+  - "File-owned parallel debt workers with one shared measurement script"
+  - "Orchestrator hand review of every sandbox diff + reviewer replaying old vs new code on ~100k cases"
+
+failed:
+  - attempted: ".tldrignore test exclusion for the debt criterion"
+    root_cause: "ignore file applies to every tldr scan"
+    avoid: "global excludes to satisfy one metric"
+    use_instead: "scoped scan input in readiness.sh"
+  - attempted: "bloks new rule from the PowerShell tool"
+    root_cause: "different card store than Git Bash"
+    avoid: "bloks via PowerShell"
+    use_instead: "bloks via Bash"
+
+user_intent: |
+  Fix every failing readiness criterion with real fixes, no metric gaming; quality over cost;
+  decisions only via A-D questions with a recommendation.
+
+blockers: []
+questions: []
+
+next:
+  - "User runs: py -3.13 install/sync_global.py --apply; git push origin main"
+  - "Optional: grouped options for exa_search()/llm_call/agent_call and export.save/render_html (45+50 residual debt min) - needs a user decision (public API change)"
+  - "Run pre-commit on Linux (CI) to confirm the portable privacy hook"
+  - "Watch export.py private-API reliance on Playwright/Python upgrades (tests ExitNeverBlocks/LoopMark guard it)"
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-06_22-38_readiness-27-of-27.yaml in the
+  ccv47-readme-fix repo. readiness.sh is 27/27 (level 5); contract
+  continuum/autonomous/readiness-l5/contract.json is closed. First confirm the user ran
+  `py -3.13 install/sync_global.py --apply` and pushed; if not, hand them the commands again.
+  Run `make test` and `bash scripts/readiness.sh` in the foreground. Then ask (A-D, with a
+  recommendation) which `next:` item to take. Repo is public: no usernames, absolute user paths
+  or other project names in tracked files (pre-commit guard enforces it).
+
+files:
+  created: ["pyproject.toml", "requirements.lock", "Makefile", "install/setup.ps1", "install/setup_deps.py", ".pre-commit-config.yaml", ".privacy-allow", ".github/CODEOWNERS", "conftest.py", "tests/integration/*", "scripts/test_readiness.sh", "tools/privacy_guard.py", "tools/lock_requirements.py", "tools/api_common.py", "tools/_testing.py", "tools/test_*.py (several new)", "tools/viz/test_*_characterization.py"]
+  modified: ["scripts/readiness.sh", "CLAUDE.md", "README.md", "install/README.md", "tools/*.py", "tools/viz/*.py", "install/sync_global.py", ".claude/hooks/test_tldr_read.sh", ".claude/hooks/test_post_edit_diagnostics.sh"]
