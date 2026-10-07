@@ -632,5 +632,34 @@ class Manifest(unittest.TestCase):
             self.assertTrue(json.loads(path.read_text(encoding="utf-8"))["files"])
 
 
+class WriteAtomic(unittest.TestCase):
+    """write_atomic failure path and the manifest JSON writer."""
+
+    def test_failure_removes_temp_and_keeps_original(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td) / MANIFEST
+            _sync.write_atomic(target, "original\n")
+            for exc in (OSError("disk"), PermissionError("held open")):
+                with (
+                    self.subTest(exc=type(exc).__name__),
+                    mock.patch.object(_sync.os, "replace", side_effect=exc) as rep,
+                    mock.patch.object(_sync.time, "sleep") as slept,
+                ):
+                    with self.assertRaises(type(exc)):
+                        _sync.write_atomic(target, "new\n")
+                    retries = 5 if isinstance(exc, PermissionError) else 1
+                    self.assertEqual(rep.call_count, retries)
+                    self.assertEqual(slept.call_count, retries - 1)
+                    self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
+                    self.assertEqual([p.name for p in Path(td).iterdir()], [MANIFEST])
+
+    def test_manifest_text_rejects_nan_and_infinity(self) -> None:
+        self.assertEqual(json.loads(_sync.manifest_text({"a": 1.5})), {"a": 1.5})
+        self.assertTrue(_sync.manifest_text({"a": 1}).endswith("}\n"))
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                _sync.manifest_text({"files": {"x": {"sha256": bad}}})
+
+
 if __name__ == "__main__":
     unittest.main()

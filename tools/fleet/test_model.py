@@ -284,6 +284,16 @@ class PathTests(TempHome):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 model.proposal_path(bad)
 
+    def test_proposal_path_rejects_windows_device_names(self):
+        bad = ("CON", "con", "Prn", "AUX", "nul", "NUL.txt", "com1", "COM9")
+        bad += ("lpt1", "LPT9", "Aux.json", "lpt5.tar.gz")
+        for name in bad:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                model.proposal_path(name)
+        for ok in ("CONSOLE", "COM10", "COM0", "LPT0", "NULL", "con-1", "auxiliary"):
+            with self.subTest(ok=ok):
+                self.assertEqual(model.proposal_path(ok).name, f"{ok}.json")
+
     def test_new_proposal_id_is_safe_and_unique(self):
         ids = {model.new_proposal_id() for _ in range(50)}
         self.assertEqual(len(ids), 50)
@@ -315,6 +325,79 @@ class FileIOTests(TempHome):
         self.assertEqual(model.load_proposal(p1.id), p1)
         self.assertIsNone(model.load_proposal("absent"))
         self.assertEqual(model.list_proposals(), [p2, p1])
+
+    def test_load_proposal_unsafe_id_is_none(self):
+        for bad in ("", "../x", "a/b", ".hidden", "CON", "nul.txt"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(model.load_proposal(bad))
+
+    def test_list_proposals_skips_unsafe_or_mismatched_ids(self):
+        good = edit_proposal()
+        model.save_proposal(good)
+        inbox = model.inbox_dir()
+        stored = {
+            "evil": "../../evil",
+            "other": "p-9",
+            "noid": None,
+            "a b": "a b",
+            "dev": "NUL",
+        }
+        for stem, pid in stored.items():
+            data = Proposal(id=pid, created_at="2026-01-01T00:00:00Z").to_dict()
+            (inbox / f"{stem}.json").write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual(model.list_proposals(), [good])
+
+    def test_json_writers_reject_nan_and_infinity(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad=bad):
+                st = FleetState(sessions=[Session(context_pct=bad)])
+                with self.assertRaises(ValueError):
+                    st.to_json()
+                with self.assertRaises(ValueError):
+                    model.save_state(st)
+                self.assertFalse(model.state_path().exists())
+                with self.assertRaises(ValueError):
+                    model.append_audit(AuditEvent(ts="t", extra={"x": bad}))
+                self.assertFalse(model.audit_path().exists())
+
+    def test_write_atomic_failure_removes_temp_and_keeps_original(self):
+        target = model.fleet_dir() / "state.json"
+        model.write_atomic(target, "original\n")
+        for exc in (OSError("disk"), PermissionError("held open")):
+            with (
+                self.subTest(exc=type(exc).__name__),
+                mock.patch.object(model.os, "replace", side_effect=exc) as rep,
+                mock.patch.object(model.time, "sleep") as slept,
+            ):
+                with self.assertRaises(type(exc)):
+                    model.write_atomic(target, "new\n")
+                retries = 5 if isinstance(exc, PermissionError) else 1
+                self.assertEqual(rep.call_count, retries)
+                self.assertEqual(slept.call_count, retries - 1)
+                self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
+                self.assertEqual(
+                    [p.name for p in target.parent.iterdir()], ["state.json"]
+                )
+
+    def test_write_atomic_retries_a_transient_permission_error(self):
+        target = model.fleet_dir() / "state.json"
+        model.write_atomic(target, "original\n")
+        real = os.replace
+        failures = [PermissionError("held")]
+
+        def flaky(src, dst):
+            if failures:
+                raise failures.pop()
+            real(src, dst)
+
+        with (
+            mock.patch.object(model.os, "replace", side_effect=flaky) as rep,
+            mock.patch.object(model.time, "sleep"),
+        ):
+            model.write_atomic(target, "new\n")
+        self.assertEqual(rep.call_count, 2)
+        self.assertEqual(target.read_text(encoding="utf-8"), "new\n")
+        self.assertEqual([p.name for p in target.parent.iterdir()], ["state.json"])
 
     def test_audit_append_and_read(self):
         events = [AuditEvent(ts=f"t{i}", category="c", command="x") for i in range(3)]

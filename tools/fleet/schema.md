@@ -21,9 +21,15 @@ Home resolution (`home_dir()`): on win32 `USERPROFILE`, then `HOME`; elsewhere `
 then `USERPROFILE`; empty values are skipped; last resort `Path.home()`. This matches
 Node's `os.homedir()` on Windows. Tests set both variables to a temp dir.
 
-Proposal ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` (no separators, no leading dot);
-`proposal_path` raises `ValueError` otherwise. `new_proposal_id()` returns
+Proposal ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` (no separators, no leading dot)
+and are not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+`LPT1`-`LPT9`, any case, with or without an extension). `proposal_path` raises
+`ValueError` otherwise and `load_proposal` returns `None`; `list_proposals` skips files
+whose stored `id` is unsafe or differs from the filename stem. `new_proposal_id()` returns
 `<YYYYmmddTHHMMSSZ>-<8 hex>`, which sorts by creation time.
+
+Writers emit strict JSON: `NaN`/`Infinity` raise `ValueError` (Node's `JSON.parse`
+rejects them).
 
 ## Parsing rules
 

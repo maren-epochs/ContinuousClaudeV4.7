@@ -32,6 +32,8 @@ PROPOSAL_KINDS = ("edit", "lesson")
 PROPOSAL_STATUSES = ("pending", "applied", "rejected")
 SESSION_KINDS = ("interactive", "bg")
 _PROPOSAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# Windows device names, with or without an extension (NUL.txt is still NUL).
+_RESERVED_ID = re.compile(r"(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?", re.IGNORECASE)
 
 
 class _Bad(Exception):
@@ -155,7 +157,9 @@ class Record:
 
     def to_json(self, indent: int | None = 2) -> str:
         """Serialize to a JSON document (UTF-8 text, non-ASCII kept)."""
-        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
+        return json.dumps(
+            self.to_dict(), indent=indent, ensure_ascii=False, allow_nan=False
+        )
 
 
 # --- FleetState (~/.claude/fleet/state.json) ---
@@ -366,9 +370,18 @@ def manifest_path() -> Path:
     return claude_dir() / ".ccv47-manifest.json"
 
 
+def is_safe_proposal_id(proposal_id: object) -> bool:
+    """True for a path-safe id that is not a Windows device name."""
+    return (
+        isinstance(proposal_id, str)
+        and _PROPOSAL_ID.fullmatch(proposal_id) is not None
+        and _RESERVED_ID.fullmatch(proposal_id) is None
+    )
+
+
 def proposal_path(proposal_id: str) -> Path:
     """``~/.claude/harness-inbox/<id>.json``; ValueError on an unsafe id."""
-    if not isinstance(proposal_id, str) or not _PROPOSAL_ID.fullmatch(proposal_id):
+    if not is_safe_proposal_id(proposal_id):
         raise ValueError(f"unsafe proposal id: {proposal_id!r}")
     return inbox_dir() / f"{proposal_id}.json"
 
@@ -435,21 +448,29 @@ def save_proposal(proposal: Proposal) -> Path:
 
 
 def load_proposal(proposal_id: str) -> Proposal | None:
-    """Read one proposal; None when missing or invalid."""
+    """Read one proposal; None when the id is unsafe, the file missing or not JSON."""
+    if not is_safe_proposal_id(proposal_id):
+        return None
     data = _load_json(proposal_path(proposal_id))
     return Proposal.from_dict(data) if isinstance(data, Mapping) else None
 
 
 def list_proposals(directory: Path | None = None) -> list[Proposal]:
-    """Every readable ``*.json`` proposal, oldest first (created_at, then id)."""
+    """Every readable ``*.json`` proposal, oldest first (created_at, then id).
+
+    Skips files whose stored id is unsafe or differs from the filename stem.
+    """
     directory = directory or inbox_dir()
     if not directory.is_dir():
         return []
     out = []
     for p in directory.glob("*.json"):
         data = _load_json(p)
-        if isinstance(data, Mapping):
-            out.append(Proposal.from_dict(data))
+        if not isinstance(data, Mapping):
+            continue
+        proposal = Proposal.from_dict(data)
+        if proposal.id == p.stem and is_safe_proposal_id(proposal.id):
+            out.append(proposal)
     return sorted(out, key=lambda pr: (pr.created_at or "", pr.id or ""))
 
 
@@ -457,7 +478,9 @@ def append_audit(event: AuditEvent, path: Path | None = None) -> Path:
     """Append one compact JSON line to audit.jsonl; creates parents."""
     path = path or audit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":"))
+    line = json.dumps(
+        event.to_dict(), ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
     with path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(line + "\n")
     return path

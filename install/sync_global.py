@@ -255,6 +255,11 @@ def build_manifest(
     }
 
 
+def manifest_text(manifest: dict) -> str:
+    """Manifest as strict JSON text (NaN/Infinity raise ValueError: Node rejects them)."""
+    return json.dumps(manifest, indent=2, allow_nan=False) + "\n"
+
+
 def write_atomic(path: Path, text: str) -> None:
     """Temp file in the same dir + os.replace (retried: Windows readers block renames)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,7 +364,7 @@ def main() -> int:
         f"{sha}{' (dirty)' if dirty else ''}\n", encoding="utf-8"
     )
     manifest = build_manifest(target, keep, sha, bool(dirty), args.eol)
-    write_atomic(target / MANIFEST_FILE, json.dumps(manifest, indent=2) + "\n")
+    write_atomic(target / MANIFEST_FILE, manifest_text(manifest))
     return 0
 
 
