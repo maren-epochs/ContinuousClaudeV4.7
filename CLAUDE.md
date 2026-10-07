@@ -52,18 +52,23 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 
 ## Scripts
 
-- `scripts/readiness.sh` — assess project health (27 criteria, 5 levels); a failed tldr sub-analysis is SKIP with a reason, never a fabricated pass
+- `Makefile` — `setup` (`install/setup_deps.py`: requirements.lock, then plotly-resampler `--no-deps`; Playwright Chromium; pre-commit hook), `test` (pytest + `.claude/hooks/test_*.sh` + `scripts/test_readiness.sh`), `lint`, `format`, `typecheck`, `readiness`, `sync` (writes `~/.claude`). POSIX sh recipes (Git Bash); `PYTHON=` overrides `py -3.13`. Without make: `pwsh install/setup.ps1 -Setup -Test -Lint -Format -Typecheck -Readiness` (no sync switch)
+- `scripts/readiness.sh` — assess project health (27 criteria, 5 levels); a failed tldr sub-analysis is SKIP with a reason, never a fabricated pass. Run it in the FOREGROUND: background shells get reaped under memory pressure (its tldr jobs peak ~0.1 GB, ~30-50 s). tech_debt scans a copy of tracked source minus test files (user decision; other tldr checks still scan tests); `file_grep` passes grep flags before the file arg; `harness/skills/*/SKILL.md` counts as skills. Tests: `scripts/test_readiness.sh`
 - `scripts/readiness-fix.sh` — auto-remediate readiness gaps
 
 ## Tool Bridges (in tools/)
 
 - `ouros_harness.py` — Ouros REPL bridge with exa_search, nia_search, llm_call, agent_call (`--max-turns` default 25)
 - `validate_report.py` — worker report + contract.json schema check (stdlib); VALIDATE gates on it
-- `context_ledger.py` — per-span / per-skill main-context token ledger from a session transcript (stdlib; `--json`, `--session <id>`, default = newest transcript for cwd); create-handoff writes its summary as `context:`
+- `context_ledger.py` — per-span / per-skill main-context token ledger from a session transcript (stdlib; `--json`, `--session <id>` (must resolve inside this project's transcript folder, else exit 2), default = newest transcript for cwd); create-handoff writes its summary as `context:`
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
+- `api_common.py` — shared aiohttp HTTP layer (request, SSE lines, .env key, headers) for exa_search/nia_docs
+- `privacy_guard.py` — pre-commit hook: rejects user-home paths, the OS username, UUID-shaped ids and every term in the untracked `.git/info/privacy-terms`; reviewed false positives in `.privacy-allow`
+- `lock_requirements.py` — regenerates root `requirements.lock` (pyproject closure pinned to the installed env, no network); `--check` exits 1 when stale
+- `_testing.py` — shared unittest helpers (module loader, async runner, fake aiohttp); not collected
 
-Python checks (config in `pyproject.toml`; `tools/viz/validate_palette.py` is vendored and excluded): `ruff check .`, `ruff format --check .`, `py -3.13 -m mypy`, `py -3.13 -m pytest -q` (every `tools/**/test_*.py` + `install/test_*.py` unittest suite), `py -3.13 -m coverage run -m pytest -q && py -3.13 -m coverage report`.
+Python checks (config in `pyproject.toml`; `tools/viz/validate_palette.py` is vendored and excluded): `ruff check .`, `ruff format --check .`, `py -3.13 -m mypy`, `py -3.13 -m pytest -q` (every `tools/**/test_*.py` + `install/test_*.py` unittest suite, plus `tests/integration/`, marker `integration`, ~50 s; skip with `-m "not integration"`), `py -3.13 -m coverage run -m pytest -q && py -3.13 -m coverage report`.
 
 ## Visualization (tools/viz)
 
@@ -112,7 +117,7 @@ Registries: `npm`, `py_pi`, `crates_io`, `go_modules`.
 
 **Token efficiency:** the sandbox processes data internally — only `print()` output enters the agent's context. Always filter, truncate, and structure results inside the script.
 
-**Security:** deny-by-default — `read_file`/`glob_files` only read project (cwd; ignored when cwd is home or a drive root) + `/tmp/ouros` + any dirs in `OUROS_DATA_ROOTS` (os.pathsep-separated absolute paths, read-only), after resolving symlinks/`..`; credentials are never readable even under an allowed root (`.env`/`.env.*` except `.example/.sample/.template`, `*.pem`/`*.key`, `id_*` keys, `~/.claude.json`, `~/.claude/.credentials*`, `~/.ssh`, `~/.aws`, ...). `write_file` only writes to `/tmp/ouros-sandbox-output` (drive-relative on Windows: `C:\tmp\ouros-sandbox-output`). `run_command` parses the command and runs it WITHOUT a shell — no pipes, chaining, redirection or substitution — and only argv prefixes in the allowlist (`tldr`, `grep`, `rg`, `wc`, `echo`, `git log/diff/show/blame`, `cargo build/test/clippy`, `npm test/run`, `python -m pytest`, `uv run python`); `rg --pre` and `git --output/--ext-diff/--textconv` are denied; spawn agents via `agent_call` (default `--max-turns 25`), not `run_command`. Exception: `run_python` executes arbitrary code on host CPython by design (not an escalation — the agent already has Bash); cwd pinned to a per-session work dir, one concurrent run, timeout kills the process tree. New files under the output root are printed as `artifacts:` lines (absolute host paths) after each run.
+**Security:** deny-by-default — `read_file`/`glob_files` only read project (cwd; ignored when cwd is home or a drive root) + `/tmp/ouros` + any dirs in `OUROS_DATA_ROOTS` (os.pathsep-separated absolute paths, read-only), after resolving symlinks/`..`; credentials are never readable even under an allowed root (`.env`/`.env.*` except `.example/.sample/.template`, `*.pem`/`*.key`, `id_*` keys, `~/.claude.json`, `~/.claude/.credentials*`, `~/.ssh`, `~/.aws`, ...). `write_file` only writes to `/tmp/ouros-sandbox-output` (drive-relative on Windows: `C:\tmp\ouros-sandbox-output`). `run_command` parses the command and runs it WITHOUT a shell — no pipes, chaining, redirection or substitution — and only argv prefixes in the allowlist (`tldr`, `grep`, `rg`, `wc`, `echo`, `git log/diff/show/blame`, `cargo build/test/clippy`, `npm test/run`, `python -m pytest`, `uv run python`); `rg --pre` and `git --output/--ext-diff/--textconv` are denied; spawn agents via `agent_call` (default `--max-turns 25`), not `run_command`. `llm_call` POSTs only to its endpoint allowlist: https to `api.anthropic.com`/`api.openai.com`/`openrouter.ai` (port 443), plain http only to `localhost`/`127.0.0.1:1234`; any other URL returns an error before a request is built. Exception: `run_python` executes arbitrary code on host CPython by design (not an escalation — the agent already has Bash); cwd pinned to a per-session work dir, one concurrent run, timeout kills the process tree. New files under the output root are printed as `artifacts:` lines (absolute host paths) after each run.
 
 ## Architecture
 

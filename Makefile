@@ -55,7 +55,7 @@ format: ## ruff format (rewrites files)
 typecheck: ## mypy (config in pyproject.toml)
 	$(PYTHON) -m mypy
 
-readiness: ## Agent-readiness report (scripts/readiness.sh, ~20s)
+readiness: ## Agent-readiness report (scripts/readiness.sh, ~30-50s, foreground)
 	bash scripts/readiness.sh
 
 sync: ## Copy harness into ~/.claude (WRITES ~/.claude; dry run: install/sync_global.py --diff)

@@ -139,7 +139,7 @@ make setup && make test    # deps, Playwright Chromium, pre-commit hook; then ev
 make help                  # also: lint, format, typecheck, readiness, sync
 ```
 
-`make setup` is idempotent: it installs `requirements.lock` when present (else the `pyproject.toml` dependencies), then `plotly-resampler==0.11.1` with `--no-deps` (it declares `plotly<7`, so it stays out of the lock), runs `playwright install chromium`, and runs `pre-commit install` when pre-commit is available. `make test` runs pytest over `tools/` and `install/`, every `.claude/hooks/test_*.sh` suite, and `scripts/test_readiness.sh`. `make sync` writes into `~/.claude` (see Option B below). The interpreter defaults to `py -3.13`; override with `make test PYTHON=python3`.
+`make setup` is idempotent: it installs `requirements.lock` when present (else the `pyproject.toml` dependencies), then `plotly-resampler==0.11.1` with `--no-deps` (it declares `plotly<7`, so it stays out of the lock), runs `playwright install chromium`, and runs `pre-commit install` when pre-commit is available. `make test` runs pytest over `tools/`, `install/` and `tests/` (the `tests/integration/` suite carries the `integration` marker), every `.claude/hooks/test_*.sh` suite, and `scripts/test_readiness.sh`. `make sync` writes into `~/.claude` (see Option B below). The interpreter defaults to `py -3.13`; override with `make test PYTHON=python3`.
 
 Without make, use the PowerShell 7 twin (same commands, exit codes propagated; needs Git Bash for the shell suites):
 

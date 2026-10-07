@@ -112,6 +112,12 @@ py -3.13 -m playwright install chromium
 py -3.13 -m pip install --no-deps plotly-resampler==0.11.1   # declares plotly<7; works on 7.1.0
 ```
 
+The repo-root `requirements.lock` pins the full transitive closure of `pyproject.toml`
+(all groups, viz included); `py -3.13 -m pip install -r requirements.lock` can replace the
+first line, and the `--no-deps` plotly-resampler step is still required (it is kept out of
+the lock). `make setup` (or `pwsh install/setup.ps1 -Setup`) runs all three steps.
+Regenerate the lock with `py -3.13 tools/lock_requirements.py`; `--check` exits 1 when stale.
+
 - **Chrome for kaleido** (plotly static export): kaleido 1.x bundles no browser. It uses an
   installed Chrome, or fetch one with `py -3.13 -c "import kaleido; kaleido.get_chrome_sync()"`.
   If kaleido fails, `tools/viz/export.py` falls back to Playwright Chromium for PNG.
