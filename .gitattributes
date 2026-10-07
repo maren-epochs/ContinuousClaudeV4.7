@@ -1,3 +1,8 @@
 # Normalize all text files to LF in blobs; checkout EOL follows core.autocrlf/eol.
 # Ends the CRLF working-tree vs LF-blob diff tax (every live-vs-repo diff needed tr -d '\r').
 * text=auto
+# Shell scripts and the Makefile are LF in every working tree: Git Bash / bash reject
+# CRLF (`$'\r': command not found`), and a fresh Windows clone with core.autocrlf=true
+# (Git for Windows default, GitHub's windows runners) would otherwise check them out CRLF.
+*.sh text eol=lf
+Makefile text eol=lf

@@ -187,6 +187,21 @@ class TestUsername(GuardCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("OS username", r.stdout)
 
+    def test_service_accounts_not_detected(self):
+        # GitHub runners log in as runner / runneradmin; those are not personal.
+        mod = _guard_module()
+        env = {"USERNAME": "runneradmin", "USER": "Runner"}
+        with (
+            mock.patch.object(mod.os, "getlogin", return_value="root"),
+            mock.patch.dict(mod.os.environ, env),
+        ):
+            self.assertEqual(mod.detect_usernames(), [])
+        with (
+            mock.patch.object(mod.os, "getlogin", side_effect=OSError),
+            mock.patch.dict(mod.os.environ, {"USERNAME": SYNTH_NAME, "USER": ""}),
+        ):
+            self.assertEqual(mod.detect_usernames(), [SYNTH_NAME, ""])
+
 
 class TestUuid(GuardCase):
     def test_uuid_flagged(self):

@@ -19,6 +19,21 @@ HOME_LC_BS="$(node -e "console.log(require('os').homedir().replace(/\//g,'\\\\')
 FIXTURE="$HOME_FWD/.claude/tools/ouros_harness.py"
 BS_FIXTURE="$(node -e "console.log(JSON.stringify(require('path').win32.join(require('os').homedir(),'.claude','hooks','status.mjs')).slice(1,-1))")"  # real, >1500B, backslashes
 CACHE_DIR="$(node -e "console.log(require('os').tmpdir().replace(/\\\\/g,'/'))")/tldr-read-cache"
+TMPWIN="${CACHE_DIR%/tldr-read-cache}"
+
+# The nav-map, shim and launch-dir cases need the tldr binary (same lookup as the
+# hook: ~/.cargo/bin/tldr, else PATH) and a large .py inside ~/.claude (the live
+# install's ouros_harness.py). Without either (e.g. CI) they are SKIPPED, not
+# failed; the bypass and .ipynb cases are pure JS and always run.
+TLDR_OK=0; TLDR_SKIP=""
+if [ -x "$HOME_FWD/.cargo/bin/tldr" ] || [ -x "$HOME_FWD/.cargo/bin/tldr.exe" ] \
+   || command -v tldr >/dev/null 2>&1; then
+  if [ -f "$FIXTURE" ]; then TLDR_OK=1; else TLDR_SKIP="no ~/.claude/tools/ouros_harness.py (live install)"; fi
+else
+  TLDR_SKIP="tldr not installed"
+fi
+SKIPPED=0
+skip_group() { echo "SKIP: $1 ($TLDR_SKIP)"; SKIPPED=$((SKIPPED+1)); }
 
 PASS=0
 FAIL=0
@@ -73,6 +88,7 @@ run_hook "$(payload "$HOME_FWD/.claude/hooks/status.mjs")"
 run_hook "$(payload 'C:\\Users\\x\\proj\\test_foo.py')"
 [ "$OUT" = "{}" ]; check "VAL-002d test_*.py bypass unaffected" $?
 
+if [ "$TLDR_OK" -eq 1 ]; then
 # --- VAL-001a: cold run on large .py emits Nav Map ---
 rm -rf "$CACHE_DIR"
 run_hook "$(payload "$FIXTURE")"
@@ -87,7 +103,6 @@ WARM_MS="$MS"
 [ "$WARM_MS" -lt 400 ]; check "VAL-001b warm run <400ms (got ${WARM_MS}ms; cold was ${COLD_MS}ms)" $?
 
 # --- VAL-001c: touching the file invalidates the cache (re-spawns tldr, >1s) ---
-TMPWIN="$(node -e "console.log(require('os').tmpdir().replace(/\\\\/g,'/'))")"
 TMP_PY="$TMPWIN/tldr_cache_probe_$$.py"  # name must not hit test-file bypass patterns
 cp "$FIXTURE" "$TMP_PY"
 run_hook "$(payload "$TMP_PY")"   # cold: populates cache
@@ -131,6 +146,9 @@ end=$(date +%s%N); MS=$(( (end - start) / 1000000 ))
 [ "$OUT" = "$COLD_OUT" ] && [ "$MS" -gt 1000 ]
 check "VAL-201e TLDR_READ_SHIM=0 bypasses live shim (${MS}ms, want >1000ms)" $?
 node "$SHIM" stop > /dev/null 2>&1
+else
+  skip_group "VAL-001 nav-map cache + VAL-201 shim"
+fi
 
 # --- VAL-404: .ipynb reads get a cell nav map; base64 outputs never injected ---
 # Fixture: real nbformat-4 JSON (indent=1, multi-line) with a ~100KB fake
@@ -186,6 +204,7 @@ rm -f "$NB_FIXTURE" "$NB_SMALL"
 # --- VAL-501: auto-approval scoped to the launch dir (decision D1) ---
 # allow inside CLAUDE_PROJECT_DIR (case/separator-insensitive on Windows), ask outside it,
 # including a sibling dir whose name is a prefix of the file's dir.
+if [ "$TLDR_OK" -eq 1 ]; then
 DP="{\"tool_name\":\"Read\",\"cwd\":\"C:/nowhere\",\"tool_input\":{\"file_path\":\"$FIXTURE\"}}"
 decision() { printf '%s' "$DP" | env -u CLAUDE_PROJECT_DIR "$@" node "$HOOK" 2>/dev/null | grep -o '"permissionDecision":"[a-z]*"'; }
 [ "$(decision CLAUDE_PROJECT_DIR="$HOME_FWD/.claude")" = '"permissionDecision":"allow"' ]
@@ -198,7 +217,11 @@ check "VAL-501c outside launch dir -> ask" $?
 check "VAL-501d prefix-named sibling dir -> ask" $?
 [ "$(decision)" = '"permissionDecision":"ask"' ]
 check "VAL-501e no CLAUDE_PROJECT_DIR, cwd elsewhere -> ask" $?
+else
+  skip_group "VAL-501 launch-dir approval"
+fi
 
 echo
+[ "$SKIPPED" -gt 0 ] && echo "SKIPPED: $SKIPPED group(s): $TLDR_SKIP"
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

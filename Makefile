@@ -1,16 +1,21 @@
 # Continuous Claude v4.7 - developer tasks.
 # Recipes are POSIX sh: run from Git Bash on Windows (make needs sh.exe on PATH) or any
 # POSIX shell. Without make, use the PowerShell twin: pwsh install/setup.ps1 -Setup|-Test|...
-# Override the interpreter per call, e.g. `make test PYTHON=python3` on Linux/macOS.
+# Interpreter: the `py -3.13` launcher pin on Windows, python3 elsewhere; override per
+# call, e.g. `make test PYTHON=python`.
 
+ifeq ($(OS),Windows_NT)
 PYTHON ?= py -3.13
+else
+PYTHON ?= python3
+endif
 RUFF ?= $(PYTHON) -m ruff
 
 .DEFAULT_GOAL := help
 .PHONY: help setup test lint format typecheck readiness sync
 
 help: ## List targets
-	@echo "Usage: make <target> [PYTHON='py -3.13']"
+	@echo "Usage: make <target> [PYTHON='$(PYTHON)']"
 	@echo ""
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
 

@@ -5,6 +5,12 @@
 # Usage: bash scripts/test_readiness_parallel.sh
 set -u
 
+# Interpreter: $PYTHON if set (may be two words, e.g. "py -3.13"), else the Windows
+# launcher pin when present, else python3 (Linux/macOS).
+if [ -n "${PYTHON:-}" ]; then read -r -a PY <<<"$PYTHON"
+elif command -v py >/dev/null 2>&1; then PY=(py -3.13)
+else PY=(python3); fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -66,7 +72,7 @@ else
   OUT_JSON_W="$OUT_JSON"
 fi
 
-py -3.13 - "$OUT_JSON_W" <<'PYEOF'
+"${PY[@]}" - "$OUT_JSON_W" <<'PYEOF'
 import json, sys
 
 d = json.load(open(sys.argv[1]))
@@ -118,7 +124,7 @@ else
   OUT_JSON_SKIP_W="$OUT_JSON_SKIP"
 fi
 
-py -3.13 - "$OUT_JSON_W" "$OUT_JSON_SKIP_W" <<'PYEOF'
+"${PY[@]}" - "$OUT_JSON_W" "$OUT_JSON_SKIP_W" <<'PYEOF'
 import json, sys
 
 base = json.load(open(sys.argv[1]))

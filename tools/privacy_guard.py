@@ -10,7 +10,8 @@ Rejects, per line of each text file (and in the file path itself):
       transcript-dir form <drive>--Users-<name>-, unless <name> is a placeholder
       (<...>, x, user, name, you);
   (b) the current OS username (os.getlogin(), USERNAME, USER) as a whole word,
-      case-insensitive, length >= 3;
+      case-insensitive, length >= 3; shared service accounts (GitHub runners'
+      runner/runneradmin, root) are not personal and are never treated as one;
   (c) session-UUID-shaped ids (8-4-4-4-12 hex);
   (d) private terms, matched as case-insensitive substrings: the union
       (de-duplicated, case-insensitive) of
@@ -42,6 +43,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PLACEHOLDER_NAMES = {"x", "user", "name", "you"}
+# Shared service accounts (GitHub-hosted runners: runner on Linux/macOS, runneradmin
+# on Windows; root in containers). Not personal, and as whole words they hit ordinary
+# text ("runner.os", "repo root"), so CI must not flag them.
+SERVICE_ACCOUNTS = {"runner", "runneradmin", "root"}
 _NAME = r"(?P<name><[^>\s]*>|[^/\\\s\"'`<>:;,|*?()\[\]{}]+)"
 HOME_PATTERNS = [
     # C:/Users/<name>, C:\Users\<name>, C:\\Users\\<name> (escaped in JSON/shell)
@@ -150,14 +155,17 @@ def default_allow_file() -> Path:
 
 
 def detect_usernames() -> list[str]:
-    """Candidate OS usernames: os.getlogin(), $USERNAME, $USER (may be empty)."""
+    """Candidate OS usernames: os.getlogin(), $USERNAME, $USER (may be empty).
+
+    Shared service accounts (SERVICE_ACCOUNTS) are dropped.
+    """
     names = []
     try:
         names.append(os.getlogin())
     except OSError:
         pass
     names += [os.environ.get("USERNAME", ""), os.environ.get("USER", "")]
-    return names
+    return [n for n in names if n.lower() not in SERVICE_ACCOUNTS]
 
 
 def _is_placeholder(name: str) -> bool:

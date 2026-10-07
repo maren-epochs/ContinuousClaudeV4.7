@@ -7,6 +7,12 @@
 # Usage: bash scripts/test_readiness.sh
 set -u
 
+# Interpreter: $PYTHON if set (may be two words, e.g. "py -3.13"), else the Windows
+# launcher pin when present, else python3 (Linux/macOS).
+if [ -n "${PYTHON:-}" ]; then read -r -a PY <<<"$PYTHON"
+elif command -v py >/dev/null 2>&1; then PY=(py -3.13)
+else PY=(python3); fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 READINESS="$SCRIPT_DIR/readiness.sh"
 
@@ -23,7 +29,7 @@ winpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else ec
 criterion() {
   local dir="$1" id="$2" out="$1.json"
   READINESS_SKIP_SECURE=1 timeout 120 bash "$READINESS" "$dir" > "$out" 2>/dev/null || { echo "ERR"; return; }
-  py -3.13 -c "import json,sys; d=json.load(open(sys.argv[1])); n=d['report'][sys.argv[2]]['numerator']; print('null' if n is None else n)" "$(winpath "$out")" "$id" 2>/dev/null || echo "ERR"
+  "${PY[@]}" -c "import json,sys; d=json.load(open(sys.argv[1])); n=d['report'][sys.argv[2]]['numerator']; print('null' if n is None else n)" "$(winpath "$out")" "$id" 2>/dev/null || echo "ERR"
 }
 
 expect() { # <label> <fixture_dir> <criterion_id> <expected>
@@ -69,7 +75,7 @@ expect "skills fails for harness/skills without any SKILL.md" "$F" skills 0
 debt_field() {
   local dir="$1" out="$1.json"
   READINESS_SKIP_SECURE=1 timeout 180 bash "$READINESS" "$dir" > "$out" 2>/dev/null || { echo "ERR"; return; }
-  py -3.13 -c "
+  "${PY[@]}" -c "
 import json, re, sys
 c = json.load(open(sys.argv[1]))['report']['tech_debt']
 m = re.search(r'Debt ratio ([0-9.]+)%', c['rationale'])
@@ -107,7 +113,7 @@ if command -v tldr >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
 
   write_debt "$F/big.py" work_f 30; git -C "$F" add big.py
   read -r N2 R2 <<< "$(debt_field "$F")"
-  if [[ "$R1" != ERR && "$R2" != ERR ]] && py -3.13 -c "import sys; sys.exit(0 if float(sys.argv[2]) > float(sys.argv[1]) else 1)" "$R1" "$R2"; then
+  if [[ "$R1" != ERR && "$R2" != ERR ]] && "${PY[@]}" -c "import sys; sys.exit(0 if float(sys.argv[2]) > float(sys.argv[1]) else 1)" "$R1" "$R2"; then
     ok "tech_debt ratio rises with an undocumented non-test module ($R1% -> $R2%)"
   else bad "tech_debt ratio rises with an undocumented non-test module (got $R1% -> $R2%)"; fi
   if [[ "$N2" == "0" ]]; then ok "tech_debt fails with an undocumented non-test module"
