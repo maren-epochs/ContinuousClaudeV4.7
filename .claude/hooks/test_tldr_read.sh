@@ -55,10 +55,21 @@ fi
 # hook_no_tldr <payload> [extra env...] — sets OUT
 hook_no_tldr() { local p="$1"; shift; OUT=$(printf '%s' "$p" | no_tldr "$@" "$NODE_BIN" "$HOOK"); }
 SKIPPED=0
-skip_group() { echo "SKIP: $1 ($TLDR_SKIP)"; SKIPPED=$((SKIPPED+1)); }
-
 PASS=0
 FAIL=0
+# CCV_REQUIRE_TLDR=1 (set in CI, which installs tldr): a group that would be
+# skipped FAILS instead, so CI cannot silently lose tldr coverage.
+skip_group() {
+  if [ "${CCV_REQUIRE_TLDR:-}" = 1 ]; then
+    echo "FAIL: $1 not run ($TLDR_SKIP) but CCV_REQUIRE_TLDR=1"; FAIL=$((FAIL+1))
+  else
+    echo "SKIP: $1 ($TLDR_SKIP)"; SKIPPED=$((SKIPPED+1))
+  fi
+}
+skip_check() { # <name>: a check that cannot run here (same CCV_REQUIRE_TLDR rule)
+  if [ "${CCV_REQUIRE_TLDR:-}" = 1 ]; then echo "FAIL: $1 not run"; FAIL=$((FAIL+1));
+  else echo "SKIP: $1"; fi
+}
 
 # run_hook <payload> [threshold_ms] — sets OUT (stdout) and MS (wall ms).
 # With a threshold: best-of-5, MS = minimum. Windows node process start spikes
@@ -140,7 +151,7 @@ if [ "$NO_TLDR_OK" -eq 1 ]; then
   run_hook "$(payload "$TMP_PY")"
   [ "$OUT" = "$PROBE_OUT" ]; check "VAL-001c re-extract after mtime change matches original output" $?
 else
-  echo "SKIP: VAL-001c (tldr reachable from node's dir; cannot hide it)"
+  skip_check "VAL-001c (tldr reachable from node's dir; cannot hide it)"
 fi
 rm -f "$TMP_PY"
 
@@ -182,7 +193,7 @@ if [ "$NO_TLDR_OK" -eq 1 ]; then
   hook_no_tldr "$(payload "$FIXTURE")" TLDR_READ_SHIM=0
   [ "$OUT" = "{}" ]; check "VAL-201e TLDR_READ_SHIM=0 bypasses live shim (got: ${OUT:0:40})" $?
 else
-  echo "SKIP: VAL-201e (tldr reachable from node's dir; cannot hide it)"
+  skip_check "VAL-201e (tldr reachable from node's dir; cannot hide it)"
 fi
 rm -rf "$CACHE_DIR"
 OUT=$(printf '%s' "$(payload "$FIXTURE")" | TLDR_READ_SHIM=0 node "$HOOK")

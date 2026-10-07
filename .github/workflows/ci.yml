@@ -87,4 +87,6 @@ jobs:
         run: python -m pre_commit run --all-files --show-diff-on-failure
 
       - name: pytest (unit + integration)
+        env:
+          CCV_REQUIRE_TLDR: "1"  # tldr-dependent groups fail instead of skipping
         run: python -m pytest -q

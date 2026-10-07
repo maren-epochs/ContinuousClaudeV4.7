@@ -125,7 +125,11 @@ class RunCommandLegitTests(unittest.TestCase):
         r = oh._call_run_command(["wc", "-l", "tools/ouros_harness.py"])
         self.assertEqual(r.get("returncode"), 0, r)
 
-    @unittest.skipUnless(shutil.which("tldr"), "tldr not installed")
+    # CCV_REQUIRE_TLDR=1 (CI installs tldr): run, and fail, rather than skip.
+    @unittest.skipUnless(
+        shutil.which("tldr") or os.environ.get("CCV_REQUIRE_TLDR") == "1",
+        "tldr not installed",
+    )
     def test_tldr_help(self):
         r = oh._call_run_command("tldr --help")
         self.assertNotIn("error", r)

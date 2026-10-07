@@ -124,7 +124,9 @@ if command -v tldr >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
   if [[ "$N3" == "1" ]]; then ok "tech_debt passes: test files excluded (non-git find fallback)"
   else bad "tech_debt passes: test files excluded (non-git find fallback) (got numerator=$N3 ratio=$R3)"; fi
 else
-  echo "SKIP: tech_debt tests (tldr or git not on PATH)"
+  # CCV_REQUIRE_TLDR=1 (CI installs tldr): fail rather than skip.
+  if [[ "${CCV_REQUIRE_TLDR:-}" == "1" ]]; then bad "tech_debt tests not run (tldr or git not on PATH) but CCV_REQUIRE_TLDR=1"
+  else echo "SKIP: tech_debt tests (tldr or git not on PATH)"; fi
 fi
 
 echo ""
