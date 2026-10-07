@@ -60,6 +60,7 @@ class Findings:
     """Accumulates (level, path, message) validation findings for one file."""
 
     def __init__(self):
+        """Start with no findings."""
         self.items = []  # (level, path, message)
 
     def error(self, path, msg):

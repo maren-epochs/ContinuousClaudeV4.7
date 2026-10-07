@@ -13,6 +13,8 @@ repos:
     hooks:
       - id: privacy-guard
         name: privacy guard (home paths, OS username, session ids, private terms)
-        entry: py -3.13 tools/privacy_guard.py
-        language: system
+        # language: python -> pre-commit runs it in its own venv, so `python` exists
+        # on every OS (no `py` launcher needed); the guard is stdlib-only.
+        entry: python tools/privacy_guard.py
+        language: python
         types: [text]

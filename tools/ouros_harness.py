@@ -1052,11 +1052,12 @@ def _diff_output_dir(before):
     return sorted(path for path, sig in after.items() if before.get(path) != sig)
 
 
-# Outbound endpoints llm_call may POST to. Requests go only to these hosts over
-# https; plain http only to LM Studio on loopback port 1234. _post_json checks
-# every URL against this policy before a request is built, so a tampered table
-# entry (or a future configurable base URL) cannot redirect the API key or the
-# prompt to another host.
+# Outbound endpoints llm_call may POST to: a fixed table, nothing is read from a
+# file, argument or environment variable. On each request _post_json checks the
+# table URL against the scheme/host/port allowlist below (https to the three
+# provider hosts, plain http only to LM Studio on loopback:1234) and refuses any
+# 30x reply instead of following it; the auth headers are also marked
+# unredirected so urllib would never forward them.
 LLM_ENDPOINTS = {
     "local": "http://localhost:1234/v1/chat/completions",
     "anthropic": "https://api.anthropic.com/v1/messages",
@@ -1118,7 +1119,8 @@ _URL_SCHEME_CHECKS = {"https": _check_https_target, "http": _check_http_target}
 def _post_json(url, body, headers, timeout):
     """POST `body` as JSON to an allowlisted `url`; return the parsed reply.
 
-    Raises UrlRefused before any request is built if the URL fails policy."""
+    Raises UrlRefused before any request is built if the URL fails policy, and
+    on any 30x reply (redirects are never followed)."""
     import urllib.request
 
     allowed, reason = _check_url_allowed(url)
@@ -1127,11 +1129,38 @@ def _post_json(url, body, headers, timeout):
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
-        headers={**headers, "content-type": "application/json"},
+        headers={"content-type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-    return json.loads(raw)
+    for name, value in headers.items():
+        # Unredirected headers are never copied to a redirected request.
+        req.add_unredirected_header(name, value)
+    return json.loads(_open_refusing_redirects(req, timeout))
+
+
+def _open_refusing_redirects(req, timeout):
+    """Body bytes of `req` via urllib.request.urlopen; any 30x raises UrlRefused.
+
+    urlopen's opener follows 301/302/303 for POST. Its loop guard
+    (HTTPRedirectHandler.http_error_302) raises HTTPError before following once
+    req.redirect_dict holds max_redirections entries, so pre-filling it makes every
+    redirect terminal without touching the process-wide opener. The loopback
+    tests in test_ouros_policy.LlmRedirectTests pin this per CPython version."""
+    import urllib.error
+    import urllib.request
+
+    limit = urllib.request.HTTPRedirectHandler.max_redirections
+    req.redirect_dict = {f"redirects-refused:{i}": 0 for i in range(limit)}
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        if not 300 <= e.code < 400:
+            raise
+        target = e.headers.get("location") if e.headers else None
+        e.close()
+        raise UrlRefused(
+            f"llm_call refused redirect {e.code} from {req.full_url!r} to {target!r}"
+        ) from None
 
 
 def _call_llm(

@@ -9,6 +9,8 @@ Covers:
       dropped when cwd is home
   (d) glob_files: root checked, secrets and out-of-root matches filtered
   (e) agent_call: claude -p always carries --max-turns
+  (f) llm_call: _post_json refuses every 30x redirect, so the API key and the
+      prompt never reach the redirect target (loopback http.server, no network)
 
 Run: py -3.13 tools/test_ouros_policy.py
 
@@ -16,11 +18,13 @@ Unit-level: imports the harness module and calls the bridge functions directly
 (the sandbox dispatches to these same functions).
 """
 
+import http.server
 import importlib.util
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -385,6 +389,115 @@ class AgentCallCharacterization(unittest.TestCase):
         self.assertEqual(
             out, {"error": "Agent 'codex' not found on PATH. Is it installed?"}
         )
+
+
+class _RecordingHandler(http.server.BaseHTTPRequestHandler):
+    """Loopback test server: records each request, then redirects or replies."""
+
+    def _handle(self):
+        length = int(self.headers.get("content-length") or 0)
+        body = self.rfile.read(length) if length else b""
+        self.server.seen.append((self.command, self.path, self.headers, body))
+        code, location = self.server.route(self.path)
+        if location:
+            self.send_response(code)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        reply = b'{"choices": [{"message": {"content": "ok"}}]}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+    do_GET = do_POST = do_HEAD = _handle
+
+    def log_message(self, *args):
+        """Keep test output quiet."""
+
+
+def _start_server(route):
+    """ThreadingHTTPServer on 127.0.0.1:<free port>; route(path) -> (code, location)."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+    server.seen = []
+    server.route = route
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+class LlmRedirectTests(unittest.TestCase):
+    """_post_json never follows a redirect: refused, nothing reaches the target."""
+
+    def setUp(self):
+        self.sink = _start_server(lambda path: (200, None))
+        self.addCleanup(self.sink.server_close)
+        self.addCleanup(self.sink.shutdown)
+        sink_url = f"http://127.0.0.1:{self.sink.server_port}/steal"
+        self.code = 302
+
+        def route(path):
+            if path.startswith("/to-sink"):
+                return self.code, sink_url
+            if path.startswith("/to-self"):
+                return self.code, "/ok"
+            return 200, None
+
+        self.origin = _start_server(route)
+        self.addCleanup(self.origin.server_close)
+        self.addCleanup(self.origin.shutdown)
+        self.base = f"http://127.0.0.1:{self.origin.server_port}"
+        # Only the origin is an allowed llm_call target; the sink is not.
+        allow = frozenset({("127.0.0.1", self.origin.server_port)})
+        for patcher in (
+            mock.patch.object(oh, "_LLM_LOOPBACK_HTTP", allow),
+            mock.patch.dict(os.environ, {"no_proxy": "*", "NO_PROXY": "*"}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for var in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+            os.environ.pop(var, None)
+
+    def _post(self, path):
+        return oh._post_json(
+            self.base + path,
+            {"prompt": "secret prompt"},
+            {"x-api-key": "sk-secret", "Authorization": "Bearer sk-secret"},
+            timeout=5,
+        )
+
+    def test_direct_reply_still_parsed(self):
+        reply = self._post("/ok")
+        self.assertEqual(reply["choices"][0]["message"]["content"], "ok")
+        method, _, headers, body = self.origin.seen[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(headers.get("x-api-key"), "sk-secret")
+        self.assertIn(b"secret prompt", body)
+
+    def test_redirect_to_other_host_refused_and_target_untouched(self):
+        for code in (301, 302, 303, 307, 308):
+            self.code = code
+            with self.subTest(code=code):
+                with self.assertRaises(oh.UrlRefused) as cm:
+                    self._post("/to-sink")
+                self.assertIn("redirect", str(cm.exception))
+        self.assertEqual(self.sink.seen, [])
+
+    def test_redirect_to_allowed_url_also_refused(self):
+        for code in (301, 302, 303, 307, 308):
+            self.code = code
+            with self.subTest(code=code), self.assertRaises(oh.UrlRefused):
+                self._post("/to-self")
+        self.assertEqual([p for _, p, _, _ in self.origin.seen if p == "/ok"], [])
+
+    def test_call_llm_reports_refused_redirect(self):
+        with mock.patch.dict(oh.LLM_ENDPOINTS, {"local": self.base + "/to-sink"}):
+            out = oh._call_llm("secret prompt", backend="local")
+        self.assertIsInstance(out, dict)
+        self.assertIn("refused", out["error"])
+        self.assertEqual(self.sink.seen, [])
 
 
 if __name__ == "__main__":

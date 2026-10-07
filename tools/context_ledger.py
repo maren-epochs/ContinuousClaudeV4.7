@@ -115,11 +115,13 @@ class Reader:
     are valid once iteration finishes."""
 
     def __init__(self, path):
+        """Bind the transcript path; counters start at zero, version unknown."""
         self.path = path
         self.skipped = 0
         self.version = None
 
     def __iter__(self):
+        """Yield (timestamp, context, output_tokens, label) per main-thread turn."""
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 e = self._entry(line)

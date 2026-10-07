@@ -149,7 +149,7 @@ pwsh install/setup.ps1 -Setup -Test    # also: -Lint, -Format, -Typecheck, -Read
 
 ## Development
 
-`.pre-commit-config.yaml` runs `ruff check`, `ruff format --check` and `privacy-guard` (`tools/privacy_guard.py`) on every commit; enable with `py -3.13 -m pre_commit install`, check the tree with `py -3.13 -m pre_commit run --all-files`.
+`.pre-commit-config.yaml` runs `ruff check`, `ruff format --check` and `privacy-guard` (`tools/privacy_guard.py`, run by pre-commit's own Python on any OS) on every commit; enable with `py -3.13 -m pre_commit install`, check the tree with `py -3.13 -m pre_commit run --all-files`.
 The guard rejects absolute user-home paths, your OS username, session-UUID-shaped ids, and every line of the untracked `.git/info/privacy-terms` (one term per line, `#` comments; create it locally, never commit it).
 Reviewed false positives go in `.privacy-allow` (one regex per line, full match against the flagged text).
 

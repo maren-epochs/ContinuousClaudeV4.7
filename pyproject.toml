@@ -79,10 +79,20 @@ force-exclude = true
 # That set was NOT clean on 2026-10-06 (100 findings in 5 files). Implicit-Optional
 # (RUF013) was fixed with the mypy pass; the rest is grandfathered per file below so
 # new code gets the full set. Delete an entry when a refactor wave cleans that file.
+# Added on top: pydocstyle presence rules (D100-D107) - every public module, class,
+# function, method and __init__ in non-test source needs a docstring. Tests are
+# exempt below; the vendored validate_palette.py is excluded from ruff entirely.
+extend-select = ["D1"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests assert on returncode themselves; class-level fixtures are read-only.
-"**/test_*.py" = ["PLW1510", "RUF012"]
+# Test names describe themselves, so no docstring requirement (D1).
+"**/test_*.py" = ["PLW1510", "RUF012", "D1"]
+"tests/**" = ["D1"]
+"**/conftest.py" = ["D1"]
+# Line 1 must be the /visualize PRELUDE verbatim (tools/viz/test_import.py), so
+# this file cannot open with a module docstring.
+"continuum/research/dataviz-suite/demo.py" = ["D100"]
 # Grandfathered (pre-existing, 2026-10-06): one blind except (main's last-resort handler).
 "tools/nia_docs.py" = ["BLE001"]
 # Grandfathered (pre-existing): sandbox bridge; changes here get a hand-reviewed diff.
