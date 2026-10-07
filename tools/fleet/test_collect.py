@@ -187,7 +187,7 @@ class SessionFileTests(FleetHome):
         self.assertEqual(s.started_at, "2026-10-05T20:07:22Z")
         self.assertEqual(s.updated_at, "2026-10-05T20:08:20Z")
         self.assertEqual(s.extra.get("waiting_for"), "input")
-        self.assertEqual(s.alerts, [])
+        self.assertEqual([a for a in s.alerts if a.kind == "schema_unknown"], [])
         self.alive.assert_called_with(4242, "134357044404838550")
 
     def test_string_timestamps_keep_source_form(self):
@@ -420,7 +420,8 @@ class TranscriptTests(FleetHome):
         self.transcript(cwd, "sess-a1", [assistant("claude-x"), assistant("claude-y")])
         s = self.collect_one()
         self.assertEqual(s.model, "claude-y")
-        self.assertEqual([a.kind for a in s.alerts], ["schema_unknown"])
+        kinds = [a.kind for a in s.alerts if a.kind != "compliance"]
+        self.assertEqual(kinds, ["schema_unknown"])
         self.assertIn("usage", s.alerts[0].detail)
         self.assertEqual(s.alerts[0].evidence, "sess-a1.jsonl")
 

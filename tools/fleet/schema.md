@@ -115,6 +115,36 @@ each transcript and the last 256 KB of `audit.jsonl`, which it renames to
 `audit.jsonl.1` once past 5 MB. Missing expected session keys or transcript fields
 (`type`, assistant `message.usage`) add a `schema_unknown` alert.
 
+### Checks (`tools/fleet/checks.py`)
+
+`collect()` ends with `checks.run_checks(state, now)`, which re-reads each session's
+`extra.transcript` tail (512 KB, absolute line numbers) plus subagent transcripts
+under `<transcript stem>/` modified since that tail began, and fills `collisions`,
+`harness.drift` and per-session `alerts`. Evidence is `<transcript path>:<line>`
+(`<pid>.json` when a session has no transcript). Session files and `*.key` are never
+opened; manifest keys that are absolute, contain `..`, sit under `sessions/` or end in
+`.key` are skipped.
+
+| Alert kind | Severity | Raised when |
+|------------|----------|-------------|
+| `collision` | `error` | 2+ alive sessions wrote the same absolute path (Write/Edit/MultiEdit/NotebookEdit `file_path`/`notebook_path`; case-insensitive on win32, `/c/` form accepted) within the last 30 min; also a `Collision` of kind `path` |
+| `collision` | `warn` | 2+ alive sessions whose cwd lies in one git root (`.git` dir or file; separate worktrees differ; home is never a root); also a `Collision` of kind `repo` |
+| `stuck` | `warn` | alive only: an AskUserQuestion without a result for > 20 min; else status `waiting` for > 20 min (`status_updated_at`, `waiting_for` in the detail); else the final completed turn ends in a question > 20 min old with `agents_running == 0` and status not `busy` |
+| `stuck` | `warn` | alive only: the last 3+ tool calls are the same tool with the same input and every result is `is_error` |
+| `stuck` | `warn` | alive only: an Agent/Task result (`toolUseResult` status/subtype/stop_reason, the result text or a `<task-notification>`) says it stopped at its turn limit, and the report path in its prompt (`"output": "...json"`, else the first `.../reports/<name>.json`) does not exist |
+| `compliance` | `warn` | last main-chain assistant model does not start with `claude-opus-5-5` and no user prompt in the tail (system reminders stripped) names another model (`sonnet`, `haiku`, `opus 1-4`, `claude-...`, `/model`) |
+| `compliance` | `info` | completed turns (closed by a user prompt, or the final turn when status is not `busy` and no tool call is pending) whose last block is text ending in `?` with no AskUserQuestion in the turn; one alert with the count, evidence = newest |
+| `compliance` | `warn` | a write outside the session's own root (git root of cwd, else cwd) into another git root or another session's cwd; `~/.claude` excluded; one alert per foreign root |
+| `drift` | `info` | alive session `started_at` before the last sync (max of manifest `generated_at` and the `.ccv47-installed` mtime) |
+
+**Drift entries**: for every non-kept manifest file with a `sha256`, the sha256 of
+`<manifest dir>/<key>` is compared to it: `modified` (differs) or `missing`. When the
+manifest itself is stale (the first token of `<manifest dir>/.ccv47-installed` differs
+from manifest `head_sha`, or the marker is more than 60 s newer than `generated_at`:
+a `sync --apply` that failed before rewriting the manifest), `drift` holds one entry
+instead: `status` `stale`, `installed_path` = the manifest, `expected_sha` = marker sha,
+`actual_sha` = manifest `head_sha`, `extra.detail` starting `manifest stale`.
+
 ## Proposal (`harness-inbox/<id>.json`)
 
 | Field | Type | Meaning |

@@ -13,8 +13,8 @@ Sources, all read-only except the audit rotation and state.json:
 
 Claude Code's files are undocumented: every key is optional, wrong types become
 null, and vanished keys raise a ``schema_unknown`` alert instead of an error.
-Per-file drift alerts are VAL-806 (checks.py); here the harness is HEAD vs the
-sha recorded at the last sync.
+``collect()`` ends with ``checks.run_checks`` (alerts, collisions, per-file
+drift); the harness summary here is HEAD vs the sha recorded at the last sync.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import model
+from . import checks, model
 from .model import (
     Alert,
     AuditEvent,
@@ -622,6 +622,7 @@ def collect() -> FleetState:
             mem_free_gb=_finite(memory.mem_free_gb),
         ),
     )
+    checks.run_checks(state, now)
     state.extra["warnings"] = warnings
     state.extra["collect_s"] = round(time.perf_counter() - started, 3)
     return state
