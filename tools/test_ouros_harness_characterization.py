@@ -212,6 +212,34 @@ class _FakePopen:
         return out, None
 
 
+class HostPythonCmdTests(unittest.TestCase):
+    """_host_python_cmd resolution order (VAL-702: CI/venv interpreters win)."""
+
+    def _cmd(self, env, version, has_py):
+        which = "C:/py.exe" if has_py else None
+        with (
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch.object(oh.sys, "version_info", version),
+            mock.patch("shutil.which", return_value=which),
+        ):
+            if "OUROS_HOST_PYTHON" not in env:
+                os.environ.pop("OUROS_HOST_PYTHON", None)
+            return oh._host_python_cmd()
+
+    def test_env_override_wins(self):
+        env = {"OUROS_HOST_PYTHON": "/opt/ds/bin/python"}
+        self.assertEqual(self._cmd(env, (3, 13, 0), True), ["/opt/ds/bin/python"])
+
+    def test_own_interpreter_when_313(self):
+        self.assertEqual(self._cmd({}, (3, 13, 7), True), [sys.executable])
+
+    def test_launcher_pin_when_not_313(self):
+        self.assertEqual(self._cmd({}, (3, 14, 0), True), ["py", "-3.13"])
+
+    def test_own_interpreter_without_launcher(self):
+        self.assertEqual(self._cmd({}, (3, 14, 0), False), [sys.executable])
+
+
 class RunPythonTests(unittest.TestCase):
     """run_python: validation, timeout clamp, truncation, exit/timeout markers."""
 

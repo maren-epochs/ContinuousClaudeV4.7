@@ -616,7 +616,7 @@ SECURITY_POLICY = {
     # artifacts), at most one concurrent run, and timeout kills the whole
     # process tree (taskkill /T /F on Windows).
     "run_python": {
-        "host_interpreter": "py -3.13 (fallback: the harness's own interpreter)",
+        "host_interpreter": "$OUROS_HOST_PYTHON, else the harness's own CPython 3.13, else py -3.13, else the harness's own interpreter",
         "max_concurrent": 1,
         "default_timeout_s": 60,
         "max_timeout_s": 600,
@@ -934,10 +934,19 @@ _SESSION_WORK_DIR = None
 
 
 def _host_python_cmd():
-    """Interpreter for run_python: the Windows launcher pin 'py -3.13' when
-    available (full DS stack), else the interpreter running this harness."""
+    """Interpreter for run_python, first match wins:
+    $OUROS_HOST_PYTHON (one executable path); the interpreter running this
+    harness when it is CPython 3.13 (a venv/CI interpreter keeps its own DS
+    stack); the Windows launcher pin 'py -3.13'; else the harness's own
+    interpreter."""
+    import os
     import shutil
 
+    override = os.environ.get("OUROS_HOST_PYTHON", "").strip()
+    if override:
+        return [override]
+    if sys.version_info[:2] == (3, 13):
+        return [sys.executable]
     if shutil.which("py"):
         return ["py", "-3.13"]
     return [sys.executable]
