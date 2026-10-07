@@ -119,6 +119,7 @@ _TOKEN_RE = re.compile(r"token:(.*)", re.DOTALL)
 
 
 def _css_names(mode):
+    """Custom-property names (without '--') palette.css_tokens(mode) declares."""
     return [
         line.split(":", 1)[0].strip()[2:]
         for line in palette.css_tokens(mode).splitlines()
@@ -138,6 +139,7 @@ DUAL_AXIS_WARNING = (
 
 
 def _json_default(obj):
+    """json.dumps fallback: numpy -> list, datetimes -> ISO, sets -> list, else str."""
     if hasattr(obj, "tolist"):  # numpy arrays / scalars
         return obj.tolist()
     if hasattr(obj, "isoformat"):  # datetime, date, pandas Timestamp
@@ -164,6 +166,7 @@ def _script_json(obj):
 
 
 def _distinct(rows, field):
+    """Distinct values of field across dict rows, in first-seen order."""
     seen = []
     for r in rows or []:
         if isinstance(r, dict) and field in r and r[field] not in seen:
@@ -172,6 +175,7 @@ def _distinct(rows, field):
 
 
 def _vl_field_escape(name):
+    """Escape '.', '[', ']' and backslash so Vega-Lite reads name literally."""
     return re.sub(r"([\\.\[\]])", r"\\\1", str(name))
 
 
@@ -190,6 +194,7 @@ def _vl_values(spec):
 
 
 def _mark_type(mark):
+    """Mark type of a Vega-Lite mark (string or {'type': ...}), else None."""
     if isinstance(mark, str):
         return mark
     if isinstance(mark, dict):
@@ -198,6 +203,7 @@ def _mark_type(mark):
 
 
 def _mark_with(mark, **extra):
+    """Mark as a dict with extra properties added where the author set none."""
     out = {"type": mark} if isinstance(mark, str) else dict(mark)
     for k, v in extra.items():
         out.setdefault(k, v)
@@ -242,6 +248,27 @@ def _check_tokens(obj, where):
 # --------------------------------------------------------------------------- vega-lite
 
 
+def _vl_fold_fields(t):
+    """{key field: folded field names, value field: None} created by one fold."""
+    as_ = [str(a) for a in _as_list(t.get("as"))] or ["key", "value"]
+    return {
+        as_[0]: [str(f) for f in _as_list(t["fold"])],
+        as_[1] if len(as_) > 1 else "value": None,
+    }
+
+
+def _vl_outputs(t):
+    """Field names a non-fold transform creates ('as' of its ops, then its own 'as')."""
+    names = []
+    for key in ("window", "joinaggregate", "aggregate"):
+        names += [
+            str(item["as"])
+            for item in _as_list(t.get(key))
+            if isinstance(item, dict) and item.get("as")
+        ]
+    return names + [a for a in _as_list(t.get("as")) if isinstance(a, str)]
+
+
 def _vl_derived(transforms):
     """Fields a Vega-Lite transform list creates -> series names (fold key) or None.
 
@@ -254,17 +281,10 @@ def _vl_derived(transforms):
         if not isinstance(t, dict):
             continue
         if "fold" in t:
-            as_ = [str(a) for a in _as_list(t.get("as"))] or ["key", "value"]
-            out[as_[0]] = [str(f) for f in _as_list(t["fold"])]
-            out[as_[1] if len(as_) > 1 else "value"] = None
+            out.update(_vl_fold_fields(t))
             continue
-        for key in ("window", "joinaggregate", "aggregate"):
-            for item in _as_list(t.get(key)):
-                if isinstance(item, dict) and item.get("as"):
-                    out[str(item["as"])] = None
-        for a in _as_list(t.get("as")):
-            if isinstance(a, str):
-                out[a] = None
+        for name in _vl_outputs(t):
+            out[name] = None
     return out
 
 
@@ -275,23 +295,24 @@ def _vl_series(field, values, derived):
     return _distinct(values, field) if values else []
 
 
-def _vl_crosshair(spec, values):
-    """Single-view line/area -> layer [mark, hover points, pivot rule with tooltip]."""
-    enc = dict(spec.get("encoding") or {})
-    x, y, color = enc.get("x"), enc.get("y"), enc.get("color")
-    if not (isinstance(x, dict) and x.get("field")):
-        return spec
-    mark = spec["mark"]
-    kind = _mark_type(mark)
-    base_enc = {k: v for k, v in enc.items() if k != "x"}
-    x_tip = {
-        k: x[k] for k in ("field", "type", "timeUnit", "title", "format") if k in x
-    }
-    y_plain = isinstance(y, dict) and y.get("field") and not y.get("aggregate")
-    color_field = color.get("field") if isinstance(color, dict) else None
-    derived = _vl_derived(spec.get("transform"))
-    series = _vl_series(color_field, values, derived) if color_field else []
-    rule = {
+def _vl_tip(channel, keys):
+    """Tooltip entry: the listed keys an encoding channel sets, in key order."""
+    return {k: channel[k] for k in keys if k in channel}
+
+
+def _vl_plain_y(y):
+    """True when y is a raw (unaggregated) field - one value per x and series."""
+    return bool(isinstance(y, dict) and y.get("field") and not y.get("aggregate"))
+
+
+def _vl_color_field(color):
+    """Field of a color channel dict, else None."""
+    return color.get("field") if isinstance(color, dict) else None
+
+
+def _vl_hover_rule(x_field):
+    """Rule layer shown at the x nearest the pointer (tooltip added by the caller)."""
+    return {
         "mark": {"type": "rule", "strokeWidth": 1},
         "encoding": {
             "opacity": {
@@ -304,7 +325,7 @@ def _vl_crosshair(spec, values):
                 "name": "hover",
                 "select": {
                     "type": "point",
-                    "fields": [x["field"]],
+                    "fields": [x_field],
                     "nearest": True,
                     "on": "pointerover",
                     "clear": "pointerout",
@@ -312,51 +333,100 @@ def _vl_crosshair(spec, values):
             }
         ],
     }
-    if color_field and y_plain and (series or series is None):
-        rule["transform"] = [
-            {"pivot": color_field, "value": y["field"], "groupby": [x["field"]]}
-        ]
-        if series:
-            rule["encoding"]["tooltip"] = [x_tip] + [
-                {"field": _vl_field_escape(s), "type": "quantitative", "title": str(s)}
-                for s in series
-            ]
-        else:  # transform output with unknown values: show every pivoted field
-            rule["mark"]["tooltip"] = {"content": "data"}
-    else:
-        tips = [x_tip]
-        if color_field:
-            tips.append(
-                {
-                    "field": color_field,
-                    "type": color.get("type", "nominal"),
-                    "title": color.get("title", color_field),
-                }
-            )
-        if isinstance(y, dict) and y.get("field"):
-            tips.append(
-                {
-                    k: y[k]
-                    for k in ("field", "type", "aggregate", "title", "format")
-                    if k in y
-                }
-            )
-        rule["encoding"]["tooltip"] = tips
-    layers = [{"mark": mark, "encoding": base_enc}]
-    if kind == "line" and y_plain:
-        point_enc = {k: v for k, v in base_enc.items() if k in ("y", "color")}
-        layers.append(
+
+
+def _vl_plain_tips(x_tip, y, color):
+    """Tooltip list without a pivot: x, then the color field, then y when it has one."""
+    tips = [x_tip]
+    color_field = _vl_color_field(color)
+    if color_field:
+        tips.append(
             {
-                "transform": [{"filter": {"param": "hover", "empty": False}}],
-                "mark": {"type": "point", "filled": True, "size": 64},
-                "encoding": point_enc,
+                "field": color_field,
+                "type": color.get("type", "nominal"),
+                "title": color.get("title", color_field),
             }
         )
+    if isinstance(y, dict) and y.get("field"):
+        tips.append(_vl_tip(y, ("field", "type", "aggregate", "title", "format")))
+    return tips
+
+
+def _vl_rule_tooltip(rule, enc, series):
+    """Tooltip of the hover rule: pivoted per-series values, or the plain fields."""
+    x, y, color = enc.get("x"), enc.get("y"), enc.get("color")
+    x_tip = _vl_tip(x, ("field", "type", "timeUnit", "title", "format"))
+    color_field = _vl_color_field(color)
+    if not (color_field and _vl_plain_y(y) and (series or series is None)):
+        rule["encoding"]["tooltip"] = _vl_plain_tips(x_tip, y, color)
+        return
+    rule["transform"] = [
+        {"pivot": color_field, "value": y["field"], "groupby": [x["field"]]}
+    ]
+    if series:
+        rule["encoding"]["tooltip"] = [x_tip] + [
+            {"field": _vl_field_escape(s), "type": "quantitative", "title": str(s)}
+            for s in series
+        ]
+    else:  # transform output with unknown values: show every pivoted field
+        rule["mark"]["tooltip"] = {"content": "data"}
+
+
+def _vl_hover_points(base_enc):
+    """Filled point layer drawn only at the hovered x (line marks)."""
+    return {
+        "transform": [{"filter": {"param": "hover", "empty": False}}],
+        "mark": {"type": "point", "filled": True, "size": 64},
+        "encoding": {k: v for k, v in base_enc.items() if k in ("y", "color")},
+    }
+
+
+def _vl_crosshair(spec, values):
+    """Single-view line/area -> layer [mark, hover points, pivot rule with tooltip]."""
+    enc = dict(spec.get("encoding") or {})
+    x = enc.get("x")
+    if not (isinstance(x, dict) and x.get("field")):
+        return spec
+    mark = spec["mark"]
+    base_enc = {k: v for k, v in enc.items() if k != "x"}
+    color_field = _vl_color_field(enc.get("color"))
+    derived = _vl_derived(spec.get("transform"))
+    series = _vl_series(color_field, values, derived) if color_field else []
+    rule = _vl_hover_rule(x["field"])
+    _vl_rule_tooltip(rule, enc, series)
+    layers = [{"mark": mark, "encoding": base_enc}]
+    if _mark_type(mark) == "line" and _vl_plain_y(enc.get("y")):
+        layers.append(_vl_hover_points(base_enc))
     layers.append(rule)
     out = {k: v for k, v in spec.items() if k not in ("mark", "encoding")}
     out["encoding"] = {"x": x}
     out["layer"] = layers
     return out
+
+
+def _vl_fold_sort(color, field, derived):
+    """Fold-created color field: slots follow the fold order unless the author set one."""
+    if field not in derived or "sort" in color:
+        return
+    if "domain" in (color.get("scale") or {}):
+        return
+    color["sort"] = list(derived[field])
+
+
+def _vl_color_legend(color, values, derived):
+    """Legend (and fold sort) of one color channel from its series count."""
+    field = color["field"]
+    if field in derived and derived[field] is None:
+        color.setdefault("legend", {})
+        return
+    _vl_fold_sort(color, field, derived)
+    if field not in derived and values is None:
+        return
+    n = len(_vl_series(field, values, derived))
+    if n < 2:
+        color["legend"] = None
+    elif not isinstance(color.get("legend"), dict):
+        color["legend"] = {}
 
 
 def _vl_legend(spec, values):
@@ -374,60 +444,65 @@ def _vl_legend(spec, values):
         if not (isinstance(color, dict) and color.get("field")):
             continue
         derived = top if t is spec else {**top, **_vl_derived(t.get("transform"))}
-        field = color["field"]
-        if field in derived and derived[field] is None:
-            color.setdefault("legend", {})
-            continue
-        if (
-            field in derived
-            and "sort" not in color
-            and "domain" not in (color.get("scale") or {})
-        ):
-            color["sort"] = list(derived[field])  # slots follow the fold order
-        if field not in derived and values is None:
-            continue
-        n = len(_vl_series(field, values, derived))
-        if n < 2:
-            color["legend"] = None
-        elif not isinstance(color.get("legend"), dict):
-            color["legend"] = {}
+        _vl_color_legend(color, values, derived)
+
+
+_VL_COMPOSITE = ("facet", "repeat", "concat", "hconcat", "vconcat")
+
+
+def _vl_drop_independent_y(spec, warnings):
+    """Remove resolve.scale.y = 'independent' (a dual axis) with a page warning."""
+    resolve = spec.get("resolve")
+    if not isinstance(resolve, dict):
+        return
+    if (resolve.get("scale") or {}).get("y") != "independent":
+        return
+    resolve["scale"].pop("y")
+    if not resolve["scale"]:
+        resolve.pop("scale")
+    if not resolve:
+        spec.pop("resolve")
+    warnings.append(DUAL_AXIS_WARNING)
+
+
+def _vl_is_single(spec):
+    """True for a single-view spec: a mark and no layer/params/composition."""
+    return "mark" in spec and not any(
+        k in spec for k in ("layer", "params") + _VL_COMPOSITE
+    )
+
+
+def _vl_patch_single(spec, values):
+    """Single view: crosshair layer for line/area, tooltip on any other typed mark."""
+    kind = _mark_type(spec["mark"])
+    if kind in ("line", "area"):
+        return _vl_crosshair(spec, values)
+    if kind and not (isinstance(spec["mark"], dict) and "tooltip" in spec["mark"]):
+        spec["mark"] = _mark_with(spec["mark"], tooltip=True)
+    return spec
+
+
+def _vl_stroke_legend(spec):
+    """A line view's legend draws stroke symbols (the author's symbolType kept)."""
+    if _mark_type(spec.get("mark") or spec["layer"][0].get("mark")) != "line":
+        return
+    base = spec if "mark" in spec else spec["layer"][0]
+    legend = ((base.get("encoding") or {}).get("color") or {}).get("legend")
+    if isinstance(legend, dict):
+        legend.setdefault("symbolType", "stroke")  # legend mirrors the mark
 
 
 def _prepare_vega_lite(spec, warnings):
+    """Patch a Vega-Lite spec (dual axis, tooltips, legend, fit); returns (spec, rows)."""
     values = _vl_values(spec)
-    resolve = spec.get("resolve")
-    if (
-        isinstance(resolve, dict)
-        and (resolve.get("scale") or {}).get("y") == "independent"
-    ):
-        resolve["scale"].pop("y")
-        if not resolve["scale"]:
-            resolve.pop("scale")
-        if not resolve:
-            spec.pop("resolve")
-        warnings.append(DUAL_AXIS_WARNING)
-    single = "mark" in spec and not any(
-        k in spec
-        for k in ("layer", "params", "facet", "repeat", "concat", "hconcat", "vconcat")
-    )
+    _vl_drop_independent_y(spec, warnings)
+    single = _vl_is_single(spec)
     if single:
-        kind = _mark_type(spec["mark"])
-        if kind in ("line", "area"):
-            spec = _vl_crosshair(spec, values)
-        elif kind and not (
-            isinstance(spec["mark"], dict) and "tooltip" in spec["mark"]
-        ):
-            spec["mark"] = _mark_with(spec["mark"], tooltip=True)
+        spec = _vl_patch_single(spec, values)
     _vl_legend(spec, values)
-    if (
-        single
-        and _mark_type(spec.get("mark") or spec["layer"][0].get("mark")) == "line"
-    ):
-        base = spec if "mark" in spec else spec["layer"][0]
-        legend = ((base.get("encoding") or {}).get("color") or {}).get("legend")
-        if isinstance(legend, dict):
-            legend.setdefault("symbolType", "stroke")  # legend mirrors the mark
-    if not any(k in spec for k in ("facet", "repeat", "concat", "hconcat", "vconcat")):
+    if single:
+        _vl_stroke_legend(spec)
+    if not any(k in spec for k in _VL_COMPOSITE):
         spec["width"] = "container"
         spec["height"] = "container"
         spec["autosize"] = {"type": "fit", "contains": "padding"}
@@ -438,14 +513,34 @@ def _prepare_vega_lite(spec, warnings):
 
 
 def _as_list(v):
+    """[] for None, the value itself for a list, else a one-item list."""
     if v is None:
         return []
     return v if isinstance(v, list) else [v]
 
 
 def _markerless(s):
+    """True for a line series drawn without point symbols."""
     return s.get("type") == "line" and (
         s.get("showSymbol") is False or s.get("symbol") == "none"
+    )
+
+
+def _is_name_list(value):
+    """True for a list/tuple whose items are all strings."""
+    return isinstance(value, (list, tuple)) and all(isinstance(n, str) for n in value)
+
+
+def _unknown_end_labels(unknown, lines):
+    """Warning naming end_labels entries that are not line series."""
+    return (
+        "end_labels: no line series named "
+        + ", ".join(repr(n) for n in unknown)
+        + (
+            f"; line series are {', '.join(repr(n) for n in sorted(lines))}."
+            if lines
+            else "; the chart has no named line series."
+        )
     )
 
 
@@ -460,9 +555,7 @@ def _end_label_names(value, series, warnings):
         return None
     if value is False or value is None:
         return set()
-    if not isinstance(value, (list, tuple)) or not all(
-        isinstance(n, str) for n in value
-    ):
+    if not _is_name_list(value):
         warnings.append(
             f"end_labels ignored: expected True or a list of series names, "
             f"got {value!r}."
@@ -473,15 +566,7 @@ def _end_label_names(value, series, warnings):
     }
     unknown = [n for n in value if n not in lines]
     if unknown:
-        warnings.append(
-            "end_labels: no line series named "
-            + ", ".join(repr(n) for n in unknown)
-            + (
-                f"; line series are {', '.join(repr(n) for n in sorted(lines))}."
-                if lines
-                else "; the chart has no named line series."
-            )
-        )
+        warnings.append(_unknown_end_labels(unknown, lines))
     return set(value) & lines
 
 
@@ -560,6 +645,7 @@ def _patch_echarts_legend(opt, series, show):
 
 
 def _patch_echarts_bar(s, horizontal):
+    """Bar width cap and rounded value-end corners (author settings kept)."""
     s.setdefault("barMaxWidth", BAR_MAX_PX)
     item = s.setdefault("itemStyle", {})
     item.setdefault("borderRadius", [0, 4, 4, 0] if horizontal else [4, 4, 0, 0])
@@ -578,29 +664,52 @@ def _patch_echarts_line(s, labelled):
         s.setdefault("labelLayout", {"moveOverlap": "shiftY"})
 
 
-def _echarts_rows(opt, series, x_axes):
+def _first_dict(axes):
+    """First axis when it is a dict, else {}."""
+    return axes[0] if axes and isinstance(axes[0], dict) else {}
+
+
+def _dataset_rows(opt):
+    """Rows from dataset.source (dict rows, or a header row + list rows), else None."""
     dataset = opt.get("dataset")
     source = dataset.get("source") if isinstance(dataset, dict) else None
-    if isinstance(source, list) and source:
-        if all(isinstance(r, dict) for r in source):
-            return source
-        if isinstance(source[0], list):
-            header = [str(h) for h in source[0]]
-            return [dict(zip(header, r)) for r in source[1:] if isinstance(r, list)]
-    axis = x_axes[0] if x_axes and isinstance(x_axes[0], dict) else {}
-    cats = axis.get("data")
+    if not (isinstance(source, list) and source):
+        return None
+    if all(isinstance(r, dict) for r in source):
+        return source
+    if isinstance(source[0], list):
+        header = [str(h) for h in source[0]]
+        return [dict(zip(header, r)) for r in source[1:] if isinstance(r, list)]
+    return None
+
+
+def _category_data(opt, x_axes):
+    """Category list of the first x axis, else of the first y axis."""
+    cats = _first_dict(x_axes).get("data")
     if not isinstance(cats, list):
-        y_axes = _as_list(opt.get("yAxis"))
-        axis = y_axes[0] if y_axes and isinstance(y_axes[0], dict) else {}
-        cats = axis.get("data")
+        cats = _first_dict(_as_list(opt.get("yAxis"))).get("data")
+    return cats
+
+
+def _fill_series_column(rows, i, s):
+    """Write series s's data values into rows under its name (extra points dropped)."""
+    name = str(s.get("name") or f"series {i + 1}")
+    for j, v in enumerate(s.get("data") or []):
+        if j < len(rows):
+            rows[j][name] = v.get("value") if isinstance(v, dict) else v
+
+
+def _echarts_rows(opt, series, x_axes):
+    """Table rows from dataset.source, or category axis data x series values."""
+    rows = _dataset_rows(opt)
+    if rows is not None:
+        return rows
+    cats = _category_data(opt, x_axes)
     if not isinstance(cats, list) or not series:
         return None
     rows = [{"category": c} for c in cats]
     for i, s in enumerate(series):
-        name = str(s.get("name") or f"series {i + 1}")
-        for j, v in enumerate(s.get("data") or []):
-            if j < len(rows):
-                rows[j][name] = v.get("value") if isinstance(v, dict) else v
+        _fill_series_column(rows, i, s)
     return rows
 
 
@@ -631,31 +740,35 @@ def _plotly_values(v):
     return None
 
 
-def _prepare_plotly(fig, warnings):
-    data = [t for t in _as_list(fig.get("data")) if isinstance(t, dict)]
-    layout = fig.setdefault("layout", {})
+def _plotly_drop_overlays(layout, data, warnings):
+    """Remove overlaying y axes (a dual axis) and their trace refs, with a warning."""
     dual = [
         k
         for k, v in layout.items()
         if re.fullmatch(r"yaxis\d+", k) and isinstance(v, dict) and v.get("overlaying")
     ]
-    if dual:
-        for k in dual:
-            layout.pop(k)
-        names = {"y" + k[len("yaxis") :] for k in dual}
-        for t in data:
-            if t.get("yaxis") in names:
-                t.pop("yaxis")
-        warnings.append(DUAL_AXIS_WARNING)
-    layout.pop("width", None)
-    layout["autosize"] = True
-    lines = any(
+    if not dual:
+        return
+    for k in dual:
+        layout.pop(k)
+    names = {"y" + k[len("yaxis") :] for k in dual}
+    for t in data:
+        if t.get("yaxis") in names:
+            t.pop("yaxis")
+    warnings.append(DUAL_AXIS_WARNING)
+
+
+def _plotly_has_lines(data):
+    """True when any scatter/scattergl trace draws lines (mode defaults to lines)."""
+    return any(
         t.get("type", "scatter") in ("scatter", "scattergl")
         and "lines" in str(t.get("mode", "lines"))
         for t in data
     )
-    if lines:
-        layout.setdefault("hovermode", "x unified")
+
+
+def _plotly_legend(layout, data):
+    """Legend shown (horizontal, above the plot) for 2+ legend-visible traces."""
     shown = [t for t in data if t.get("showlegend") is not False]
     layout["showlegend"] = len(shown) >= 2
     if layout["showlegend"]:
@@ -664,6 +777,10 @@ def _prepare_plotly(fig, warnings):
         legend.setdefault("y", 1.02)
         legend.setdefault("yanchor", "bottom")
         legend.setdefault("x", 0)
+
+
+def _plotly_rows(data):
+    """Long rows {series, x, y} of every trace with decodable x and y, else None."""
     rows = []
     for i, t in enumerate(data):
         xs, ys = _plotly_values(t.get("x")), _plotly_values(t.get("y"))
@@ -671,15 +788,29 @@ def _prepare_plotly(fig, warnings):
             continue
         name = str(t.get("name") or f"trace {i}")
         rows.extend({"series": name, "x": a, "y": b} for a, b in zip(xs, ys))
+    return rows or None
+
+
+def _prepare_plotly(fig, warnings):
+    """Patch a Plotly figure (dual axis, autosize, hover, legend); returns (fig, rows)."""
+    data = [t for t in _as_list(fig.get("data")) if isinstance(t, dict)]
+    layout = fig.setdefault("layout", {})
+    _plotly_drop_overlays(layout, data, warnings)
+    layout.pop("width", None)
+    layout["autosize"] = True
+    if _plotly_has_lines(data):
+        layout.setdefault("hovermode", "x unified")
+    _plotly_legend(layout, data)
+    rows = _plotly_rows(data)
     fig["data"] = data
-    return fig, rows or None
+    return fig, rows
 
 
 # --------------------------------------------------------------------------- charts
 
 
-def prepare_chart(chart):
-    """Normalize one chart dict: patched spec, rows, warnings, height (no I/O)."""
+def _chart_kind_spec(chart):
+    """(kind, spec) of a chart dict; TypeError/ValueError when it is malformed."""
     if not isinstance(chart, dict):
         raise TypeError("a chart must be a dict with 'kind' and 'spec'")
     kind = chart.get("kind")
@@ -690,18 +821,27 @@ def prepare_chart(chart):
     spec = chart.get("spec")
     if not isinstance(spec, dict):
         raise TypeError(f"chart {chart.get('title')!r}: 'spec' must be a dict")
+    return kind, spec
+
+
+def _patch_spec(kind, spec, chart, warnings):
+    """Kind-specific patching -> (spec, rows, fit); fit is ECharts-only."""
+    if kind == "vega-lite":
+        spec, rows = _prepare_vega_lite(spec, warnings)
+        return spec, rows, False
+    if kind == "echarts":
+        return _prepare_echarts(spec, warnings, end_labels=chart.get("end_labels"))
+    spec, rows = _prepare_plotly(spec, warnings)
+    return spec, rows, False
+
+
+def prepare_chart(chart):
+    """Normalize one chart dict: patched spec, rows, warnings, height (no I/O)."""
+    kind, spec = _chart_kind_spec(chart)
     spec = _plain(copy.deepcopy(spec))
     _check_tokens(spec, chart.get("title") or kind)
     warnings = []
-    fit = False
-    if kind == "vega-lite":
-        spec, rows = _prepare_vega_lite(spec, warnings)
-    elif kind == "echarts":
-        spec, rows, fit = _prepare_echarts(
-            spec, warnings, end_labels=chart.get("end_labels")
-        )
-    else:
-        spec, rows = _prepare_plotly(spec, warnings)
+    spec, rows, fit = _patch_spec(kind, spec, chart, warnings)
     given = chart.get("rows")
     if given is not None:
         rows = _plain(list(given))
@@ -757,6 +897,7 @@ def from_plotly(fig, title="", caption=None, rows=None, height=None):
 
 
 def _columns(rows):
+    """Union of row keys, in first-seen order."""
     cols = []
     for r in rows:
         for k in r:
@@ -766,10 +907,12 @@ def _columns(rows):
 
 
 def _is_number(v):
+    """True for int/float values that are not bool."""
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _cell_text(v):
+    """Display text of a table cell: '' for None, integral floats as ints, JSON for containers."""
     if v is None:
         return ""
     if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
@@ -791,6 +934,7 @@ def _csv_safe(v):
 
 
 def _csv_href(rows, cols):
+    """data: URL of the rows as CSV (formula-neutralized) with a header row."""
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
     writer.writerow([str(c) for c in cols])
@@ -800,11 +944,13 @@ def _csv_href(rows, cols):
 
 
 def _slug(text, fallback):
+    """Lowercase hyphen slug of text, or fallback when nothing alphanumeric remains."""
     s = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
     return s or fallback
 
 
 def _table_html(rows, max_rows):
+    """(HTML table of up to max_rows rows with a truncation note, column list)."""
     rows = [r for r in rows if isinstance(r, dict)]
     cols = _columns(rows)
     shown = rows[:max_rows]
@@ -842,15 +988,18 @@ def _table_html(rows, max_rows):
 
 
 def _font_stack():
+    """CSS font-family list from the palette, quoting names with spaces."""
     names = palette.font()["family_stack"]
     return ", ".join(f'"{n}"' if " " in n else n for n in names)
 
 
 def _indent(text, pad):
+    """Prefix every line of text with pad."""
     return "\n".join(pad + line for line in text.splitlines())
 
 
 def _css():
+    """Page stylesheet: light tokens on :root, dark tokens for media query and attribute."""
     light = _indent(palette.css_tokens("light"), "  ")
     dark_media = _indent(palette.css_tokens("dark"), "    ")
     dark_attr = _indent(palette.css_tokens("dark"), "  ")
@@ -1309,6 +1458,7 @@ _BRIDGE_JS = r"""(function () {
 
 
 def _check_title(title):
+    """Raise ValueError unless the page title is two to four words."""
     words = str(title or "").split()
     if not 2 <= len(words) <= 4:
         raise ValueError(
@@ -1318,6 +1468,7 @@ def _check_title(title):
 
 
 def _card_html(i, c, max_rows):
+    """HTML of one chart card: title, chart mount, caption, table view, CSV link."""
     esc = html.escape
     cid = f"chart-{i + 1}"
     title = c["title"] or f"Chart {i + 1}"
