@@ -164,6 +164,29 @@ instead: `status` `stale`, `installed_path` = the manifest, `expected_sha` = mar
 or `command` (Bash/PowerShell). Unused members are `null`. Writers may add keys
 (e.g. `replace_all`, a lesson `content_hash`); they survive in `extra`.
 
+### Inbox commands (`tools/fleet/fleet.py`)
+
+`apply`, `reject` and `show` refuse (exit 1, nothing written) unless the id is safe, the
+file exists, the stored `id` equals the filename stem, `kind` is in `PROPOSAL_KINDS` and
+`status` in `PROPOSAL_STATUSES` (checked on the raw JSON; a missing key means the
+default). They rewrite the raw JSON in place (every other key kept), adding:
+
+| Command | Requires | Sets |
+|---------|----------|------|
+| `apply <id>` | status `pending` | `status: applied`, `applied_at`, `applied_to` (repo-relative path) |
+| `reject <id>` | status `pending` or `applied` | `status: rejected`, `rejected_at` (the file is never deleted: lesson dedupe reads it) |
+
+`apply` resolves the harness repo from `--repo`, else manifest `repo`, else
+`target.repo`; the repo must contain `.git`. An edit targets `target.repo_path` (or the
+manifest `repo_path` of `target.installed_path`; refused when both exist and differ),
+which must be repo-relative without `..`, resolve inside the repo, lie outside
+`~/.claude` and not end in `.key`. Write replaces the content; Edit needs `old_string`
+exactly once unless `replace_all`; MultiEdit applies `edits` in order, all or nothing;
+NotebookEdit replaces, inserts after or deletes the cell `notebook.cell_id`
+(`edit_mode`). A CRLF repo file gets CRLF strings. Bash/PowerShell proposals are refused.
+A lesson appends `change.content` after a blank line to `--doc` (an existing repo file,
+same path rules). `apply` never commits; `--dry-run` prints the diff only.
+
 ## AuditEvent (`audit.jsonl`)
 
 One compact JSON object per line, appended. Readers skip blank or invalid lines.
