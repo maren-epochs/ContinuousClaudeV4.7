@@ -39,7 +39,7 @@ The upstream project, written by parcadei, shipped on 2026-04-21 as a single rel
 
 This block is the single place where current figures are kept; the rest of the document refers to it.
 
-- **Readiness score:** 23 of 27 criteria pass (level 5 of 5, 85.2%), from a run on 2026-10-07 after the fleet build. The repo had reached 27/27 at commit `161e58b`. The four failing criteria are all tldr code analyses: 11 clone pairs (threshold under 10), 13 severe-complexity functions (under 5), a 14.6% tech-debt ratio (under 10%) and 3 security-scan findings. A clean-up pass is in progress. Section 7.5 explains the scorer.
+- **Readiness score:** 27 of 27 criteria pass (level 5 of 5), from a run on 2026-10-07 after the fleet build and a clean-up pass. The fleet build had dropped it to 23/27 (11 clone pairs, 13 severe-complexity functions, a 14.6% tech-debt ratio, 3 security-scan findings); the clean-up brought these to 7 pairs, 2 severe functions (both outside the fleet code), 7.9% and 0 without changing behavior. Section 7.5 explains the scorer.
 - **CI:** last green on commit `765bf31` (2026-10-07), on Linux and Windows. The fleet-control commits after it had not been pushed or run in CI when this was written.
 - **Upstream pull requests:** seven (#13, #14, #16 to #20), open and unmerged when this was written.
 
