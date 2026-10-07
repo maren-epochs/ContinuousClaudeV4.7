@@ -176,7 +176,7 @@ SYNTHESIZE FINAL:
     continuum/research/{topic}/findings.md — telegraphic artifact
   Structure: question, findings per hypothesis, confidence, open questions, sources.
   This is what /autonomous consumes, handoffs reference, user reads.
-  Persist: research_contract.json has full state for /resume_handoff.
+  Persist: research_contract.json has full state for /resume-handoff.
 
 
 STATE

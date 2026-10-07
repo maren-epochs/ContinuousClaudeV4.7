@@ -1,11 +1,10 @@
 ---
-description: Resume work from handoff document with context analysis and validation
-disable-model-invocation: true
+description: Resume work from the newest handoff document (or a given path/ticket) with context analysis and validation - "resume from handoff", "pick up where we left off", "continue from last session", "load the handoff"
 ---
 
 Resume work from handoff through interactive analysis. Handoffs contain critical context, learnings, next steps from previous sessions requiring full understanding before continuation.
 
-**Parameter Handling:** If handoff path provided, immediately read document and linked research/plans under `thoughts/shared/plans` or `thoughts/shared/research` — no sub-agents for critical files. Handoff root `{H}`: `thoughts/shared/handoffs` if it exists in the project, else `~/.claude/handoffs/{basename of the launch dir, $CLAUDE_PROJECT_DIR}` (auto-handoffs from pre-compact land there too, as `auto-handoff-*.md`). If ticket number (ENG-XXXX) provided, list `{H}/ENG-XXXX/` contents. Zero files or missing directory: "Can't find handoff, please provide path." One file: proceed. Multiple files: use most recent by YYYY-MM-DD_HH-MM timestamp. No parameters: use the newest file (by mtime) under `{H}`, stating its path; if `{H}` is empty, respond with "I'll help resume from handoff. Which would you like? Tip: /resume_handoff path or /resume_handoff ENG-XXXX"
+**Parameter Handling:** If handoff path provided, immediately read document and linked research/plans under `thoughts/shared/plans` or `thoughts/shared/research` — no sub-agents for critical files. Handoff root `{H}`: `thoughts/shared/handoffs` if it exists in the project, else `~/.claude/handoffs/{basename of the launch dir, $CLAUDE_PROJECT_DIR}` (auto-handoffs from pre-compact land there too, as `auto-handoff-*.md`). If ticket number (ENG-XXXX) provided, list `{H}/ENG-XXXX/` contents. Zero files or missing directory: "Can't find handoff, please provide path." One file: proceed. Multiple files: use most recent by YYYY-MM-DD_HH-MM timestamp. No parameters: use the newest file (by mtime) under `{H}`, stating its path; if `{H}` is empty, respond with "I'll help resume from handoff. Which would you like? Tip: /resume-handoff path or /resume-handoff ENG-XXXX"
 
 **Next Session Prompt Priority:** After reading handoff, check for `next_session_prompt:` field. If exists, present directly: "Previous session left prompt: > {contents} Shall I proceed or adjust approach?" If user approves, execute as-is using rest of handoff for context. Skip analysis steps — they're for handoffs lacking direct prompts.
 
