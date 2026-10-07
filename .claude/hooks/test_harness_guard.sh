@@ -407,5 +407,5 @@ for (const [name, input] of rows) {
 }' "$HOOK" "$WORK"
 
 echo ""
-echo "harness-guard: $PASS passed, $FAIL failed"
+echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
