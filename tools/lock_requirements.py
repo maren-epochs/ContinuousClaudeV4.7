@@ -50,11 +50,14 @@ NOTES: dict[str, list[str]] = {
 
 
 def normalize(name: str) -> str:
+    """PEP 503 project key: runs of -_. collapsed to '-', lowercased."""
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
 @dataclass
 class Node:
+    """One installed package in the closure: pin, extras walked, edges, markers."""
+
     name: str
     version: str
     extras: set[str] = field(default_factory=set)
@@ -85,6 +88,10 @@ def _classify(marker: Marker | None, new_extras: set[str]) -> tuple[bool, str | 
 
 
 def collect(roots: list[str]) -> dict[str, Node]:
+    """Breadth-first closure of `roots` over installed metadata, markers propagated.
+
+    Exits (SystemExit) when a required distribution is not installed.
+    """
     nodes: dict[str, Node] = {}
     queue: list[tuple[str, set[str], bool]] = []
     for text in roots:
@@ -131,21 +138,26 @@ def _propagate(nodes: dict[str, Node]) -> None:
         changed = False
         for parent in nodes.values():
             for child_key, marker in parent.edges:
-                child = nodes[child_key]
-                if child.unconditional:
-                    continue
-                if parent.unconditional and marker is None:
-                    child.unconditional = True
-                    child.markers.clear()
-                    changed = True
-                    continue
-                add = {marker} if marker is not None else set(parent.markers)
-                if not add <= child.markers:
-                    child.markers |= add
-                    changed = True
+                changed |= _relax(parent, nodes[child_key], marker)
+
+
+def _relax(parent: Node, child: Node, marker: str | None) -> bool:
+    """Apply one parent -> child edge to the child's reachability; True if it changed."""
+    if child.unconditional:
+        return False
+    if parent.unconditional and marker is None:
+        child.unconditional = True
+        child.markers.clear()
+        return True
+    add = {marker} if marker is not None else set(parent.markers)
+    if add <= child.markers:
+        return False
+    child.markers |= add
+    return True
 
 
 def _line(node: Node) -> str:
+    """`name==version`, plus ` ; marker` (OR-joined) for a conditional package."""
     line = f"{node.name}=={node.version}"
     if not node.unconditional and node.markers:
         markers = sorted(node.markers)
@@ -157,6 +169,7 @@ def _line(node: Node) -> str:
 
 
 def render(nodes: dict[str, Node]) -> str:
+    """Full lock text: header comments, direct pins, then transitive pins, by name."""
     py = platform.python_version()
     out = [
         "# requirements.lock - exact pins for every package declared in pyproject.toml",
@@ -197,6 +210,7 @@ def render(nodes: dict[str, Node]) -> str:
 
 
 def roots_from_pyproject(path: Path = PYPROJECT) -> list[str]:
+    """[project] dependencies followed by every optional-dependencies group."""
     with path.open("rb") as fh:
         project = tomllib.load(fh)["project"]
     roots = list(project.get("dependencies", []))
@@ -206,6 +220,7 @@ def roots_from_pyproject(path: Path = PYPROJECT) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Write the lock (exit 0) or, with --check, exit 1 when it differs."""
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0] if __doc__ else None
     )

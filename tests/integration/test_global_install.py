@@ -13,15 +13,22 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+# One PRELUDE extractor for both suites (VAL-615: no copied helper).
+from tools.viz.test_import import prelude_of
+
 pytestmark = pytest.mark.integration
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
-PYTHON_BLOCK = re.compile(r"```python\r?\n(.*?)```", re.DOTALL)
 
 PROBE = """
 import json, sys
@@ -34,13 +41,6 @@ print("PROBE" + json.dumps({
     "slot1": palette.categorical("light", 1)[0],
 }))
 """
-
-
-def prelude_of(md: str) -> str:
-    """First line of the first ```python block: the PRELUDE the skill quotes verbatim."""
-    m = PYTHON_BLOCK.search(md)
-    assert m, "no ```python block in installed visualize SKILL.md"
-    return m.group(1).splitlines()[0]
 
 
 def test_prelude_from_shadowing_project_uses_install(

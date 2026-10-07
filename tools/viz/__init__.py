@@ -26,10 +26,12 @@ _SUBMODULES = (
 
 
 def __getattr__(name):
+    """Import a viz submodule on first attribute access (PEP 562 lazy import)."""
     if name in _SUBMODULES:
         return importlib.import_module(f"{__name__}.{name}")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__():
+    """Module globals plus the lazily importable submodule names."""
     return sorted(set(globals()) | set(_SUBMODULES))

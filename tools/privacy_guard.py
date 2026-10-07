@@ -59,18 +59,21 @@ BINARY_SNIFF = 8192
 
 @dataclass
 class Hit:
+    """One private-identifier match: the raw text and its redacted output reason."""
+
     text: str  # matched text (allowlist is checked against this)
     reason: str  # redacted reason for output
 
 
 def _git(*args: str) -> str | None:
+    """Stripped stdout of `git ARGS`; None on failure, timeout or empty output."""
     try:
-        r = subprocess.run(
-            ["git", *args], capture_output=True, text=True, timeout=10, check=False
+        out = subprocess.check_output(
+            ["git", *args], stderr=subprocess.DEVNULL, text=True, timeout=10
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError):  # incl. CalledProcessError
         return None
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    return out.strip() or None
 
 
 def _lines(path: Path) -> list[str]:
@@ -88,16 +91,19 @@ def _lines(path: Path) -> list[str]:
 
 
 def default_terms_file() -> Path | None:
+    """Path of the untracked .git/info/privacy-terms file; None outside a repo."""
     p = _git("rev-parse", "--git-path", "info/privacy-terms")
     return Path(p) if p else None
 
 
 def default_allow_file() -> Path:
+    """`.privacy-allow` at the repo root (cwd when git cannot report the root)."""
     top = _git("rev-parse", "--show-toplevel")
     return Path(top or ".") / ".privacy-allow"
 
 
 def detect_usernames() -> list[str]:
+    """Candidate OS usernames: os.getlogin(), $USERNAME, $USER (may be empty)."""
     names = []
     try:
         names.append(os.getlogin())
@@ -108,13 +114,17 @@ def detect_usernames() -> list[str]:
 
 
 def _is_placeholder(name: str) -> bool:
+    """True for a documentation stand-in name such as <you>, x or user."""
     return name.startswith("<") or name.lower() in PLACEHOLDER_NAMES
 
 
 class Guard:
+    """Compiled privacy rules: home paths, usernames, UUIDs, terms, allowlist."""
+
     def __init__(
         self, usernames: list[str], terms: list[str], allow: list[re.Pattern[str]]
     ):
+        """Compile whole-word username and substring term patterns (names >= 3 chars)."""
         seen: dict[str, str] = {}
         for n in usernames:
             if n and len(n) >= 3:
@@ -129,9 +139,11 @@ class Guard:
         self.allow = allow
 
     def _allowed(self, text: str) -> bool:
+        """True when some allowlist regex fully matches the hit text."""
         return any(a.fullmatch(text) for a in self.allow)
 
     def scan(self, text: str) -> list[Hit]:
+        """Every non-allowlisted hit in one line of text, in rule order."""
         hits: list[Hit] = []
         for pat in HOME_PATTERNS:
             for m in pat.finditer(text):
@@ -153,6 +165,7 @@ class Guard:
         return [h for h in hits if not self._allowed(h.text)]
 
     def check_file(self, arg: str) -> list[str]:
+        """`file[:line]: reason` for hits in the path and each line; binaries skipped."""
         out = []
         shown = arg
         for h in self.scan(shown.replace("\\", "/")):
@@ -170,7 +183,8 @@ class Guard:
         return out
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse FILE... plus the --terms-file/--allow-file/--username overrides."""
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0] if __doc__ else None
     )
@@ -184,11 +198,11 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         help="override OS username detection (repeatable)",
     )
-    args = ap.parse_args(argv)
+    return ap.parse_args(argv)
 
-    terms_file = args.terms_file or default_terms_file()
-    terms = _lines(terms_file) if terms_file else []
-    allow_file = args.allow_file or default_allow_file()
+
+def _load_allow(allow_file: Path) -> list[re.Pattern[str]] | None:
+    """Compiled allowlist regexes; None (reason on stderr) on the first bad one."""
     allow = []
     for i, line in enumerate(_lines(allow_file), 1):
         try:
@@ -198,13 +212,27 @@ def main(argv: list[str] | None = None) -> int:
                 f"privacy_guard: bad regex in allow file {allow_file} entry {i}: {e}",
                 file=sys.stderr,
             )
-            return 2
-    usernames = args.username if args.username else detect_usernames()
+            return None
+    return allow
 
-    guard = Guard(usernames, terms, allow)
-    problems: list[str] = []
-    for f in args.files:
-        problems += guard.check_file(f)
+
+def _build_guard(args: argparse.Namespace) -> Guard | None:
+    """Guard from the CLI overrides or the git/OS defaults; None on a bad allowlist."""
+    terms_file = args.terms_file or default_terms_file()
+    terms = _lines(terms_file) if terms_file else []
+    allow = _load_allow(args.allow_file or default_allow_file())
+    if allow is None:
+        return None
+    return Guard(args.username or detect_usernames(), terms, allow)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Scan FILE... and print one line per hit; exit 0 clean, 1 hits, 2 usage error."""
+    args = _parse_args(argv)
+    guard = _build_guard(args)
+    if guard is None:
+        return 2
+    problems = [p for f in args.files for p in guard.check_file(f)]
     for p in problems:
         print(p)
     return 1 if problems else 0

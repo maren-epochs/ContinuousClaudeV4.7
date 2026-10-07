@@ -51,7 +51,7 @@ ALIAS = "ccv_viz"
 MODULES = ("palette", "style", "artifact_page", "export", "recommend")
 TIMEOUT = 180
 
-PYTHON_BLOCK = re.compile(r"```python\n(.*?)```", re.DOTALL)
+PYTHON_BLOCK = re.compile(r"```python\r?\n(.*?)```", re.DOTALL)
 
 
 def prelude_of(md: str) -> str:

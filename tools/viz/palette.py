@@ -28,6 +28,7 @@ ORDINAL_MIN_GAP = 100  # min ramp-step distance between adjacent ordinal colors
 
 @functools.lru_cache(maxsize=1)
 def _load_cached():
+    """Parsed palette.json, read from disk once per process (shared; never mutate)."""
     with PALETTE_PATH.open(encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -38,6 +39,7 @@ def load():
 
 
 def _mode(mode):
+    """The palette's per-mode block; ValueError unless mode is light or dark."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     return _load_cached()["modes"][mode]
@@ -157,10 +159,12 @@ def gray(mode="light"):
 
 
 def texture():
+    """Copy of the palette's texture tokens (gridline, hairline and stroke weights)."""
     return copy.deepcopy(_load_cached()["texture"])
 
 
 def font():
+    """Copy of the palette's font tokens (families and sizes)."""
     return copy.deepcopy(_load_cached()["font"])
 
 

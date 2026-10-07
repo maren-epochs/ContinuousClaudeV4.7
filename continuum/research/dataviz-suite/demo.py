@@ -26,9 +26,11 @@ VIZ = Path(palette.PALETTE_PATH).parent          # tools/viz the prelude resolve
 OUT = Path(__file__).resolve().parent / "out"
 SYMBOLS = ("AAPL", "AMZN", "GOOG", "IBM", "MSFT")  # entity -> slot, fixed once (alphabetical)
 MODES = ("light", "dark")
+LABELED = ("AAPL", "GOOG", "IBM", "MSFT")  # direct-labeled ends (see stock_charts)
 
 
 def emit(*paths):
+    """Print the absolute path of each non-empty argument, one per line."""
     for p in paths:
         if p:
             print(str(Path(p).resolve()))
@@ -42,43 +44,42 @@ def run_cli(args):
     return proc.returncode, text
 
 
-def main():
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    OUT.mkdir(parents=True, exist_ok=True)
+def write_text(path, text):
+    """Write UTF-8 text with LF endings to path and print its absolute path."""
+    path.write_text(text, encoding="utf-8", newline="\n")
+    emit(path)
 
-    # 0 HAND-OFF: both datasets ship clean and small (1461 + 560 rows <= 5000): no aggregation.
+
+def hand_off():
+    """Step 0: load both datasets and save them as csv; return (weather, stocks, csvs)."""
+    # Both datasets ship clean and small (1461 + 560 rows <= 5000): no aggregation.
     weather = data.seattle_weather()
     stocks = data.stocks()
     w_csv, s_csv = OUT / "seattle-weather.csv", OUT / "stocks.csv"
     weather.to_csv(w_csv, index=False, date_format="%Y-%m-%d")
     stocks.to_csv(s_csv, index=False, date_format="%Y-%m-%d")
     emit(w_csv, s_csv)
+    return weather, stocks, (("seattle-weather", w_csv), ("stocks", s_csv))
 
-    # 1 FORM: recommend.py --json on each saved csv (CLI, as the skill shows).
+
+def form(csvs, temp):
+    """Step 1: recommend.py --json per csv (CLI) plus the Python API on chart A's slice."""
     rec = {}
-    for name, csv in (("seattle-weather", w_csv), ("stocks", s_csv)):
+    for name, csv in csvs:
         code, text = run_cli([str(VIZ / "recommend.py"), str(csv), "--json"])
         if code != 0:
             raise SystemExit(f"recommend.py failed on {csv}: {text}")
-        path = OUT / f"recommend-{name}.json"
-        path.write_text(text, encoding="utf-8", newline="\n")
+        write_text(OUT / f"recommend-{name}.json", text)
         rec[name] = json.loads(text)
-        emit(path)
     # Chart A charts one measure of the weather frame: ask the Python API about that slice too.
-    temp = weather[["date", "temp_max"]]
     rec["seattle-temp-max"] = recommend.recommend(recommend.profile_frame(temp))
-    path = OUT / "recommend-seattle-temp-max.json"
-    path.write_text(json.dumps(rec["seattle-temp-max"], indent=2) + "\n", encoding="utf-8",
-                    newline="\n")
-    emit(path)
+    write_text(OUT / "recommend-seattle-temp-max.json",
+               json.dumps(rec["seattle-temp-max"], indent=2) + "\n")
+    return rec
 
-    # 2 COLOR BY JOB: stocks -> encoding.color 'symbol' (a dimension) -> categorical(mode, 5);
-    # chart A -> 'single' for one measure; the 7-day mean is a second series -> slots 1-2.
-    assert rec["stocks"]["encoding"]["color"] == "symbol", rec["stocks"]["encoding"]
-    slots = {m: palette.categorical(m, len(SYMBOLS)) for m in MODES}
 
-    # 3 VALIDATE: the exact hexes, per mode (lines -> adjacent pairs, the default).
+def validate(slots):
+    """Step 3: run the validator on the exact hexes per mode; stop on any FAIL."""
     report = []
     for m in MODES:
         hexes = ",".join(slots[m])
@@ -88,16 +89,30 @@ def main():
                       f"{text.strip()}\nexit {code}\n")
         if code != 0:
             raise SystemExit(f"validator FAIL ({m}): stop and cut/reorder series\n{text}")
-    path = OUT / "validator.txt"
-    path.write_text("\n".join(report), encoding="utf-8", newline="\n")
-    emit(path)
+    write_text(OUT / "validator.txt", "\n".join(report))
 
-    # 4 MARKS + 6 ACCESSIBILITY + 7a OUTPUT: stocks multi-line, matplotlib, both modes.
+
+def label_end(ax, sym, series, m):
+    """Direct label at a series' last point; IBM's is nudged down with a hairline leader."""
+    end = series.iloc[-1]
+    lead = {}
+    if sym == "IBM":                        # clear of AMZN's end, leader to IBM
+        dx, dy = 10, -18
+        lead = {"arrowprops": {"arrowstyle": "-", "lw": 0.75, "shrinkA": 1,
+                               "shrinkB": 2, "color": palette.surface(m)["axis"]}}
+    else:
+        dx, dy = 6, 0
+    ax.annotate(sym, xy=(end["date"], end["price"]), xytext=(dx, dy),
+                textcoords="offset points", va="center",
+                color=palette.text(m)["secondary"], annotation_clip=False, **lead)
+
+
+def stock_charts(stocks, slots):
+    """Steps 4 + 6 + 7a: the stocks multi-line chart (matplotlib) in both modes."""
     # Light-mode validator WARNs slots 3-5 (GOOG, IBM, MSFT) under 3:1 -> they must be
     # direct-labeled. Labels: AAPL, GOOG, IBM, MSFT (4 = the method's cap). AMZN (slot 2,
     # passes 3:1) is the 5th: legend only - its 2010 end (128.8) sits 3 USD above IBM's,
     # so the IBM label is nudged well below both ends with a hairline leader to IBM's end.
-    labeled = ("AAPL", "GOOG", "IBM", "MSFT")
     for m in MODES:
         style.apply_matplotlib(m)
         color = dict(zip(SYMBOLS, slots[m]))
@@ -105,18 +120,8 @@ def main():
         for sym in SYMBOLS:
             s = stocks[stocks["symbol"] == sym].sort_values("date")
             ax.plot(s["date"], s["price"], color=color[sym], label=sym)
-            if sym in labeled:
-                end = s.iloc[-1]
-                lead = {}
-                if sym == "IBM":                        # clear of AMZN's end, leader to IBM
-                    dx, dy = 10, -18
-                    lead = {"arrowprops": {"arrowstyle": "-", "lw": 0.75, "shrinkA": 1,
-                                           "shrinkB": 2, "color": palette.surface(m)["axis"]}}
-                else:
-                    dx, dy = 6, 0
-                ax.annotate(sym, xy=(end["date"], end["price"]), xytext=(dx, dy),
-                            textcoords="offset points", va="center",
-                            color=palette.text(m)["secondary"], annotation_clip=False, **lead)
+            if sym in LABELED:
+                label_end(ax, sym, s, m)
         ax.set_ylim(bottom=0)
         ax.set_ylabel("Price (USD)")
         ax.set_title("Monthly stock price, 2000-2010", loc="left")
@@ -125,7 +130,9 @@ def main():
         plt.close(fig)
         emit(res["png"], res["svg"])
 
-    # Table: seattle weather by calendar month (2012-2015), house style via style.gt_style.
+
+def weather_table(weather):
+    """Table: seattle weather by calendar month (2012-2015), house style via style.gt_style."""
     w = weather.assign(year=weather["date"].dt.year, month=weather["date"].dt.month)
     monthly_total = w.groupby(["year", "month"])["precipitation"].sum().groupby("month").mean()
     summary = pd.DataFrame({
@@ -148,8 +155,9 @@ def main():
     res = export.save(table, OUT / "weather-table", formats=("png",), mode="light")
     emit(res["png"])
 
-    # 5 HOVER + 7b OUTPUT: two-chart Artifact page.
-    # Chart A (Vega-Lite): daily temp_max + 7-day rolling mean (pandas, rows = table view).
+
+def temperature_chart(temp):
+    """Chart A (Vega-Lite): daily temp_max + 7-day rolling mean; the Artifact chart dict."""
     # House rule (skill step 4): raw + smoothed pair -> raw at 1px in the muted text token
     # (dense: 1461 points), only the smoothed mean in categorical slot 1 at 2px. The raw
     # line names the token (artifact_page.token), so it follows the light/dark toggle.
@@ -188,7 +196,14 @@ def main():
                               "title": "7-day mean (C)", "format": ".1f"}]}},
         ],
     }
-    # Chart B (ECharts): stocks, 5 series in SYMBOLS order -> same slots as the static chart.
+    return {"kind": "vega-lite", "spec": vl, "title": "Seattle daily max temperature",
+            "caption": "2012-2015. Gray hairline: daily max. Blue line: 7-day rolling mean.",
+            "rows": temp_rows}
+
+
+def stock_chart_spec(stocks):
+    """Chart B (ECharts): stocks, 5 series in SYMBOLS order; the Artifact chart dict."""
+    # Same slots as the static chart.
     wide = (stocks.pivot(index="date", columns="symbol", values="price")[list(SYMBOLS)]
             .sort_index())
     echarts = {
@@ -204,14 +219,13 @@ def main():
     stock_rows = [{"date": d.strftime("%Y-%m-%d"),
                    **{s: (None if pd.isna(r[s]) else float(r[s])) for s in SYMBOLS}}
                   for d, r in wide.iterrows()]
-    charts = [
-        {"kind": "vega-lite", "spec": vl, "title": "Seattle daily max temperature",
-         "caption": "2012-2015. Gray hairline: daily max. Blue line: 7-day rolling mean.",
-         "rows": temp_rows},
-        {"kind": "echarts", "spec": echarts, "title": "Monthly stock price (USD)",
-         "caption": "2000-2010, five symbols on one axis", "rows": stock_rows,
-         "end_labels": list(labeled)},
-    ]
+    return {"kind": "echarts", "spec": echarts, "title": "Monthly stock price (USD)",
+            "caption": "2000-2010, five symbols on one axis", "rows": stock_rows,
+            "end_labels": list(LABELED)}
+
+
+def artifact(charts):
+    """Steps 5 + 7b + 8 inputs: the two-chart Artifact page and its light/dark/phone PNGs."""
     # Publisher input for the orchestrator's Artifact call (skill 7b).
     print("capabilities_for:", json.dumps(artifact_page.capabilities_for(charts)))
     html = artifact_page.write_page(
@@ -224,6 +238,24 @@ def main():
         emit(export.render_html(html, OUT / f"page-{m}.png", mode=m))
     emit(export.render_html(html, OUT / "page-phone-light.png", width=390, mode="light"))
     export.close_browser()
+
+
+def main():
+    """Run the /visualize steps on vega_datasets and write every artifact to ./out."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    OUT.mkdir(parents=True, exist_ok=True)
+    weather, stocks, csvs = hand_off()
+    temp = weather[["date", "temp_max"]]
+    rec = form(csvs, temp)
+    # 2 COLOR BY JOB: stocks -> encoding.color 'symbol' (a dimension) -> categorical(mode, 5);
+    # chart A -> 'single' for one measure; the 7-day mean is a second series -> slots 1-2.
+    assert rec["stocks"]["encoding"]["color"] == "symbol", rec["stocks"]["encoding"]
+    slots = {m: palette.categorical(m, len(SYMBOLS)) for m in MODES}
+    validate(slots)
+    stock_charts(stocks, slots)
+    weather_table(weather)
+    artifact([temperature_chart(temp), stock_chart_spec(stocks)])
 
 
 if __name__ == "__main__":

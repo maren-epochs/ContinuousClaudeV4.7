@@ -100,9 +100,10 @@ def px_to_pt(px: float, dpi: float = REFERENCE_DPI) -> float:
 
 def template_name(mode: str) -> str:
     """'house-light' / 'house-dark' - the one name shared by every backend."""
-    if mode not in TEMPLATE_NAMES:
+    name = TEMPLATE_NAMES.get(mode)
+    if name is None:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
-    return TEMPLATE_NAMES[mode]
+    return name
 
 
 def font_stack() -> list[str]:
@@ -370,6 +371,7 @@ def plotly_template(mode: str = "light") -> str:
 
 
 def _scale(colors: list[str]) -> list[list]:
+    """Plotly colorscale: colors spread evenly as [[0, c0], ..., [1, cN]]."""
     n = len(colors) - 1
     return [[i / n, c] for i, c in enumerate(colors)]
 
@@ -469,6 +471,7 @@ def altair_theme(mode: str = "light") -> str:
     config = altair_config(mode)
 
     def house_theme():
+        """Altair theme callable: returns the prebuilt house config."""
         return config
 
     if hasattr(alt, "theme") and hasattr(alt.theme, "register"):

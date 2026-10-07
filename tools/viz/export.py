@@ -56,6 +56,7 @@ prints the absolute png path; exit 2 with the reason on stderr on failure.
 import argparse
 import atexit
 import contextlib
+import importlib
 import os
 import pathlib
 import subprocess
@@ -126,6 +127,7 @@ class ExportError(RuntimeError):
 
 
 def _short(exc):
+    """First line of an exception message, ASCII-only, at most 200 chars."""
     text = str(exc).strip().splitlines()
     text = text[0] if text else type(exc).__name__
     return text.encode("ascii", "replace").decode("ascii")[:200]
@@ -180,6 +182,7 @@ def close_browser(timeout=CLOSE_TIMEOUT_S):
     killed = []
 
     def watchdog():
+        """Kill the driver tree if close/stop has not finished within `timeout`."""
         if not finished.wait(timeout) and pid is not None:
             killed.append(pid)
             _kill_tree(pid)
@@ -204,6 +207,7 @@ def close_browser(timeout=CLOSE_TIMEOUT_S):
 
 
 def _pw_loop(pw):
+    """The asyncio loop behind a Playwright sync handle, or None."""
     loop = getattr(pw, "_loop", None)  # SyncBase._loop: the dispatcher's loop
     return loop if hasattr(loop, "is_closed") else None
 
@@ -255,20 +259,20 @@ def _driver_pid(pw):
 
 def _kill_tree(pid):
     """Kill a process and its children (best effort, bounded)."""
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        if sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=_KILL_TIMEOUT_S,
-                check=False,
-            )
-        else:
-            import signal
+    if sys.platform != "win32":
+        import signal
 
+        with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGKILL)
+        return
+    quiet = dict.fromkeys(("stdin", "stdout", "stderr"), subprocess.DEVNULL)
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            ("taskkill", "/F", "/T", "/PID", str(pid)),
+            timeout=_KILL_TIMEOUT_S,
+            check=False,
+            **quiet,
+        )
 
 
 # ---------------------------------------------------------------- exit hook
@@ -277,18 +281,16 @@ def _kill_tree(pid):
 def _browser_pipe_readers():
     """Live non-daemon logistro pipe readers (choreographer's Chrome stderr)."""
     current = threading.current_thread()
-    readers = []
-    for thread in threading.enumerate():
-        target = getattr(thread, "_target", None)  # deleted once run() returns
-        module = str(getattr(target, "__module__", None) or "")
-        if (
-            thread is not current
-            and not thread.daemon
-            and thread.is_alive()
-            and module.split(".")[0] == "logistro"
-        ):
-            readers.append(thread)
-    return readers
+    return [t for t in threading.enumerate() if _is_pipe_reader(t, current)]
+
+
+def _is_pipe_reader(thread, current):
+    """True for a live non-daemon thread other than `current` running logistro code."""
+    if thread is current or thread.daemon or not thread.is_alive():
+        return False
+    target = getattr(thread, "_target", None)  # deleted once run() returns
+    module = str(getattr(target, "__module__", None) or "")
+    return module.split(".")[0] == "logistro"
 
 
 def _cancel_blocking_read(thread):
@@ -330,6 +332,7 @@ def _release_pipe_readers(grace=EXIT_GRACE_S):
 
 
 def _force_exit(reason):
+    """Write the reason to stderr and terminate the process with exit 1."""
     with contextlib.suppress(Exception):
         sys.stderr.write(f"export.py: {reason}; forcing exit\n")
         sys.stderr.flush()
@@ -379,6 +382,7 @@ _register_exit_hook()
 
 
 def _html_source(html_or_path):
+    """Classify input as ("url", file URI) for paths or ("html", markup) for strings."""
     if isinstance(html_or_path, bytes):
         html_or_path = html_or_path.decode("utf-8")
     if isinstance(html_or_path, os.PathLike) or (
@@ -468,6 +472,7 @@ html_to_png = render_html
 
 
 def _formats(formats):
+    """Normalize formats to a de-duplicated lowercase tuple; ValueError if empty or unknown."""
     if isinstance(formats, str):
         formats = (formats,)
     fmts = tuple(dict.fromkeys(f.lower().lstrip(".") for f in formats))
@@ -480,6 +485,7 @@ def _formats(formats):
 
 
 def _stem(path):
+    """Absolute output stem (known extension dropped); creates its directory."""
     path = os.path.abspath(os.fspath(path))
     root, ext = os.path.splitext(path)
     if ext.lower() in _EXTENSIONS:
@@ -489,46 +495,46 @@ def _stem(path):
 
 
 def _roots(obj):
+    """Top-level package names of every class in type(obj)'s MRO."""
     return {cls.__module__.split(".")[0] for cls in type(obj).__mro__}
+
+
+# kind (= the library's top-level package) -> (module, class) pairs exported
+# as that kind, in dispatch order after matplotlib. Imported only when the
+# object's MRO already involves that package.
+_KIND_TYPES = (
+    ("plotly", (("plotly.basedatatypes", "BaseFigure"),)),
+    ("altair", (("altair", "TopLevelMixin"),)),
+    ("bokeh", (("bokeh.model", "Model"), ("bokeh.document", "Document"))),
+    ("great_tables", (("great_tables", "GT"),)),
+    ("holoviews", (("holoviews.core.dimension", "Dimensioned"),)),
+)
+
+
+def _load_types(pairs):
+    """Tuple of the classes named by (module, attribute) pairs, importing each module."""
+    return tuple(getattr(importlib.import_module(mod), attr) for mod, attr in pairs)
+
+
+def _matplotlib_figure(obj):
+    """The matplotlib Figure for a Figure or an object with a .figure (Axes, grid)."""
+    from matplotlib.figure import Figure
+
+    if isinstance(obj, Figure):
+        return obj
+    fig = getattr(obj, "figure", None)
+    return fig if isinstance(fig, Figure) else None
 
 
 def _classify(obj):
     """Return (kind, object-to-export). Only libraries already imported are checked."""
     roots = _roots(obj)
-    if roots & {"matplotlib", "seaborn"}:
-        from matplotlib.figure import Figure
-
-        if isinstance(obj, Figure):
-            return "matplotlib", obj
-        fig = getattr(obj, "figure", None)
-        if isinstance(fig, Figure):
-            return "matplotlib", fig
-    if "plotly" in roots:
-        from plotly.basedatatypes import BaseFigure
-
-        if isinstance(obj, BaseFigure):
-            return "plotly", obj
-    if "altair" in roots:
-        import altair
-
-        if isinstance(obj, altair.TopLevelMixin):
-            return "altair", obj
-    if "bokeh" in roots:
-        from bokeh.document import Document
-        from bokeh.model import Model
-
-        if isinstance(obj, (Model, Document)):
-            return "bokeh", obj
-    if "great_tables" in roots:
-        from great_tables import GT
-
-        if isinstance(obj, GT):
-            return "great_tables", obj
-    if "holoviews" in roots:
-        from holoviews.core.dimension import Dimensioned
-
-        if isinstance(obj, Dimensioned):
-            return "holoviews", obj
+    fig = _matplotlib_figure(obj) if roots & {"matplotlib", "seaborn"} else None
+    if fig is not None:
+        return "matplotlib", fig
+    for kind, pairs in _KIND_TYPES:
+        if kind in roots and isinstance(obj, _load_types(pairs)):
+            return kind, obj
     raise TypeError(
         f"cannot export {type(obj).__module__}.{type(obj).__name__}; supported: "
         "matplotlib Figure/Axes, plotly Figure, altair Chart, bokeh model, "
@@ -537,6 +543,7 @@ def _classify(obj):
 
 
 def _wrap_fragment(fragment):
+    """Minimal full HTML document around a fragment, margins reset."""
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
         + _RESET_CSS
@@ -547,11 +554,13 @@ def _wrap_fragment(fragment):
 
 
 def _write_text(path, text):
+    """Write text to path as UTF-8, replacing any existing file."""
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
 
 
 def _save_matplotlib(fig, stem, fmts, result, opts):
+    """savefig png (PNG_DPI) and svg; html is noted as unsupported."""
     for fmt in fmts:
         if fmt == "html":
             result["notes"].append("matplotlib: no html export; html skipped")
@@ -563,6 +572,7 @@ def _save_matplotlib(fig, stem, fmts, result, opts):
 
 
 def _save_plotly(fig, stem, fmts, result, opts):
+    """write_html, kaleido png/svg; a failed png falls back to render_html."""
     if "html" in fmts:
         path = f"{stem}.html"
         fig.write_html(path, include_plotlyjs=True, full_html=True)
@@ -609,6 +619,7 @@ def _save_plotly(fig, stem, fmts, result, opts):
 
 
 def _save_altair(chart, stem, fmts, result, opts):
+    """chart.save via vl-convert for every requested format (no browser)."""
     for fmt in fmts:
         path = f"{stem}.{fmt}"
         if fmt == "png":
@@ -622,6 +633,7 @@ def _save_altair(chart, stem, fmts, result, opts):
 
 
 def _save_bokeh(model, stem, fmts, result, opts):
+    """Inline file_html for html, render_html for png; svg is noted as unsupported."""
     from bokeh.embed import file_html
     from bokeh.resources import INLINE
 
@@ -660,6 +672,7 @@ def _gt_png_page(html):
 
 
 def _save_great_tables(table, stem, fmts, result, opts):
+    """as_raw_html page for html; png screenshots the shrink-wrapped table container."""
     html = table.as_raw_html(make_page=True)
     if "html" in fmts:
         result["html"] = f"{stem}.html"
@@ -681,6 +694,7 @@ def _save_great_tables(table, stem, fmts, result, opts):
 
 
 def _save_holoviews(obj, stem, fmts, result, opts):
+    """Render via bokeh then matplotlib and export the result; ExportError if both fail."""
     import holoviews
 
     errors = []
@@ -747,6 +761,7 @@ def save(
 
 
 def main(argv=None):
+    """CLI `render HTML PNG`: print the png path (exit 0) or the reason (exit 2)."""
     with contextlib.suppress(AttributeError):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
