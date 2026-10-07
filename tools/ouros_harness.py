@@ -36,6 +36,7 @@ import json
 import os
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 # Sandbox output is arbitrary text - search results routinely contain emoji. A
@@ -66,10 +67,20 @@ def _load_env():
                 os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-async def _call_exa_search(
-    query, num_results=5, category=None, domains=None, with_text=False, start_date=None
-):
-    """Bridge to the real Exa API."""
+@dataclass(frozen=True)
+class ExaCallOptions:
+    """Sandbox exa_search() keywords after the query, in positional order."""
+
+    num_results: int = 5
+    category: str | None = None
+    domains: list | None = None
+    with_text: bool = False
+    start_date: str | None = None
+
+
+async def _call_exa_search(query, *args, **kwargs):
+    """Bridge to the real Exa API; args/kwargs are ExaCallOptions fields."""
+    o = ExaCallOptions(*args, **kwargs)
     script_dir = Path(__file__).parent
     sys.path.insert(0, str(script_dir))
     from exa_search import exa_search, load_api_key
@@ -78,15 +89,15 @@ async def _call_exa_search(
     if not api_key:
         return {"error": "EXA_API_KEY not found"}
 
-    kwargs = {"query": query, "num_results": num_results, "with_text": with_text}
-    if category:
-        kwargs["category"] = category
-    if domains and isinstance(domains, list):
-        kwargs["domains"] = domains
-    if start_date:
-        kwargs["start_date"] = start_date
+    params = {"query": query, "num_results": o.num_results, "with_text": o.with_text}
+    if o.category:
+        params["category"] = o.category
+    if o.domains and isinstance(o.domains, list):
+        params["domains"] = o.domains
+    if o.start_date:
+        params["start_date"] = o.start_date
 
-    return await exa_search(**kwargs)
+    return await exa_search(**params)
 
 
 def _call_exa_search_sync(*args, **kwargs):
@@ -1163,15 +1174,22 @@ def _open_refusing_redirects(req, timeout):
         ) from None
 
 
-def _call_llm(
-    prompt,
-    model="claude-haiku-4-5-20251001",
-    max_tokens=1000,
-    system=None,
-    temperature=0.0,
-    backend="anthropic",
-):
+@dataclass(frozen=True)
+class LlmCallOptions:
+    """Sandbox llm_call() keywords after the prompt, in positional order."""
+
+    model: str = "claude-haiku-4-5-20251001"
+    max_tokens: int = 1000
+    system: str | None = None
+    temperature: float = 0.0
+    backend: str = "anthropic"
+
+
+def _call_llm(prompt, *args, **kwargs):
     """Call an LM as a sub-query. Returns the text response.
+
+    Arguments after `prompt` (positional in this order, or keywords) are
+    LlmCallOptions fields; an unknown keyword raises TypeError naming it.
 
     Args:
         prompt: The text prompt to send
@@ -1190,6 +1208,8 @@ def _call_llm(
     Returns:
         str: The model's text response
     """
+    o = LlmCallOptions(*args, **kwargs)
+    backend = o.backend
     if backend not in LLM_ENDPOINTS:
         return {
             "error": f"Unknown backend: {backend}. Use 'local', 'anthropic', 'openai', or 'openrouter'."
@@ -1199,11 +1219,11 @@ def _call_llm(
         return error
 
     body = {
-        "model": model,
+        "model": o.model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
+        "max_tokens": o.max_tokens,
     }
-    _apply_llm_sampling(body, backend, system, temperature)
+    _apply_llm_sampling(body, backend, o.system, o.temperature)
 
     timeout = 60 if backend == "local" else 120
     try:
@@ -1240,17 +1260,24 @@ def _apply_llm_sampling(body, backend, system, temperature):
         body["temperature"] = temperature
 
 
-def _call_agent(
-    prompt,
-    agent="claude-code",
-    model=None,
-    max_turns=None,
-    timeout=600,
-    cwd=None,
-    isolated=False,
-    permission_mode="default",
-):
+@dataclass(frozen=True)
+class AgentCallOptions:
+    """Sandbox agent_call() keywords after the prompt, in positional order."""
+
+    agent: str = "claude-code"
+    model: str | None = None
+    max_turns: int | None = None
+    timeout: float = 600
+    cwd: str | None = None
+    isolated: bool = False
+    permission_mode: str = "default"
+
+
+def _call_agent(prompt, *args, **kwargs):
     """Spawn a headless agent and return its output.
+
+    Arguments after `prompt` (positional in this order, or keywords) are
+    AgentCallOptions fields; an unknown keyword raises TypeError naming it.
 
     This is the RLM recursive call — a full agent with tool access runs
     autonomously and returns its final output. The agent can read files,
@@ -1285,10 +1312,12 @@ def _call_agent(
     """
     import subprocess
 
+    o = AgentCallOptions(*args, **kwargs)
+    agent, timeout = o.agent, o.timeout
     build = _AGENT_ARGV.get(agent)
     if build is None:
         return {"error": f"Unknown agent: {agent}. Supported: claude-code, codex"}
-    cmd = build(prompt, model, max_turns, isolated, permission_mode)
+    cmd = build(prompt, o.model, o.max_turns, o.isolated, o.permission_mode)
 
     try:
         r = subprocess.run(
@@ -1296,7 +1325,7 @@ def _call_agent(
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=cwd,
+            cwd=o.cwd,
         )
     except subprocess.TimeoutExpired:
         return {

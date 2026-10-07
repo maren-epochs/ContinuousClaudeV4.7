@@ -49,6 +49,7 @@ import asyncio
 import io
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -165,21 +166,30 @@ Examples:
     return parser.parse_args(args_to_parse)
 
 
-async def exa_search(
-    query: str,
-    num_results: int = 5,
-    search_type: str = "auto",
-    category: str | None = None,
-    domains: list | None = None,
-    max_chars: int = 1500,
-    highlight_chars: int = 2000,
-    with_text: bool = False,
-    highlights: bool = True,
-    summary: bool = True,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> dict:
-    """Search via Exa API, optionally with content extraction."""
+@dataclass(frozen=True)
+class ExaSearchOptions:
+    """exa_search() keywords after the query, in positional order, with their defaults."""
+
+    num_results: int = 5
+    search_type: str = "auto"
+    category: str | None = None
+    domains: list | None = None
+    max_chars: int = 1500
+    highlight_chars: int = 2000
+    with_text: bool = False
+    highlights: bool = True
+    summary: bool = True
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+async def exa_search(query: str, *args: Any, **kwargs: Any) -> dict:
+    """Search via Exa API, optionally with content extraction.
+
+    Positional/keyword arguments after `query` are ExaSearchOptions fields (same
+    names, order and defaults); an unknown keyword raises TypeError naming it.
+    """
+    o = ExaSearchOptions(*args, **kwargs)
     import aiohttp  # noqa: F401 - fail on missing aiohttp before the key check
 
     api_key = load_api_key()
@@ -188,24 +198,24 @@ async def exa_search(
 
     payload: dict[str, Any] = {
         "query": query,
-        "numResults": num_results,
-        "type": search_type,
+        "numResults": o.num_results,
+        "type": o.search_type,
     }
 
     contents = _search_contents(
         query,
-        text_chars=max_chars if with_text else None,
-        highlight_chars=highlight_chars if highlights else None,
-        summary=summary,
+        text_chars=o.max_chars if o.with_text else None,
+        highlight_chars=o.highlight_chars if o.highlights else None,
+        summary=o.summary,
     )
     if contents:
         payload["contents"] = contents
 
     filters = (
-        ("category", category),
-        ("includeDomains", domains),
-        ("startPublishedDate", start_date),
-        ("endPublishedDate", end_date),
+        ("category", o.category),
+        ("includeDomains", o.domains),
+        ("startPublishedDate", o.start_date),
+        ("endPublishedDate", o.end_date),
     )
     payload.update((k, v) for k, v in filters if v)
 

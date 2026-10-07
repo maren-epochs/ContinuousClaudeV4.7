@@ -63,6 +63,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import KW_ONLY, dataclass
 
 READY_HOOK = "window.__chartsReady"
 FORMATS = ("png", "svg", "html")
@@ -400,22 +401,29 @@ def _html_source(html_or_path):
     )
 
 
-def render_html(
-    html_or_path,
-    png_path,
-    width=1200,
-    height=800,
-    mode="light",
-    *,
-    scale=1,
-    timeout_ms=DEFAULT_TIMEOUT_MS,
-    selector=None,
-):
+@dataclass(frozen=True)
+class RenderOptions:
+    """render_html() options: width, height, mode positional or keyword; the rest keyword-only."""
+
+    width: int = 1200
+    height: int = 800
+    mode: str = "light"
+    _: KW_ONLY
+    scale: float = 1
+    timeout_ms: int = DEFAULT_TIMEOUT_MS
+    selector: str | None = None
+
+
+def render_html(html_or_path, png_path, *args, **kwargs):
     """Rasterize HTML (string or file path) to png_path; return its absolute path.
 
-    width/height set the viewport (CSS px); the screenshot is full_page, or the
-    first element matching `selector` when given. scale = device pixel ratio.
+    Further arguments are RenderOptions fields: width/height set the viewport
+    (CSS px); the screenshot is full_page, or the first element matching
+    `selector` when given. scale = device pixel ratio. An unknown keyword
+    raises TypeError naming it.
     """
+    o = RenderOptions(*args, **kwargs)
+    mode, timeout_ms, selector = o.mode, o.timeout_ms, o.selector
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     png_path = os.path.abspath(os.fspath(png_path))
@@ -425,8 +433,8 @@ def render_html(
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
     context = browser.new_context(
-        viewport={"width": int(width), "height": int(height)},
-        device_scale_factor=scale,
+        viewport={"width": int(o.width), "height": int(o.height)},
+        device_scale_factor=o.scale,
         color_scheme=mode,
     )
     try:
@@ -725,33 +733,39 @@ _HANDLERS = {
 }
 
 
-def save(
-    fig,
-    path,
-    formats=FORMATS,
-    *,
-    mode="light",
-    scale=FIGURE_SCALE,
-    bokeh_theme=None,
-    timeout_ms=DEFAULT_TIMEOUT_MS,
-):
+@dataclass(frozen=True)
+class SaveOptions:
+    """save() options: formats positional or keyword; the rest keyword-only."""
+
+    formats: object = FORMATS
+    _: KW_ONLY
+    mode: str = "light"
+    scale: float = FIGURE_SCALE
+    bokeh_theme: object = None
+    timeout_ms: int = DEFAULT_TIMEOUT_MS
+
+
+def save(fig, path, *args, **kwargs):
     """Export a chart object; return {"png", "svg", "html": abs path|None, "notes": [str]}.
 
     `path` is a stem or a file name whose .png/.svg/.html extension is dropped;
-    outputs are <stem>.<fmt> in that directory. `mode` is the color scheme for
-    browser-rasterized PNGs; `bokeh_theme` is passed to bokeh's file_html.
+    outputs are <stem>.<fmt> in that directory. Further arguments are
+    SaveOptions fields: `mode` is the color scheme for browser-rasterized PNGs;
+    `bokeh_theme` is passed to bokeh's file_html. An unknown keyword raises
+    TypeError naming it.
     """
-    fmts = _formats(formats)
-    if mode not in MODES:
-        raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+    o = SaveOptions(*args, **kwargs)
+    fmts = _formats(o.formats)
+    if o.mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, not {o.mode!r}")
     kind, target = _classify(fig)
     stem = _stem(path)
     result = {"png": None, "svg": None, "html": None, "notes": []}
     opts = {
-        "mode": mode,
-        "scale": scale,
-        "bokeh_theme": bokeh_theme,
-        "timeout_ms": timeout_ms,
+        "mode": o.mode,
+        "scale": o.scale,
+        "bokeh_theme": o.bokeh_theme,
+        "timeout_ms": o.timeout_ms,
     }
     _HANDLERS[kind](target, stem, fmts, result, opts)
     return result
