@@ -1,0 +1,80 @@
+---
+session: general
+date: 2026-10-07
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "option objects for long public signatures; Ubuntu+Windows CI green on main; clean-venv install verified; privacy terms beyond one clone"
+now: "Confirm user ran sync_global --apply; then optional: tldr in CI, pin ubuntu-24.04, cold-cache setup timing"
+test: "make test; CI: gh run list -R maren-epochs/ContinuousClaudeV4.7 --branch main --limit 1"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  CI: .github/workflows/ci.yml, matrix ubuntu-latest + windows-latest, Python 3.13, installs
+  requirements.lock + plotly-resampler --no-deps + Playwright chromium, then pre-commit run
+  --all-files (env CCV_PRIVACY_TERMS from repo secret PRIVACY_TERMS, pre-commit step only) and
+  pytest (unit + integration). tldr is not installed in CI: tldr-dependent tests skip.
+  Interpreters are OS-aware everywhere: Makefile (py -3.13 / python3), sync_global --python default,
+  hooks (worker-report-check python3 off Windows, post-edit ruff on PATH), run_python order
+  OUROS_HOST_PYTHON > own 3.13 > py -3.13 > sys.executable. .gitattributes forces LF for *.sh and
+  Makefile so a fresh Windows checkout can run them.
+  privacy_guard terms = union of CCV_PRIVACY_TERMS env, ~/.claude/privacy-terms (all clones on this
+  PC) and .git/info/privacy-terms; warns (never fails) when none; runner/runneradmin/root are not
+  treated as the OS username.
+  Public APIs exa_search / llm_call / agent_call / export.save / render_html take a frozen options
+  dataclass built from the same positional/keyword forms (call-form tests in tools/test_call_options.py,
+  tools/viz/test_export_options.py); unknown keyword -> TypeError naming it.
+  The clone has two remotes (origin = fork, upstream = original): always pass -R to gh.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "local 612 passed/1 skipped; CI main run 37579291826 green (ubuntu 607/6 skip, windows 609/4 skip); readiness 27/27 L5; debt 4.3%"
+  test_command: "make test"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main == origin/main (5575c55 + this handoff); ci-linux merged and deleted"
+  dirty_files: []
+  warnings: "live ~/.claude not yet synced for this run; LongPathsEnabled=0 on this PC (use short venv paths)"
+  context: unknown
+
+done_this_session:
+  - task: "VAL-701 option dataclasses (776f2a3)"
+    files: ["tools/exa_search.py", "tools/ouros_harness.py", "tools/viz/export.py", "tools/test_call_options.py", "tools/viz/test_export_options.py"]
+  - task: "VAL-704 privacy terms sources + ~/.claude/privacy-terms + CI secret (3d1f410)"
+    files: ["tools/privacy_guard.py", "tools/test_privacy_guard.py", "README.md"]
+  - task: "VAL-703 clean-venv install: 196 pins, suite green, no defect"
+    files: []
+  - task: "VAL-702 CI workflow + portability sweep (16b5936, 404480e, 5575c55)"
+    files: [".github/workflows/ci.yml", ".gitattributes", "Makefile", "scripts/test_readiness*.sh", "tools/ouros_harness.py", "tools/privacy_guard.py", ".claude/hooks/test_tldr_read.sh", "tests"]
+
+decisions:
+  - name: api_compat
+    chose: "keyword-compatible option objects"
+    over: ["breaking signature change"]
+    because: "skills/docs/sandbox scripts call these with keywords; no caller migration needed"
+  - name: privacy_terms
+    chose: "env + user file + per-clone file; CI secret"
+    over: ["per-clone only", "document only"]
+    because: "user A; side-agent note: other clones/CI could not see the list"
+
+findings:
+  critical:
+    - "Agent worktrees live in .claude/worktrees (now ignored); reports written into ignored dirs inside a worktree are lost when it is auto-removed - give worktree agents a main-repo report path or read the handback."
+    - "make setup from a temp venv rewrites the shared .git/hooks/pre-commit to that interpreter (documented in README)."
+  useful:
+    - "pre-commit hook output only shows on failure; confirm secret injection via the masked env line in the run log."
+    - "ubuntu-latest moves to Ubuntu 26 on 2026-10-19 - pin ubuntu-24.04 if it breaks."
+
+next:
+  - "User: py -3.13 install/sync_global.py --apply (hooks + tools changed)"
+  - "Optional: install tldr in CI (cargo, cached) so tldr nav-map/shim tests run; pin ubuntu-24.04"
+  - "Optional: cold-cache setup timing (pip --no-cache-dir, empty PLAYWRIGHT_BROWSERS_PATH)"
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-07_06-20_options-ci-cleanenv.yaml in the
+  ccv47-readme-fix repo. main is green in CI on Ubuntu and Windows; readiness 27/27. Confirm the user
+  ran `py -3.13 install/sync_global.py --apply`. Then ask (A-D, with a recommendation) which
+  optional `next:` item to take. Repo is public; the pre-commit guard and CI enforce privacy.
