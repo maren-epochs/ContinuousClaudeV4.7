@@ -42,3 +42,6 @@ specs/
 
 # tldr auto-generates this with generic defaults
 .tldrignore
+
+# Claude Code isolated agent worktrees (full repo copies)
+.claude/worktrees/
