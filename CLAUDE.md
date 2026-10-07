@@ -55,6 +55,7 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `Makefile` — `setup` (`install/setup_deps.py`: requirements.lock, then plotly-resampler `--no-deps`; Playwright Chromium; pre-commit hook), `test` (pytest + `.claude/hooks/test_*.sh` + `scripts/test_readiness.sh`), `lint`, `format`, `typecheck`, `readiness`, `sync` (writes `~/.claude`). POSIX sh recipes (Git Bash); `PYTHON=` overrides `py -3.13`. Without make: `pwsh install/setup.ps1 -Setup -Test -Lint -Format -Typecheck -Readiness` (no sync switch)
 - `scripts/readiness.sh` — assess project health (27 criteria, 5 levels); a failed tldr sub-analysis is SKIP with a reason, never a fabricated pass. Run it in the FOREGROUND: background shells get reaped under memory pressure (its tldr jobs peak ~0.1 GB, ~30-50 s). tech_debt scans a copy of tracked source minus test files (user decision; other tldr checks still scan tests); `file_grep` passes grep flags before the file arg; `harness/skills/*/SKILL.md` counts as skills. Tests: `scripts/test_readiness.sh`
 - `scripts/readiness-fix.sh` — auto-remediate readiness gaps
+- `install/sync_global.py` — repo -> `~/.claude` install (dry run default, `--apply` writes with backups); `<target>/.ccv47-keep` (untracked, one install-relative path per line, `#` comments) pins paths it never writes, shown as `keep    <path>`
 
 ## Tool Bridges (in tools/)
 

@@ -397,5 +397,91 @@ class UpdateDiffBackup(unittest.TestCase):
             self.assertIn("update  tools/requirements.txt", dry.stdout.splitlines())
 
 
+class KeepList(unittest.TestCase):
+    """VAL-713: <target>/.ccv47-keep pins install-relative paths against --apply."""
+
+    def test_load_keep_parses_comments_and_separators(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(_sync.load_keep(target), set(), "missing file = empty")
+            (target / ".ccv47-keep").write_text(
+                "# user pins\n"
+                "\n"
+                "  skills/resume-handoff/SKILL.md  \n"
+                "./tools\\requirements.txt\n"
+                "   # indented comment\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                _sync.load_keep(target),
+                {"skills/resume-handoff/SKILL.md", "tools/requirements.txt"},
+            )
+
+    def test_kept_paths_never_written_and_reported(self) -> None:
+        edited_rel = "tools/requirements.txt"
+        gone_rel = "tools/viz/palette.json"
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "lf").returncode, 0)
+            edited = target / edited_rel
+            local = b"user copy\n"
+            edited.write_bytes(local)
+            (target / gone_rel).unlink()
+            (target / ".ccv47-keep").write_text(
+                f"# pinned\n{edited_rel}\n{gone_rel}\n", encoding="utf-8"
+            )
+
+            dry = run_sync(target, "--eol", "lf")
+            lines = dry.stdout.splitlines()
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertIn(f"keep    {edited_rel}", lines)
+            self.assertIn(f"keep    {gone_rel}", lines)
+            self.assertFalse(
+                [l for l in lines if l.startswith(("new", "update"))], dry.stdout
+            )
+            self.assertIn("in sync", dry.stdout)
+
+            applied = run_sync(target, "--apply", "--eol", "lf")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertIn(f"keep    {edited_rel}", applied.stdout.splitlines())
+            self.assertEqual(edited.read_bytes(), local, "kept file overwritten")
+            self.assertFalse((target / gone_rel).exists(), "kept file recreated")
+            self.assertFalse((target / ".ccv47-backup").exists())
+
+    def test_keep_does_not_mask_other_drift(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            (target / ".ccv47-keep").write_text(
+                "skills/resume-handoff/SKILL.md\n", encoding="utf-8"
+            )
+            dry = run_sync(target)  # fresh target: everything else is new
+            lines = dry.stdout.splitlines()
+            self.assertEqual(dry.returncode, 1, dry.stdout + dry.stderr)
+            self.assertIn("keep    skills/resume-handoff/SKILL.md", lines)
+            self.assertNotIn("new     skills/resume-handoff/SKILL.md", lines)
+            self.assertIn("new     tools/viz/palette.json", lines)
+
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertFalse(
+                (target / "skills" / "resume-handoff" / "SKILL.md").exists()
+            )
+            self.assertTrue((target / "skills" / "review" / "SKILL.md").is_file())
+
+    def test_unmatched_keep_entry_noted(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / ".ccv47-keep").write_text(
+                "skills/no-such/SKILL.md\n", encoding="utf-8"
+            )
+            dry = run_sync(target)
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertTrue(
+                any("skills/no-such/SKILL.md" in n for n in note_lines(dry.stdout)),
+                dry.stdout,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

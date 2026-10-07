@@ -11,6 +11,9 @@ Files that would be overwritten are backed up first under
 ~/.claude/.ccv47-backup/<timestamp>/.
 
 Never touches settings.json, CLAUDE.md, .env, or *.orig / *.bak-* files.
+User pins: <target>/.ccv47-keep lists install-relative paths (one per line,
+# comments) that are never written; they print as `keep    <path>` and do not
+count as drift.
 Hook registration in settings.json is a one-time manual step (see README);
 the dry run only READS settings.json to warn about installed-but-unregistered
 hooks, and compares .ccv47-installed against git HEAD. Those drift checks are
@@ -176,12 +179,35 @@ def _sources(src_root: Path):
             yield src
 
 
-def build_plan(target: Path, rules, eol: str) -> list[tuple[Path, Path, bytes, str]]:
-    """(src, dst, rendered bytes, 'new'|'update') for every file that differs."""
+KEEP_FILE = ".ccv47-keep"
+
+
+def load_keep(target: Path) -> set[str]:
+    """Install-relative posix paths pinned in <target>/.ccv47-keep (missing file = none)."""
+    try:
+        text = (target / KEEP_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    keep: set[str] = set()
+    for line in text.splitlines():
+        entry = line.strip().replace("\\", "/")
+        if entry and not entry.startswith("#"):
+            keep.add(entry.removeprefix("./"))
+    return keep
+
+
+def build_plan(
+    target: Path, rules, eol: str, keep: frozenset[str] | set[str] = frozenset()
+) -> list[tuple[Path, Path, bytes, str]]:
+    """(src, dst, rendered bytes, 'new'|'update') for every file that differs;
+    kept paths are always listed as (src, dst, b'', 'keep') and never rendered."""
     plan: list[tuple[Path, Path, bytes, str]] = []
     for src_rel, dst_rel in MAPPINGS:
         for src in _sources(REPO / src_rel):
             dst = target / dst_rel / src.relative_to(REPO / src_rel)
+            if dst.relative_to(target).as_posix() in keep:
+                plan.append((src, dst, b"", "keep"))
+                continue
             new = render(src, rules, eol)
             if not dst.exists():
                 plan.append((src, dst, new, "new"))
@@ -206,13 +232,18 @@ def _print_diff(dst: Path, new: bytes) -> None:
 
 
 def print_plan(target: Path, plan, show_diff: bool) -> None:
-    """Print each planned create/update (optionally with a unified diff), or in-sync."""
-    if not plan:
+    """Print each planned create/update/keep (optionally with a unified diff), or in-sync."""
+    if not actionable(plan):
         print(f"{target}: in sync with {REPO.name}")
     for _, dst, new, kind in plan:
         print(f"{kind:7} {dst.relative_to(target).as_posix()}")
         if show_diff and kind == "update":
             _print_diff(dst, new)
+
+
+def actionable(plan):
+    """Plan entries that write (kept paths excluded)."""
+    return [p for p in plan if p[3] != "keep"]
 
 
 def _git(*args: str) -> str:
@@ -246,8 +277,13 @@ def main() -> int:
     rules = rewrites(target.as_posix(), args.python)
     eol = "\r\n" if args.eol == "crlf" else "\n"
 
-    plan = build_plan(target, rules, eol)
-    print_plan(target, plan, args.diff)
+    keep = load_keep(target)
+    full = build_plan(target, rules, eol, keep)
+    print_plan(target, full, args.diff)
+    kept = {dst.relative_to(target).as_posix() for _, dst, _, k in full if k == "keep"}
+    for entry in sorted(keep - kept):
+        print(f"note: {KEEP_FILE} entry {entry} matches no installable file")
+    plan = actionable(full)
 
     sha = _git("rev-parse", "HEAD")
     dirty = _git("status", "--porcelain")
