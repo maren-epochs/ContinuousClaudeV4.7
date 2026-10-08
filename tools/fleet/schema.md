@@ -14,7 +14,9 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/state.json` | `FleetState` | collector (`fleet.py collect`), atomic replace | `state_path()`, `save_state`, `load_state` |
 | `~/.claude/fleet/audit.jsonl` | `AuditEvent`, one per line | fleet-audit hook, append | `audit_path()`, `append_audit`, `read_audit` |
 | `~/.claude/harness-inbox/<id>.json` | `Proposal` | harness-guard hook, lessons | `inbox_dir()`, `proposal_path(id)`, `save_proposal`, `load_proposal`, `list_proposals` |
-| `~/.claude/fleet/guard-errors.log` | text | harness-guard (fail-open errors) | `guard_errors_path()` |
+| `~/.claude/fleet/guard-errors.log` | text | harness-guard, ask-queue (fail-open errors) | `guard_errors_path()` |
+| `~/.claude/fleet/away` | flag file (UTC timestamp line) | `fleet.py away on` / removed by `away off` | `questions.away_path()`, `is_away`, `set_away` |
+| `~/.claude/fleet/questions/<session_id>.json` | `QuestionQueue` (section below) | ask-queue hook while away (append, atomic replace); `fleet.py answer` | `questions.load`, `questions.answer` |
 | `~/.claude/fleet/collect.err` | text, one line per failed collect | `fleet.py collect`, append, capped 256 KB | `fleet._append_err` |
 | `~/.claude/.ccv47-manifest.json` | install manifest (section below) | `install/sync_global.py --apply`, atomic replace | `manifest_path()` |
 
@@ -212,6 +214,33 @@ NotebookEdit replaces, inserts after or deletes the cell `notebook.cell_id`
 (`edit_mode`). A CRLF repo file gets CRLF strings. Bash/PowerShell proposals are refused.
 A lesson appends `change.content` after a blank line to `--doc` (an existing repo file,
 same path rules). `apply` never commits; `--dry-run` prints the diff only.
+
+## QuestionQueue (`questions/<session_id>.json`)
+
+One file per session; written by `.claude/hooks/ask-queue.mjs` only while the `away` flag
+exists (otherwise the question box opens as usual). The hook denies the AskUserQuestion
+call, appends its questions here and tells the session to list them in its reply and
+keep working, so the session can still read messages. A question is answered once, in
+the asking session (`answer <id> <text>`, `answered_via: session`) or from
+`/fleet questions` (`--via fleet`, then relayed by SendMessage); a second answer is refused.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `schema_version` | int | 1 |
+| `session_id` | str | asking session; also the file stem (`[A-Za-z0-9][A-Za-z0-9_-]{0,127}`) |
+| `cwd` / `project` | str | session cwd and its basename (latest call) |
+| `updated_at` | str | last append |
+| `questions[].id` | str | `q-<8 hex>` |
+| `questions[].created_at` | str | UTC |
+| `questions[].header` / `question` | str | as asked (question capped 2000 chars) |
+| `questions[].options` | list | `{label, description}` as asked |
+| `questions[].multi_select` | bool | as asked |
+| `questions[].status` | str | `pending` or `answered` |
+| `questions[].answer` / `answered_at` / `answered_via` | str\|null | set by `answer`; via `session` or `fleet` |
+
+The `/fleet questions` box carries `[fleet q-<8 hex>]` at the start of each question; the
+hook lets a call through when every question has that marker. `FLEET_QUESTIONS=0` turns
+the hook off.
 
 ## AuditEvent (`audit.jsonl`)
 

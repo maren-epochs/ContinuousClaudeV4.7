@@ -5,8 +5,12 @@ Adds, only when the hook is not referenced under that event already:
 
   PreToolUse   Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell -> harness-guard.mjs
   PostToolUse  Bash|PowerShell                                   -> fleet-audit.mjs
+  PreToolUse   AskUserQuestion                                   -> ask-queue.mjs
 
-Both are unfiltered (no `if`): a live check against Claude Code 2.1.293 showed a
+ask-queue.mjs queues every question instead of opening a box, so a waiting session
+can still read cross-session messages (tools/fleet/questions.py).
+
+The guard and audit hooks are unfiltered (no `if`): a live check against Claude Code 2.1.293 showed a
 `Write(~/...)` filter does not fire for an 8.3 short-name spelling of the same path,
 so the guard does its own path normalization on every call (~60-80 ms node spawn).
 The fleet collect trigger rides the existing Stop hook (auto-handoff-stop.mjs); no
@@ -17,7 +21,7 @@ with forward slashes. Every other key, value, key order, indent and EOL is kept.
 A changed file is backed up to <settings>.bak-<timestamp>-register-hooks first and
 replaced atomically. --dry-run prints the unified diff and writes nothing.
 
-Requires Node 18+ on PATH and both hook files installed (`py -3.13 install/sync_global.py
+Requires Node 18+ on PATH and the hook files installed (`py -3.13 install/sync_global.py
 --apply` first). Exit codes: 0 registered or already registered, 1 refused, 2 usage.
 """
 
@@ -38,13 +42,15 @@ from sync_global import write_atomic  # sibling script: install/ is sys.path[0]
 
 MIN_NODE = 18
 GUARD, AUDIT, STOP = "harness-guard.mjs", "fleet-audit.mjs", "auto-handoff-stop.mjs"
-HOOK_FILES = (GUARD, AUDIT)
+ASK = "ask-queue.mjs"
+HOOK_FILES = (GUARD, AUDIT, ASK)
 FILE_TOOLS = "Write|Edit|MultiEdit|NotebookEdit"
 SHELL_TOOLS = "Bash|PowerShell"
 # (event, matcher, hook file); file tools unfiltered per the live `if` check (8.3 miss)
 ENTRIES = (
     ("PreToolUse", f"{FILE_TOOLS}|{SHELL_TOOLS}", GUARD),
     ("PostToolUse", SHELL_TOOLS, AUDIT),
+    ("PreToolUse", "AskUserQuestion", ASK),
 )
 TIMEOUT = 15
 

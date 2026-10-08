@@ -1,7 +1,7 @@
 """Fleet dashboard (VAL-810): one self-contained HTML page from a FleetState.
 
 ``build_page(state)`` returns the page; ``write_page(state, path)`` writes it.
-Sections: summary, alerts (collisions + per-session alerts, worst first),
+Sections: pending questions (only when any), summary, alerts (collisions + per-session alerts, worst first),
 sessions, inbox, recent audit, harness drift, collector warnings.
 
 Colors come only from ``tools/viz/palette.css_tokens`` (light on ``:root``, dark
@@ -18,7 +18,7 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import model
+from . import model, questions
 from .model import Alert, AuditEvent, Collision, DriftEntry, FleetState, Session
 
 try:  # tools.fleet: tools.viz is the sibling package
@@ -342,6 +342,35 @@ def _sessions_section(state: FleetState) -> str:
     return f'<section id="sessions" class="card"><h2>Sessions</h2>{table}</section>'
 
 
+def _questions_section(state: FleetState) -> str:
+    """Notice of queued questions (ask-queue.mjs); empty string when none pending."""
+    pending = questions.load()
+    if not pending:
+        return ""
+    names = {s.session_id: s.name for s in state.sessions if s.session_id and s.name}
+    rows = [
+        [
+            _e(q.id),
+            _e(q.project or "?"),
+            _e(names.get(q.session_id) or q.session_id[:8]),
+            _e(q.question),
+            "<br>".join(
+                _e(o["label"])
+                + (f" - {_e(o['description'])}" if o["description"] else "")
+                for o in q.options
+            ),
+        ]
+        for q in pending
+    ]
+    table = _table(("Id", "Project", "Session", "Question", "Options"), rows, "")
+    n = len(pending)
+    return (
+        f'<section id="questions" class="card"><h2>Pending questions ({_e(n)})</h2>'
+        '<p class="meta">Answer with /fleet questions, or in the asking session.</p>'
+        f"{table}</section>"
+    )
+
+
 def _inbox_section(state: FleetState) -> str:
     n = state.inbox_count
     noun = "proposal" if n == 1 else "proposals"
@@ -425,6 +454,7 @@ def build_page(state: FleetState) -> str:
         meta += f" in {took:.2f} s"
     body = "".join(
         (
+            _questions_section(state),
             _summary(state),
             _alerts_section(state),
             _sessions_section(state),

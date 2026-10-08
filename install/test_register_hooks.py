@@ -134,7 +134,18 @@ class Register(unittest.TestCase):
             post = cfg["hooks"]["PostToolUse"]
             self.assertEqual(pre[0], EXISTING["hooks"]["PreToolUse"][0])  # type: ignore[index]
             self.assertEqual(post[0], EXISTING["hooks"]["PostToolUse"][0])  # type: ignore[index]
-            guard = pre[-1]
+            guard, ask = pre[-2], pre[-1]
+            self.assertEqual(ask["matcher"], "AskUserQuestion")
+            self.assertEqual(
+                ask["hooks"],
+                [
+                    {
+                        "type": "command",
+                        "command": env.cmd("ask-queue.mjs"),
+                        "timeout": 15,
+                    }
+                ],
+            )
             self.assertEqual(
                 set(guard["matcher"].split("|")),
                 {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell"},
@@ -173,7 +184,7 @@ class Register(unittest.TestCase):
             cfg = env.load()
             self.assertEqual(list(cfg), list(EXISTING))
             self.assertEqual(list(cfg["hooks"]), list(EXISTING["hooks"]))  # type: ignore[arg-type]
-            cfg["hooks"]["PreToolUse"].pop()
+            del cfg["hooks"]["PreToolUse"][-2:]  # harness-guard, ask-queue
             cfg["hooks"]["PostToolUse"].pop()
             self.assertEqual(cfg, EXISTING)
 
@@ -273,7 +284,7 @@ class Register(unittest.TestCase):
             env = Env(td)
             env.run()
             cfg = env.load()
-            cfg["hooks"]["PreToolUse"].pop()
+            del cfg["hooks"]["PreToolUse"][-2:]  # harness-guard, ask-queue
             cfg["hooks"]["PostToolUse"].pop()
             self.assertEqual(
                 json.dumps(cfg, indent=2) + "\n",
@@ -298,7 +309,8 @@ class Register(unittest.TestCase):
             cfg = env.load()
             self.assertEqual(list(cfg), ["hooks"])
             self.assertEqual(
-                commands(cfg, "PreToolUse"), [env.cmd("harness-guard.mjs")]
+                commands(cfg, "PreToolUse"),
+                [env.cmd("harness-guard.mjs"), env.cmd("ask-queue.mjs")],
             )
             self.assertEqual(commands(cfg, "PostToolUse"), [env.cmd("fleet-audit.mjs")])
             self.assertEqual(env.backups(), [])

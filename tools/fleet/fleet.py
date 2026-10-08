@@ -12,6 +12,9 @@ apply <id>       apply a proposal to the harness REPO file (never the installed
 reject <id>      set status rejected in place (the file stays: lesson dedupe)
 lessons          propose cross-project lessons (--source memory|bloks|all, --max N)
 handoffs         newest handoff per live session; --since T marks landed/waiting
+away [on|off]    away mode: while on, sessions queue questions instead of a box
+questions        queued questions across all sessions (--all, --json)
+answer <id> <t>  record an answer (--via session|fleet); refuses an answered one
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
 Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
@@ -38,11 +41,11 @@ from types import ModuleType
 from typing import Any
 
 if __package__:
-    from . import collect, lessons, model
+    from . import collect, lessons, model, questions
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from fleet import collect, lessons, model
+    from fleet import collect, lessons, model, questions
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
 LESSONS_MAX = 10
@@ -908,6 +911,74 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
     return "\n".join(lines)
 
 
+def _names() -> dict[str, str]:
+    """session_id -> session name from state.json (no collect)."""
+    state = model.load_state()
+    return {
+        s.session_id: s.name
+        for s in (state.sessions if state else [])
+        if s.session_id and s.name
+    }
+
+
+def _question_dict(q: questions.Question, names: dict[str, str]) -> dict[str, Any]:
+    data = dict(vars(q))
+    data["session_name"] = names.get(q.session_id)
+    data["relay_text"] = questions.relay_text(q)
+    return data
+
+
+def list_questions(include_answered: bool, as_json: bool) -> str:
+    """Queued questions across every session (pending only unless include_answered)."""
+    names = _names()
+    found = questions.load(include_answered)
+    if as_json:
+        return json.dumps([_question_dict(q, names) for q in found], indent=2)
+    if not found:
+        return "no pending questions"
+    lines = [
+        f"{'questions' if include_answered else 'pending questions'} ({len(found)}):"
+    ]
+    for q in found:
+        who = names.get(q.session_id) or q.session_id[:8]
+        head = f"  {q.id}  {q.project or '-'}  {who}"
+        lines.append(head + (f"  [{q.header}]" if q.header else ""))
+        lines.append(f"    {_clip(q.question, 200)}")
+        lines += [
+            f"    - {_clip(o['label'], 80)}"
+            + (f": {_clip(o['description'], 100)}" if o["description"] else "")
+            for o in q.options
+        ]
+        if q.status == "answered":
+            lines.append(f"    answered via {q.answered_via}: {_clip(q.answer, 120)}")
+    return "\n".join(lines)
+
+
+def away(mode: str | None) -> str:
+    """Show or set away mode (ask-queue.mjs queues questions only while it is on)."""
+    if mode is not None:
+        questions.set_away(mode == "on")
+    if questions.is_away():
+        return (
+            "away mode on: sessions queue their questions instead of opening a box and"
+            " keep reading messages; answer with /fleet questions"
+        )
+    return "away mode off: question boxes open as usual"
+
+
+def answer_question(qid: str, text: str, via: str) -> str:
+    """Record an answer; prints the session to relay it to when via is fleet."""
+    try:
+        q = questions.answer(qid, text, via)
+    except questions.QuestionError as exc:
+        raise Refused(str(exc)) from None
+    who = _names().get(q.session_id)
+    line = f"answered {q.id} ({q.project or '-'}) via {via}: {q.answer}"
+    if via == "fleet":
+        line += f"\nrelay to: {who or 'session ' + q.session_id + ' (not live: kept in queue)'}"
+    return line
+
+
 def _epoch(value: str) -> float:
     try:
         return float(value)
@@ -956,6 +1027,15 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("handoffs", help="newest handoff per live session")
     p.add_argument("--since", type=_epoch, help="mark landed/waiting vs this time")
     p.add_argument("--fresh", action="store_true", help="collect first")
+    p = sub.add_parser("questions", help="queued questions across all sessions")
+    p.add_argument("--all", action="store_true", help="include answered questions")
+    p.add_argument("--json", action="store_true", help="JSON for /fleet questions")
+    p = sub.add_parser("away", help="show or set away mode (questions queue while on)")
+    p.add_argument("mode", nargs="?", choices=("on", "off"))
+    p = sub.add_parser("answer", help="record the answer to a queued question")
+    p.add_argument("id")
+    p.add_argument("text")
+    p.add_argument("--via", choices=questions.VIA, default="session")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -971,6 +1051,9 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "reject": lambda a: reject(a.id),
     "lessons": lambda a: propose(a.source, a.max_n, a.dry_run),
     "handoffs": lambda a: handoffs(_state(a.fresh), a.since),
+    "questions": lambda a: list_questions(a.all, a.json),
+    "answer": lambda a: answer_question(a.id, a.text, a.via),
+    "away": lambda a: away(a.mode),
 }
 
 

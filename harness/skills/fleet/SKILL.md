@@ -1,12 +1,12 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back"
 user-invocable: true
 allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
 
-Read-mostly view over `~/.claude/fleet/state.json` plus the proposal inbox
-`~/.claude/harness-inbox/`. Every action goes through `fleet.py`; never edit inbox files,
+Read-mostly view over `~/.claude/fleet/state.json`, the proposal inbox
+`~/.claude/harness-inbox/` and the question queue `~/.claude/fleet/questions/`. Every action goes through `fleet.py`; never edit inbox files,
 state files or installed harness files under `~/.claude` by hand (harness-guard denies those
 writes and files them as proposals; that is what the inbox is for). Never open `*.key` files.
 
@@ -110,8 +110,34 @@ SendMessage from this session.
    it. Report `N/M landed` and the waiting session names.
    A delivery notice saying a session held or refused the message counts as not sent.
 
+## /fleet away on|off
+
+`away on` creates `~/.claude/fleet/away`; `away off` removes it; `away` alone shows the mode.
+While it is on, the ask-queue hook stops every session from opening a question box (a box
+stops the session, and a stopped session cannot read messages): the questions go to that
+session's queue, `~/.claude/fleet/questions/<session_id>.json`, and the session keeps
+working and lists them in its reply. With it off, boxes open as usual. Tell the user which
+mode is now set; on `on`, add that pending questions show on the dashboard and are answered
+with `/fleet questions`.
+
+## /fleet questions
+
+1. `questions --json`: every pending question with `id`, `project`, `session_name`,
+   `question`, `options`, `relay_text`. None -> say so and stop.
+2. Ask them with AskUserQuestion, up to 4 per call, in order. Each question's text is its
+   `relay_text` exactly (the `[fleet q-...]` marker lets the box open even in away mode),
+   header = project (max 12 chars), options = its labels and descriptions as given (a
+   question with more than 4 options: show the first 4; the user can still pick Other).
+3. For each answer: `answer <id> "<answer>" --via fleet`. Exit 1 "already answered via
+   session" means the user answered it in the asking session first; report that answer,
+   relay nothing. Otherwise the output ends `relay to: <session name>`: SendMessage that
+   session, first line `Answer to your queued question <id>: <answer>`, then the question
+   text. `not live: kept in queue` -> no message; the project's next session reads it with
+   `questions --all`.
+4. Repeat until no pending question is left, then report how many were answered and relayed.
+
 ## /fleet dashboard
 
 `dashboard [out.html]` writes a self-contained HTML page (default
-`~/.claude/fleet/dashboard.html`). It contains private project names: keep it under
+`~/.claude/fleet/dashboard.html`). Pending queued questions show first, as a notice. It contains private project names: keep it under
 `~/.claude`, never write it into a repo. Open it for the user or Read the path back.
