@@ -1,0 +1,129 @@
+---
+session: general
+date: 2026-10-08
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "fleet-control 11/11 shipped + installed + hooks registered; public explainer published; history rewritten to handle"
+now: "Restart sessions, then verify live: another project's session editing ~/.claude/hooks/status.mjs is denied and appears in /fleet inbox"
+test: "make test; gh run list -R maren-epochs/ContinuousClaudeV4.7 --branch main --limit 1"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  Fleet control is live on this machine as of 2026-10-07 ~20:18: sync_global --apply installed tools/fleet and the
+  hooks and wrote ~/.claude/.ccv47-manifest.json (installed rel path -> repo rel path + sha256 of the INSTALLED form);
+  register_hooks.py added to ~/.claude/settings.json: PreToolUse Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell ->
+  harness-guard.mjs (UNFILTERED: a live probe on CLI 2.1.293 showed `if` globs miss 8.3 short-name spellings) and
+  PostToolUse Bash|PowerShell -> fleet-audit.mjs. Hooks load only in sessions started after that; THIS session never
+  had them. Data lives only under ~/.claude: fleet/state.json, fleet/audit.jsonl, fleet/collect.err,
+  fleet/guard-errors.log, harness-inbox/<id>.json. The collector refreshes from the existing Stop hook
+  (auto-handoff-stop.mjs) at most every 2 min, detached, lock in fleet/, 20 s self-deadline. context_pct prefers the
+  statusline's per-session pct file in the temp dir (Claude Code used_percentage), transcript rule only as fallback.
+  Guard: deny once a manifest (non-kept) target is identified, even if the inbox save fails; fail-open only before
+  that (bad stdin/manifest/parse). /fleet apply edits the REPO file only, asks before commit, then user syncs.
+  Git history was rewritten (filter-repo mailmap) so every fork commit is maren-epochs
+  <75866442+maren-epochs@users.noreply.github.com>; ALL commit ids before 2026-10-07 ~19:50 changed
+  (map: .git/filter-repo/commit-map). Repo-local git config commits as the handle.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "make test green (911 pytest + hook suites); CI green on ubuntu-24.04 + windows-2025 at 16e4577 (later commits docs/template only)"
+  test_command: "make test"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main == origin/main cc0ad05"
+  dirty_files: []
+  warnings: "untracked install/settings.template.json.bak-20261005-reportcheck-if and .bak-20261007-201858-fleet (user's backups; leave or delete)"
+  context: "peak 31% (306K) | resume-handoff +80K, premortem +13K, autonomous +10K"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: "fleet-control VAL-801..811 via /autonomous (premortem WARN, 3 review rounds + fix rounds, contract continuum/autonomous/fleet-control/contract.json all passed)"
+    files: [tools/fleet/*, .claude/hooks/harness-guard.mjs, .claude/hooks/fleet-audit.mjs, .claude/hooks/status.mjs, .claude/hooks/auto-handoff-stop.mjs, install/sync_global.py, install/register_hooks.py, harness/skills/fleet/SKILL.md]
+  - task: "Readiness 23/27 after build -> 27/27 after behaviour-preserving refactor"
+    files: [tools/fleet/*.py, install/test_sync_global.py]
+  - task: "Hook test suites load-tolerant + concurrency-safe ids (worker-report-check)"
+    files: [.claude/hooks/test_*.sh]
+  - task: "Public explainer + README landing page; senior-SWE review; My role bullets verified by a second reviewer"
+    files: [docs/project-explainer.md, README.md, install/README.md]
+  - task: "History rewrite to handle + force-push main and 7 fix/* PR branches; commit ids in explainer remapped"
+    files: [".git (all refs)"]
+  - task: "Installed (sync --apply), registered hooks, settings template updated by user command"
+    files: ["~/.claude/*", install/settings.template.json]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: scope
+    chose: "full 11-part plan; nothing harmful to projects; blocking a session is fine when warranted"
+    over: ["core only", "warn-only guard"]
+    because: "user choice; user rejected an agent-invented 'never interrupt projects' rule"
+  - name: guard_registration
+    chose: "file tools unfiltered (~60-80 ms node spawn per write)"
+    over: ["settings if-filters on ~/.claude/**"]
+    because: "live probe: if filter misses 8.3 short-name paths -> bypass"
+  - name: identity
+    chose: "rewrite all history to handle + noreply email"
+    over: ["leave name", "handle for future commits only"]
+    because: "user choice for public resume repo; caveat given: PR force-push entries and cached old commits may persist"
+  - name: repo_collisions
+    chose: ">=2 members active in last 30 min"
+    over: ["any shared repo"]
+    because: "idle bg sessions produced permanent noise; orchestrator default, told user"
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - "Never open ~/.claude/sessions/*.key (secrets). Collector globs only sessions/<digits>.json."
+    - "Do not widen user decisions into new rules; explain in plain words; ask via A-D (memories exist)."
+    - "Never push user-facing drafts before the user's review when that was agreed (My role incident)."
+    - "Commit ids cited in any doc from before the rewrite are stale; look up .git/filter-repo/commit-map."
+  useful:
+    - "Worktree workers cannot write main-repo reports: they write inside the worktree; copy + cherry-pick, then remove worktree/branch."
+    - "Pre-commit stashes unstaged changes: when another agent has uncommitted edits, commit from a detached temp worktree and fast-forward."
+    - "Workers stop at 60 turns: ask them to write the report first, commit in small steps."
+    - "readiness.sh skips */.claude/worktrees/*, so unit_tests reads FAIL inside a worktree only."
+    - "Settings writes by the agent were allowed this time for register_hooks.py run as a script; template edit still via user ! command."
+  fyi:
+    - "filter-repo prompts on stdin if .git/filter-repo/already_ran exists; moved stale one to .git/filter-repo.prev-1630."
+    - "Backup of pre-rewrite history: ~/ccv47-backup-20261007-1903.bundle."
+    - "MultiEdit is not a built-in tool in CLI 2.1.293 (matcher lists it harmlessly)."
+
+worked: ["contract + milestone gates + separate review agent per milestone", "parallel workers split by file ownership, worktrees for overlap", "SendMessage to resume stopped workers with their partial work"]
+
+failed:
+  - attempted: "git filter-repo in a background shell"
+    root_cause: "stale already_ran made it wait on stdin forever; then reaped under memory pressure"
+    avoid: "background runs of tools that may prompt"
+    use_instead: "foreground, --force --no-gc, move stale metadata aside"
+
+trajectory:
+  started_as: "resume handoff: build fleet-control from saved contract"
+  evolved_to: "build + install + public portfolio explainer + identity rewrite"
+  scoped_to: "all done; live guard verification left"
+  user_approved_scope: true
+
+user_intent: |
+  Portfolio/resume use of the public repo matters: accuracy of claims, handle-only identity, plain explanations.
+  The user wants decisions batched as A-D and status in plain words; delegates reviews to agents.
+
+next:
+  - "Restart Claude Code sessions; in another project ask Claude to edit ~/.claude/hooks/status.mjs -> expect deny naming the repo file + a proposal in ~/.claude/harness-inbox; check /fleet inbox, then /fleet reject it"
+  - "Run /fleet and /fleet dashboard; publish the dashboard privately only if the user asks (it names projects)"
+  - "Fix .claude/hooks/test_tldr_read.sh: it rm -rf's the LIVE tldr-read cache and tldr-shim.json in os.tmpdir() (harms running sessions); make paths env-overridable"
+  - "Per-run ids in test_status.sh (sttst*) and test_auto_handoff_stop.sh (sgtst*)"
+  - "Unverified: checks.py turn-limit marker format; statusline-idle context source never seen live (consider ~5 s grace)"
+  - "Optional: m4/m5 had no separate review agent (808/810/811); run one"
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-08_07-45_fleet-live-explainer-published.yaml in ccv47-readme-fix.
+  Fleet control is installed and its hooks are registered; sessions started now have them. First verify live: from a
+  session in another project, try an edit of ~/.claude/hooks/status.mjs and confirm the deny and the inbox proposal
+  (/fleet inbox), then reject it. Then fix test_tldr_read.sh so it never touches the live tldr-read cache, and the fixed
+  temp ids in test_status.sh / test_auto_handoff_stop.sh. Explain progress in plain words; ask only via A-D options.
+
+files:
+  created: [tools/fleet/*, harness/skills/fleet/SKILL.md, .claude/hooks/harness-guard.mjs, .claude/hooks/fleet-audit.mjs, install/register_hooks.py, docs/project-explainer.md]
+  modified: [install/sync_global.py, .claude/hooks/status.mjs, .claude/hooks/auto-handoff-stop.mjs, .claude/hooks/test_*.sh, README.md, CLAUDE.md, install/README.md, install/settings.template.json, harness/skills/upgrade-harness/SKILL.md]
