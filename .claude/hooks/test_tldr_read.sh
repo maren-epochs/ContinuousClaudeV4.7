@@ -6,10 +6,19 @@
 set -u
 
 # Isolate from user env: with TLDR_READ_SHIM_AUTOSTART=1 a live shim would serve
-# reads and break the >1s mtime-invalidation proxy. Stop any session shim too;
-# the next real read re-autostarts it.
+# reads and break the >1s mtime-invalidation proxy.
 unset TLDR_READ_SHIM_AUTOSTART
-node "$(cd "$(dirname "$0")" && pwd)/tldr-shim.mjs" stop > /dev/null 2>&1
+# Private os.tmpdir() for every node process here, so the cache wipes and shim
+# start/stop below never touch the live tldr-read-cache or tldr-shim.json that
+# running sessions use. Windows node reads TEMP/TMP, POSIX node reads TMPDIR.
+TEST_TMP="$(mktemp -d)"
+TEST_TMP_NATIVE="$(cd "$TEST_TMP" && { pwd -W 2>/dev/null || pwd; })"
+export TMPDIR="$TEST_TMP_NATIVE" TEMP="$TEST_TMP_NATIVE" TMP="$TEST_TMP_NATIVE"
+cleanup() {
+  node "$(cd "$(dirname "$0")" && pwd)/tldr-shim.mjs" stop > /dev/null 2>&1
+  rm -rf "$TEST_TMP"
+}
+trap cleanup EXIT
 
 HOOK="$(cd "$(dirname "$0")" && pwd)/tldr-read.mjs"
 # Home dir derived at runtime (no username in the repo): forward-slash form, and

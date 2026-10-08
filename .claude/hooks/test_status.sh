@@ -13,6 +13,11 @@
 set -u
 
 HOOK="${STATUS_HOOK:-$(cd "$(dirname "$0")" && pwd)/status.mjs}"
+# Private os.tmpdir() per run (Windows node reads TEMP/TMP, POSIX TMPDIR): pct
+# files never land beside live sessions' and concurrent runs cannot collide.
+TEST_TMP="$(mktemp -d)"
+TEST_TMP_NATIVE="$(cd "$TEST_TMP" && { pwd -W 2>/dev/null || pwd; })"
+export TMPDIR="$TEST_TMP_NATIVE" TEMP="$TEST_TMP_NATIVE" TMP="$TEST_TMP_NATIVE"
 TMPWIN="$(node -e "console.log(require('os').tmpdir().split(String.fromCharCode(92)).join('/'))")"
 ROOT="$TMPWIN/sttst_status_$$"
 ERRFILE="$ROOT/err.txt"
@@ -25,7 +30,7 @@ cleanup() {
   for s in $SIDS; do rm -f "$(pctfile "$s")"; done
   rm -rf "$ROOT"
 }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "$TEST_TMP"' EXIT
 cleanup
 mkdir -p "$FAKEHOME/.claude"
 

@@ -8,6 +8,11 @@
 set -u
 
 HOOK="$(cd "$(dirname "$0")" && pwd)/auto-handoff-stop.mjs"
+# Private os.tmpdir() per run (Windows node reads TEMP/TMP, POSIX TMPDIR): pct
+# files never land beside live sessions' and concurrent runs cannot collide.
+TEST_TMP="$(mktemp -d)"
+TEST_TMP_NATIVE="$(cd "$TEST_TMP" && { pwd -W 2>/dev/null || pwd; })"
+export TMPDIR="$TEST_TMP_NATIVE" TEMP="$TEST_TMP_NATIVE" TMP="$TEST_TMP_NATIVE"
 TMPWIN="$(node -e "console.log(require('os').tmpdir().replace(/\\\\/g,'/'))")"
 ERRFILE="$TMPWIN/stopguard_test_err_$$.txt"
 # The hook also starts a background fleet collect (VAL-809, tested in test_status.sh):
@@ -15,7 +20,7 @@ ERRFILE="$TMPWIN/stopguard_test_err_$$.txt"
 FAKEHOME="$TMPWIN/stopguard_test_home_$$"
 mkdir -p "$FAKEHOME"
 export HOME="$FAKEHOME" USERPROFILE="$FAKEHOME" FLEET_COLLECT=0
-trap 'rm -rf "$FAKEHOME"' EXIT
+trap 'rm -rf "$TEST_TMP"' EXIT  # FAKEHOME and ERRFILE live under it
 
 PASS=0
 FAIL=0
