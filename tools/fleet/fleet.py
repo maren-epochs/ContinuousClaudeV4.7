@@ -820,12 +820,59 @@ def _when(epoch: float) -> str:
     )
 
 
-def handoffs(state: FleetState, since: float | None, now: float | None = None) -> str:
-    """Newest handoff per live session, read now (not from state.json).
+def _new_handoffs(root: Path, since: float) -> list[tuple[float, str]]:
+    """(mtime, file name) of handoff files under root modified at or after since."""
+    found = []
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            mtime = _mtime(Path(dirpath) / name)
+            if (
+                name.endswith(collect.HANDOFF_SUFFIXES)
+                and mtime is not None
+                and mtime >= since
+            ):
+                found.append((mtime, name))
+    return found
 
-    Without ``since`` it prints the baseline to pass back later; with it, a session
-    is ``landed`` once its project's handoff root has a file newer than ``since``.
-    Sessions of one project share a root, so one handoff marks all of them landed.
+
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _own_handoff(s: Session, new: list[tuple[float, str]]) -> tuple[str, float | None]:
+    """(state, mtime) of the newest new handoff this session's transcript wrote.
+
+    A file counts as the session's own when its name appears in a ``file_path``
+    tool input in the transcript tail. Without a transcript the writer is unknown
+    (``shared``); a handoff written through a shell command is not seen.
+    """
+    if not new:
+        return "waiting", None
+    transcript = collect.transcript_path(
+        model.claude_dir() / "projects", s.cwd, s.session_id
+    )
+    if transcript is None:
+        return "shared", max(m for m, _ in new)
+    tail = collect.read_tail(transcript, collect.TAIL_BYTES)
+    mine = [
+        m
+        for m, name in new
+        if re.search(r'"file_path":\s*"[^"]*' + re.escape(name) + '"', tail)
+    ]
+    return ("landed", max(mine)) if mine else ("waiting", None)
+
+
+def handoffs(state: FleetState, since: float | None, now: float | None = None) -> str:
+    """Handoffs per live session, read now (not from state.json).
+
+    Without ``since`` it prints the baseline to pass back later and each project's
+    newest handoff. With it, a session is ``landed`` once its own transcript wrote a
+    handoff file newer than ``since`` (sessions of one project share a handoff root,
+    so the root alone cannot tell them apart), ``shared`` when the root has a new
+    file but the session's transcript is missing, else ``waiting``.
     """
     stamp = _dt.datetime.now(_dt.UTC).timestamp() if now is None else now
     base = stamp if since is None else since
@@ -837,21 +884,19 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
     lines += [f"live sessions ({len(live)}):", "  " + header.rstrip()]
     landed = 0
     for s in live:
-        newest = collect.newest_handoff_file(
-            collect.handoff_root(s.cwd or "", model.claude_dir())
-        )
+        root = collect.handoff_root(s.cwd or "", model.claude_dir())
         if since is None:
-            mark = None
-        elif newest is not None and newest[0] >= since:
-            mark, landed = "landed", landed + 1
+            newest = collect.newest_handoff_file(root)
+            mark, when = None, newest[0] if newest else None
         else:
-            mark = "waiting"
+            mark, when = _own_handoff(s, _new_handoffs(root, since))
+            landed += mark == "landed"
         values = (
             s.name or s.session_id,
             s.project,
             s.kind,
             s.status,
-            _when(newest[0]) if newest else None,
+            _when(when) if when is not None else None,
             mark,
         )
         row = " ".join(

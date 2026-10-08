@@ -101,9 +101,12 @@ SendMessage from this session.
    open questions for the user as A-D options inside the handoff.
    Pass `notify_when_idle: true` so an idle notice arrives when each one finishes its turn.
 4. After the idle notices (or when the user asks), `handoffs --since <epoch>`: `landed` means
-   the project's handoff root has a file newer than the baseline, `waiting` means not yet.
-   Sessions of one project share a root, so one handoff marks all of them landed; say so
-   when a project has several sessions. Report `N/M landed` and the waiting session names.
+   the session's own transcript wrote (a `file_path` tool input) a handoff newer than the
+   baseline, so sessions sharing a project root are told apart; `shared` means the root has a
+   new file but the session's transcript is missing (writer unknown); `waiting` means not
+   yet. A handoff written through a shell command is not seen and reads `waiting`.
+   Sessions waiting on their own question may not read the request until the user answers
+   it. Report `N/M landed` and the waiting session names.
    A delivery notice saying a session held or refused the message counts as not sent.
 
 ## /fleet dashboard

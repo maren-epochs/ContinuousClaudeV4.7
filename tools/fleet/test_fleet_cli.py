@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -865,18 +866,34 @@ class HandoffsTests(CliHome):
         model.save_state(
             FleetState(
                 sessions=[
-                    Session(
-                        name="proj-1", project="proj", cwd=str(self.proj), alive=True
-                    ),
-                    Session(
-                        name="other-2", project="other", cwd=str(self.other), alive=True
-                    ),
+                    self.session("proj-1", "proj", self.proj, "sess-p1"),
+                    self.session("other-2", "other", self.other, "sess-o2"),
+                    self.session("proj-4", "proj", self.proj, "sess-p4"),
                     Session(
                         name="gone-3", project="proj", cwd=str(self.proj), alive=False
                     ),
                 ]
             )
         )
+
+    @staticmethod
+    def session(name, project, cwd, sid):
+        return Session(
+            name=name, project=project, cwd=str(cwd), session_id=sid, alive=True
+        )
+
+    def transcript(self, cwd, sid, *records):
+        slug = re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+        path = self.claude / "projects" / slug / f"{sid}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+        )
+
+    @staticmethod
+    def write_record(file_path):
+        tool = {"type": "tool_use", "name": "Write", "input": {"file_path": file_path}}
+        return {"type": "assistant", "message": {"content": [tool]}}
 
     def handoff(self, root, name, mtime):
         root.mkdir(parents=True, exist_ok=True)
@@ -894,21 +911,37 @@ class HandoffsTests(CliHome):
         self.assertNotIn("landed", out)
         self.assertNotIn("waiting", out)
 
-    def test_since_marks_landed_and_waiting_per_handoff_root(self):
+    def rows(self, out):
+        return {line.split()[0]: line for line in out.splitlines()[3:-1]}
+
+    def test_since_credits_only_the_session_that_wrote_the_file(self):
         self.handoff(self.root, "old.yaml", 1000)
         self.handoff(self.root, "new.md", 3000)
         self.handoff(self.claude / "handoffs" / "other", "h.yaml", 1500)
+        self.transcript(
+            self.proj, "sess-p1", self.write_record(str(self.root / "new.md"))
+        )
+        mention = {"type": "assistant", "message": {"content": "read new.md"}}
+        self.transcript(self.proj, "sess-p4", mention)  # same root, did not write it
         code, out, _ = self.run_main("handoffs", "--since", "2000")
         self.assertEqual(code, 0)
-        rows = {line.split()[0]: line for line in out.splitlines()[3:-1]}
+        rows = self.rows(out)
         self.assertTrue(rows["proj-1"].endswith("landed"), out)
+        self.assertTrue(rows["proj-4"].endswith("waiting"), out)
         self.assertTrue(rows["other-2"].endswith("waiting"), out)
-        self.assertIn("1/2 landed", out)
+        self.assertIn("1/3 landed", out)
+
+    def test_new_file_without_transcript_is_shared(self):
+        self.handoff(self.root, "new.md", 3000)
+        code, out, _ = self.run_main("handoffs", "--since", "2000")
+        self.assertEqual(code, 0)
+        self.assertTrue(self.rows(out)["proj-1"].endswith("shared"), out)
+        self.assertIn("0/3 landed", out)
 
     def test_since_accepts_iso_and_rejects_garbage(self):
         code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")
         self.assertEqual(code, 0)
-        self.assertIn("0/2 landed", out)
+        self.assertIn("0/3 landed", out)
         code, _, err = self.run_main("handoffs", "--since", "soon")
         self.assertEqual(code, 2)
         self.assertIn("epoch seconds or ISO", err)
