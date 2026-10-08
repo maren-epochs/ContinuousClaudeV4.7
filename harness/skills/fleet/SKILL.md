@@ -97,8 +97,9 @@ SendMessage from this session.
    names). Do not interrupt: a message drains at the receiver's next tool round, so the text
    tells the session to finish its current step first. First line self-contained, e.g.:
    `Please write a handoff now with /create-handoff (requested by the user via /fleet handoff-all).`
-   then: finish the current step first, do not start new work after the handoff, list any
-   open questions for the user as A-D options inside the handoff.
+   then: finish the current step first, list any open questions for the user as A-D options
+   inside the handoff, then carry on as before. Do not tell sessions to stop or pause unless
+   the user asked for that.
    Pass `notify_when_idle: true` so an idle notice arrives when each one finishes its turn.
 4. After the idle notices (or when the user asks), `handoffs --since <epoch>`: `landed` means
    the session's own transcript wrote (a `file_path` tool input) a handoff newer than the
