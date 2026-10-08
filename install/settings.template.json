@@ -152,6 +152,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/harness-guard.mjs",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PreCompact": [
@@ -227,6 +237,16 @@
             "type": "command",
             "command": "node .claude/hooks/worker-report-check.mjs",
             "timeout": 25
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/fleet-audit.mjs",
+            "timeout": 15
           }
         ]
       }
