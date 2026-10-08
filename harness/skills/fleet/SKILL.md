@@ -1,8 +1,8 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff"
 user-invocable: true
-allowed-tools: [Bash, Read, AskUserQuestion]
+allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
 
 Read-mostly view over `~/.claude/fleet/state.json` plus the proposal inbox
@@ -82,6 +82,29 @@ proposes it again. Works on pending or applied proposals; refuses an already rej
 memories (and bloks rule/taste cards) for cross-project lessons, masks private terms, skips
 ones already in the harness docs or already in the inbox, and files them as `kind: lesson`
 proposals. `--dry-run` previews. Then walk the new ids through `/fleet apply` or `reject`.
+
+## /fleet handoff-all
+
+Asks every live Claude Code session on this machine to write a handoff, then checks which
+ones landed. `fleet.py` cannot reach other sessions; the messages go out with ListAgents +
+SendMessage from this session.
+
+1. `handoffs --fresh` prints `since: <epoch>` and the newest handoff per live session. Keep
+   the epoch: it is the baseline for step 4.
+2. `ListAgents`. Targets: every peer session on this machine, interactive and `bg`, busy or
+   idle. Skip this session, `cloud` rows (they cannot reply) and `offline` rows.
+3. `SendMessage` to each target by its exact listed name (append ` [ref]` only for duplicate
+   names). Do not interrupt: a message drains at the receiver's next tool round, so the text
+   tells the session to finish its current step first. First line self-contained, e.g.:
+   `Please write a handoff now with /create-handoff (requested by the user via /fleet handoff-all).`
+   then: finish the current step first, do not start new work after the handoff, list any
+   open questions for the user as A-D options inside the handoff.
+   Pass `notify_when_idle: true` so an idle notice arrives when each one finishes its turn.
+4. After the idle notices (or when the user asks), `handoffs --since <epoch>`: `landed` means
+   the project's handoff root has a file newer than the baseline, `waiting` means not yet.
+   Sessions of one project share a root, so one handoff marks all of them landed; say so
+   when a project has several sessions. Report `N/M landed` and the waiting session names.
+   A delivery notice saying a session held or refused the message counts as not sent.
 
 ## /fleet dashboard
 

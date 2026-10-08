@@ -11,6 +11,7 @@ apply <id>       apply a proposal to the harness REPO file (never the installed
                  copy, never commits); lessons append to --doc; --dry-run diffs
 reject <id>      set status rejected in place (the file stays: lesson dedupe)
 lessons          propose cross-project lessons (--source memory|bloks|all, --max N)
+handoffs         newest handoff per live session; --since T marks landed/waiting
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
 Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
@@ -801,6 +802,80 @@ def dashboard(out: str | None, fresh: bool) -> int:
     return 0
 
 
+HANDOFF_COLUMNS = (
+    ("session", 36),
+    ("project", 24),
+    ("kind", 11),
+    ("status", 8),
+    ("newest handoff", 16),
+    ("state", 7),
+)
+
+
+def _when(epoch: float) -> str:
+    return (
+        _dt.datetime.fromtimestamp(epoch, _dt.UTC)
+        .astimezone()
+        .strftime("%Y-%m-%d %H:%M")
+    )
+
+
+def handoffs(state: FleetState, since: float | None, now: float | None = None) -> str:
+    """Newest handoff per live session, read now (not from state.json).
+
+    Without ``since`` it prints the baseline to pass back later; with it, a session
+    is ``landed`` once its project's handoff root has a file newer than ``since``.
+    Sessions of one project share a root, so one handoff marks all of them landed.
+    """
+    stamp = _dt.datetime.now(_dt.UTC).timestamp() if now is None else now
+    base = stamp if since is None else since
+    lines = [f"since: {base:.0f} ({_when(base)})"]
+    live = [s for s in state.sessions if s.alive and s.cwd]
+    if not live:
+        return "\n".join([*lines, "no live sessions"])
+    header = " ".join(_cell(name, w) for name, w in HANDOFF_COLUMNS)
+    lines += [f"live sessions ({len(live)}):", "  " + header.rstrip()]
+    landed = 0
+    for s in live:
+        newest = collect.newest_handoff_file(
+            collect.handoff_root(s.cwd or "", model.claude_dir())
+        )
+        if since is None:
+            mark = None
+        elif newest is not None and newest[0] >= since:
+            mark, landed = "landed", landed + 1
+        else:
+            mark = "waiting"
+        values = (
+            s.name or s.session_id,
+            s.project,
+            s.kind,
+            s.status,
+            _when(newest[0]) if newest else None,
+            mark,
+        )
+        row = " ".join(
+            _cell(v, w) for v, (_, w) in zip(values, HANDOFF_COLUMNS, strict=True)
+        )
+        lines.append("  " + row.rstrip())
+    if since is not None:
+        lines.append(f"{landed}/{len(live)} landed")
+    return "\n".join(lines)
+
+
+def _epoch(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        return _dt.datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected epoch seconds or ISO time, got {value!r}"
+        ) from None
+
+
 def _positive(value: str) -> int:
     try:
         n = int(value)
@@ -833,6 +908,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--source", choices=LESSON_SOURCES, default="memory")
     p.add_argument("--max", type=_positive, default=LESSONS_MAX, dest="max_n")
     p.add_argument("--dry-run", action="store_true", help="write nothing")
+    p = sub.add_parser("handoffs", help="newest handoff per live session")
+    p.add_argument("--since", type=_epoch, help="mark landed/waiting vs this time")
+    p.add_argument("--fresh", action="store_true", help="collect first")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -847,6 +925,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "apply": lambda a: apply(a.id, a.repo, a.doc, a.dry_run),
     "reject": lambda a: reject(a.id),
     "lessons": lambda a: propose(a.source, a.max_n, a.dry_run),
+    "handoffs": lambda a: handoffs(_state(a.fresh), a.since),
 }
 
 

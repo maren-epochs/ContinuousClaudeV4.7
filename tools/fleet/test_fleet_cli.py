@@ -854,6 +854,72 @@ class CollectErrorTests(CliHome):
         self.assertFalse(self.err_path().exists())
 
 
+class HandoffsTests(CliHome):
+    def setUp(self):
+        super().setUp()
+        self.proj = self.home / "proj"
+        self.root = self.proj / "thoughts" / "shared" / "handoffs" / "general"
+        self.root.mkdir(parents=True)
+        self.other = self.home / "other"  # no thoughts/ -> ~/.claude/handoffs/other
+        self.other.mkdir()
+        model.save_state(
+            FleetState(
+                sessions=[
+                    Session(
+                        name="proj-1", project="proj", cwd=str(self.proj), alive=True
+                    ),
+                    Session(
+                        name="other-2", project="other", cwd=str(self.other), alive=True
+                    ),
+                    Session(
+                        name="gone-3", project="proj", cwd=str(self.proj), alive=False
+                    ),
+                ]
+            )
+        )
+
+    def handoff(self, root, name, mtime):
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / name
+        path.write_text("goal: x\n", encoding="utf-8")
+        os.utime(path, (mtime, mtime))
+
+    def test_baseline_without_since_prints_since_and_no_marks(self):
+        self.handoff(self.root, "a.yaml", 1000)
+        code, out, _ = self.run_main("handoffs")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("since: "))
+        self.assertIn("proj-1", out)
+        self.assertNotIn("gone-3", out)
+        self.assertNotIn("landed", out)
+        self.assertNotIn("waiting", out)
+
+    def test_since_marks_landed_and_waiting_per_handoff_root(self):
+        self.handoff(self.root, "old.yaml", 1000)
+        self.handoff(self.root, "new.md", 3000)
+        self.handoff(self.claude / "handoffs" / "other", "h.yaml", 1500)
+        code, out, _ = self.run_main("handoffs", "--since", "2000")
+        self.assertEqual(code, 0)
+        rows = {line.split()[0]: line for line in out.splitlines()[3:-1]}
+        self.assertTrue(rows["proj-1"].endswith("landed"), out)
+        self.assertTrue(rows["other-2"].endswith("waiting"), out)
+        self.assertIn("1/2 landed", out)
+
+    def test_since_accepts_iso_and_rejects_garbage(self):
+        code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")
+        self.assertEqual(code, 0)
+        self.assertIn("0/2 landed", out)
+        code, _, err = self.run_main("handoffs", "--since", "soon")
+        self.assertEqual(code, 2)
+        self.assertIn("epoch seconds or ISO", err)
+
+    def test_no_live_sessions(self):
+        model.save_state(FleetState())
+        code, out, _ = self.run_main("handoffs", "--since", "0")
+        self.assertEqual(code, 0)
+        self.assertIn("no live sessions", out)
+
+
 class DashboardTests(CliHome):
     def test_missing_dashboard_module_exits_2(self):
         model.save_state(_state())

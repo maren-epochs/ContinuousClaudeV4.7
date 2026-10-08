@@ -479,7 +479,7 @@ def newest_handoff(root: Path, now: float) -> Handoff | None:
     """Newest .yaml/.yml/.md under root by mtime, with goal/now (status.mjs rules)."""
     if not root.is_dir():
         return None
-    best = _newest_handoff_file(root)
+    best = newest_handoff_file(root)
     if best is None:
         return None
     mtime, path = best
@@ -492,7 +492,7 @@ def newest_handoff(root: Path, now: float) -> Handoff | None:
     )
 
 
-def _newest_handoff_file(root: Path) -> tuple[float, Path] | None:
+def newest_handoff_file(root: Path) -> tuple[float, Path] | None:
     """(mtime, path) of the newest handoff-suffixed file under root."""
     best: tuple[float, Path] | None = None
     for dirpath, _dirs, files in os.walk(root):
