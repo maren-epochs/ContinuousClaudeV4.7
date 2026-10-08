@@ -30,7 +30,7 @@ next:
   - "User: py -3.13 install/sync_global.py --apply, then py -3.13 install/register_hooks.py --dry-run and the real run, restart"
   - "User: apply the two settings.template.json entries (agent writes denied) - command given in chat"
   - "Verify live: a Write to ~/.claude/hooks/status.mjs from another session is denied and lands in ~/.claude/harness-inbox"
-  - "User: confirm the 'My role' bullets in docs/project-explainer.md (last bullet is a placeholder for time invested)"
+  - "My role bullets reviewed and edited by a senior-engineer agent at the user's request (time invested not stated)"
   - "Follow-ups: test_tldr_read.sh deletes the live tldr-read cache (harms running sessions); fixed temp ids in test_status.sh / test_auto_handoff_stop.sh; turn-limit marker format unverified in checks.py; statusline-idle never observed live"
 
 findings:
