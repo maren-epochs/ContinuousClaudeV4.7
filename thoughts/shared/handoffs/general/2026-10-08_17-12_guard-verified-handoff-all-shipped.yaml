@@ -1,0 +1,119 @@
+---
+session: general
+date: 2026-10-08
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "Guard verified live; hook tests isolated from live temp; /fleet handoff-all built, per-session attribution, installed + pushed"
+now: "Check CI for 99cb626, then handoffs --since 1791493540 for the 4 question-blocked sessions (ripplemark, privacy, druckenmiller, myrtle)"
+test: "make test; py -3.13 -m pytest -q tools/fleet; gh run list -R maren-epochs/ContinuousClaudeV4.7 --branch main --limit 1"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  harness-guard is live and verified (2026-10-08): an Edit and a shell append (`printf '' >> ~/.claude/hooks/status.mjs`)
+  on an installed file were both denied with the repo path named, each filed as an inbox proposal; both rejected.
+  Hook test suites (test_tldr_read.sh, test_status.sh, test_auto_handoff_stop.sh) now export TEMP/TMP/TMPDIR to a
+  per-run mktemp dir (pwd -W form for Windows node), so os.tmpdir() inside every node child is private: no more
+  wiping the live tldr-read-cache, stopping the live tldr shim, or writing pct files beside real sessions'. No hook
+  code changed. fleet.py cannot message sessions: /fleet handoff-all = `fleet.py handoffs --fresh` (prints
+  `since: <epoch>` baseline) -> ListAgents -> SendMessage per local session with notify_when_idle -> later
+  `handoffs --since <epoch>`. Attribution: a session is `landed` only when its own transcript tail
+  (collect.TAIL_BYTES) has a `"file_path": "...<name>"` tool input naming a handoff newer than since; `shared` = new
+  file in root but no transcript; shell-written handoffs are missed (read `waiting`). Handoff files carry no
+  session id (`session: general` everywhere), which is why transcript matching is used. Cross-session messages to
+  a session blocked on its own AskUserQuestion do not drain until the user answers it in that window.
+  `claude --bg --resume <id>` restarts a session in the background; resuming can spawn a new session id copy
+  (seen: an idle duplicate with a new id). Session names in ListAgents can change/duplicate across restarts and
+  Remote Control mirrors; use `name [ref]` from a fresh listing.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "make test green before d664381; tools/fleet 251 passed 1 skipped at 81f9eba; CI green at 8a4bb6f (ubuntu + windows); CI for 99cb626 run 37845088463 was in progress at handoff"
+  test_command: "make test"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: "main == origin/main 99cb626 (after this handoff commit: +1)"
+  dirty_files: []
+  warnings: "untracked install/settings.template.json.bak-* (user's backups; user chose to leave them)"
+  context: "peak 21% (209K) | resume-handoff +98K, create-handoff +3K"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: "Live guard verification (Edit + shell write denied, 2 proposals filed then rejected)"
+    files: []
+  - task: "Hook tests use a private os.tmpdir() per run (d664381)"
+    files: [.claude/hooks/test_tldr_read.sh, .claude/hooks/test_status.sh, .claude/hooks/test_auto_handoff_stop.sh]
+  - task: "fleet.py handoffs command + /fleet handoff-all skill procedure (8a4bb6f); per-session attribution (81f9eba); removed the unrequested stop-work line (99cb626)"
+    files: [tools/fleet/fleet.py, tools/fleet/collect.py, tools/fleet/test_fleet_cli.py, harness/skills/fleet/SKILL.md, CLAUDE.md]
+  - task: "Fleet ops: away notice to 12 sessions; relayed user answers to ripplemark/druckenmiller/myrtle; ran handoff-all; told 4 blocked sessions to put questions into handoffs; retraction of stop-work line to 9 sessions"
+    files: []
+  - task: "User ran sync_global --apply twice (installed == 99cb626 minus nothing); pushed through 99cb626"
+    files: ["~/.claude/*"]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: test_isolation
+    chose: "export TEMP/TMP/TMPDIR to mktemp dir in the test scripts"
+    over: ["env-overridable cache paths in tldr-read.mjs / tldr-shim.mjs"]
+    because: "node os.tmpdir() already honors those vars; zero production change, also fixes fixed sttst/sgtst ids"
+  - name: handoff_all_defaults
+    chose: "all local sessions incl. bg; no interrupt (drains next tool round); confirm via handoff file newer than baseline"
+    over: ["interactive only", "queue until idle", "ask each session to reply with path"]
+    because: "user was away; defaults queued as questions, never answered"
+  - name: attribution
+    chose: "match handoff file name in a file_path tool input in the session's transcript tail"
+    over: ["add session_id to create-handoff output", "root-level mtime only"]
+    because: "existing handoffs have no session id; root-level marked all same-project sessions landed (7/12 vs true 5/12)"
+
+# ── FINDINGS (tiered by importance) ──────────────────────────────
+findings:
+  critical:
+    - "Never add instructions the user did not give to messages sent to other sessions (the 'do not start new work' line paused sessions with a go-ahead; retracted)."
+    - "Auto mode denies stopping other sessions' processes (Stop-Process) and reading ~/.claude/sessions/*.json via cat; hand the user the command."
+    - "Answers relayed to a session blocked on AskUserQuestion may not reach it until the user acts in that window."
+  useful:
+    - "Heredocs through the Bash tool collapsed '\\n' escapes inside a Python ''' string into real newlines; use Edit for code with escapes."
+    - "Text written between tool calls may not reach the user; repeat answers in the final message (memory saved)."
+  fyi:
+    - "Myrtle was told by the user to defer all tasks until they return; keep it paused."
+
+worked: ["live probe of guard from this session (it had the hooks)", "notify_when_idle + handoffs --since as the check loop"]
+
+failed:
+  - attempted: "Stop-Process + claude --bg --resume of other sessions from this session"
+    root_cause: "auto-mode classifier: Interfere With Workloads"
+    avoid: "acting on other sessions' processes"
+    use_instead: "give the user the exact PowerShell command"
+
+trajectory:
+  started_as: "resume handoff: verify guard live, fix test temp-dir isolation"
+  evolved_to: "plus /fleet handoff-all build, fleet ops while user away, attribution fix"
+  scoped_to: "all committed, installed, pushed"
+  user_approved_scope: true
+
+user_intent: |
+  The user runs many sessions in parallel and wants fleet-level control (away notices, batch handoffs, queued
+  questions) without sessions being paused beyond what they ask. Plain words, A-D questions.
+
+questions:
+  - "handoff-all defaults never confirmed by user: include bg sessions (A yes); interrupt (A no, next tool round); confirmation (A file attribution) - ask if behavior should change"
+
+next:
+  - "Check CI run 37845088463 for 99cb626 (gh run view 37845088463 -R maren-epochs/ContinuousClaudeV4.7)"
+  - "py -3.13 tools/fleet/fleet.py handoffs --fresh --since 1791493540 - expect ripplemark/privacy/druckenmiller/myrtle to land once the user clears their question boxes"
+  - "Unverified carried over: checks.py turn-limit marker format; statusline-idle context source never seen live"
+  - "Optional: separate review agent for VAL-808/810/811 (never done)"
+  - "Optional: create-handoff could write session_id into frontmatter so attribution need not read transcripts"
+
+next_session_prompt: |
+  Resume from thoughts/shared/handoffs/general/2026-10-08_17-12_guard-verified-handoff-all-shipped.yaml in ccv47-readme-fix.
+  Confirm CI is green for 99cb626. Then run `py -3.13 tools/fleet/fleet.py handoffs --fresh --since 1791493540` and
+  report which of ripplemark, privacy, druckenmiller, myrtle have written handoffs. Do not message other sessions with
+  anything the user did not ask for. Explain in plain words; ask only via A-D options.
+
+files:
+  created: [thoughts/shared/handoffs/general/2026-10-08_17-12_guard-verified-handoff-all-shipped.yaml]
+  modified: [.claude/hooks/test_tldr_read.sh, .claude/hooks/test_status.sh, .claude/hooks/test_auto_handoff_stop.sh, tools/fleet/fleet.py, tools/fleet/collect.py, tools/fleet/test_fleet_cli.py, harness/skills/fleet/SKILL.md, CLAUDE.md]
