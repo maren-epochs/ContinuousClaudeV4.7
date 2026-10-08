@@ -103,7 +103,9 @@ SendMessage from this session.
    Pass `notify_when_idle: true` so an idle notice arrives when each one finishes its turn.
 4. After the idle notices (or when the user asks), `handoffs --since <epoch>`: `landed` means
    the session's own transcript wrote (a `file_path` tool input) a handoff newer than the
-   baseline, so sessions sharing a project root are told apart; `shared` means the root has a
+   baseline, so sessions sharing a project root are told apart; `prior` means an ended
+   session of the same project wrote it (the session was restarted under a new id: its
+   handoff exists, counted apart from landed); `shared` means the root has a
    new file but the session's transcript is missing (writer unknown); `waiting` means not
    yet. A handoff written through a shell command is not seen and reads `waiting`.
    Sessions waiting on their own question may not read the request until the user answers

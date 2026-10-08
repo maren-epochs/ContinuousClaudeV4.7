@@ -938,6 +938,36 @@ class HandoffsTests(CliHome):
         self.assertTrue(self.rows(out)["proj-1"].endswith("shared"), out)
         self.assertIn("0/3 landed", out)
 
+    def test_handoff_by_ended_session_of_same_project_is_prior(self):
+        self.handoff(self.root, "a.md", 3000)
+        self.handoff(self.root, "b.md", 3500)
+        self.transcript(self.proj, "sess-p1", {"type": "assistant", "message": {}})
+        self.transcript(self.proj, "sess-p4", {"type": "assistant", "message": {}})
+        # sess-old ended (not live) and wrote both; newest wins
+        self.transcript(
+            self.proj,
+            "sess-old",
+            self.write_record(str(self.root / "a.md")),
+            self.write_record(str(self.root / "b.md")),
+        )
+        code, out, _ = self.run_main("handoffs", "--since", "2000")
+        self.assertEqual(code, 0)
+        rows = self.rows(out)
+        self.assertTrue(rows["proj-1"].endswith("prior"), out)
+        self.assertIn(fleet._when(3500), rows["proj-1"])
+        self.assertIn("0/3 landed, 2 by an ended earlier session", out)
+
+    def test_handoff_by_another_live_session_is_not_prior(self):
+        self.handoff(self.root, "a.md", 3000)
+        self.transcript(
+            self.proj, "sess-p1", self.write_record(str(self.root / "a.md"))
+        )
+        self.transcript(self.proj, "sess-p4", {"type": "assistant", "message": {}})
+        _, out, _ = self.run_main("handoffs", "--since", "2000")
+        rows = self.rows(out)
+        self.assertTrue(rows["proj-1"].endswith("landed"), out)
+        self.assertTrue(rows["proj-4"].endswith("waiting"), out)
+
     def test_since_accepts_iso_and_rejects_garbage(self):
         code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")
         self.assertEqual(code, 0)

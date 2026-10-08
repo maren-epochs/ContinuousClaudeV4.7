@@ -845,12 +845,26 @@ def _mtime(path: Path) -> float | None:
         return None
 
 
-def _own_handoff(s: Session, new: list[tuple[float, str]]) -> tuple[str, float | None]:
-    """(state, mtime) of the newest new handoff this session's transcript wrote.
+def _written_by(transcript: Path, new: list[tuple[float, str]]) -> list[float]:
+    """mtimes of the new handoffs named in a ``file_path`` tool input in the tail."""
+    tail = collect.read_tail(transcript, collect.TAIL_BYTES)
+    return [
+        m
+        for m, name in new
+        if re.search(r'"file_path":\s*"[^"]*' + re.escape(name) + '"', tail)
+    ]
+
+
+def _own_handoff(
+    s: Session, new: list[tuple[float, str]], live_ids: set[str]
+) -> tuple[str, float | None]:
+    """(state, mtime) of the newest new handoff this session, or an ended one, wrote.
 
     A file counts as the session's own when its name appears in a ``file_path``
-    tool input in the transcript tail. Without a transcript the writer is unknown
-    (``shared``); a handoff written through a shell command is not seen.
+    tool input in the transcript tail (``landed``). Otherwise, when a transcript in
+    the same project folder that belongs to no live session wrote one (the session
+    before a restart under a new id), ``prior``. Without a transcript the writer is
+    unknown (``shared``); a handoff written through a shell command is not seen.
     """
     if not new:
         return "waiting", None
@@ -859,13 +873,17 @@ def _own_handoff(s: Session, new: list[tuple[float, str]]) -> tuple[str, float |
     )
     if transcript is None:
         return "shared", max(m for m, _ in new)
-    tail = collect.read_tail(transcript, collect.TAIL_BYTES)
-    mine = [
+    mine = _written_by(transcript, new)
+    if mine:
+        return "landed", max(mine)
+    oldest = min(m for m, _ in new)
+    theirs = [
         m
-        for m, name in new
-        if re.search(r'"file_path":\s*"[^"]*' + re.escape(name) + '"', tail)
+        for other in transcript.parent.glob("*.jsonl")
+        if other.stem not in live_ids and (_mtime(other) or 0) >= oldest
+        for m in _written_by(other, new)
     ]
-    return ("landed", max(mine)) if mine else ("waiting", None)
+    return ("prior", max(theirs)) if theirs else ("waiting", None)
 
 
 def handoffs(state: FleetState, since: float | None, now: float | None = None) -> str:
@@ -874,8 +892,9 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
     Without ``since`` it prints the baseline to pass back later and each project's
     newest handoff. With it, a session is ``landed`` once its own transcript wrote a
     handoff file newer than ``since`` (sessions of one project share a handoff root,
-    so the root alone cannot tell them apart), ``shared`` when the root has a new
-    file but the session's transcript is missing, else ``waiting``.
+    so the root alone cannot tell them apart), ``prior`` when an ended session of the
+    same project wrote it (a restart under a new id), ``shared`` when the root has a
+    new file but the session's transcript is missing, else ``waiting``.
     """
     stamp = _dt.datetime.now(_dt.UTC).timestamp() if now is None else now
     base = stamp if since is None else since
@@ -885,15 +904,17 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
         return "\n".join([*lines, "no live sessions"])
     header = " ".join(_cell(name, w) for name, w in HANDOFF_COLUMNS)
     lines += [f"live sessions ({len(live)}):", "  " + header.rstrip()]
-    landed = 0
+    landed = prior = 0
+    live_ids = {s.session_id for s in live if s.session_id}
     for s in live:
         root = collect.handoff_root(s.cwd or "", model.claude_dir())
         if since is None:
             newest = collect.newest_handoff_file(root)
             mark, when = None, newest[0] if newest else None
         else:
-            mark, when = _own_handoff(s, _new_handoffs(root, since))
+            mark, when = _own_handoff(s, _new_handoffs(root, since), live_ids)
             landed += mark == "landed"
+            prior += mark == "prior"
         values = (
             s.name or s.session_id,
             s.project,
@@ -907,7 +928,8 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
         )
         lines.append("  " + row.rstrip())
     if since is not None:
-        lines.append(f"{landed}/{len(live)} landed")
+        note = f", {prior} by an ended earlier session" if prior else ""
+        lines.append(f"{landed}/{len(live)} landed{note}")
     return "\n".join(lines)
 
 
