@@ -162,6 +162,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/ask-queue.mjs",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PreCompact": [
