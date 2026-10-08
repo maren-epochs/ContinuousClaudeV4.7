@@ -21,7 +21,6 @@ The upstream project, written by parcadei, shipped on 2026-04-21 as a single rel
 - Reviewed agent output and sent work back: every fleet milestone went through a separate review pass, and findings (false denies in the guard, a 46-second redaction stall, a context meter about 5x too high on 1M-token windows) were fixed in tracked fix rounds before the milestone passed.
 - Corrected the agents when they generalized past what I had decided; a rule an agent inferred on its own ("never interrupt other projects") was reverted.
 - Kept privacy and publishing decisions with me: nothing that names other projects is tracked, and nothing is pushed without my review.
-- [Author to confirm or edit: time invested, and any live probes or reworks done by hand.]
 
 **Skills exercised:** agent workflow design, hook and tooling engineering in Node.js and Python, sandbox security (command parsing, path containment, secret denylists), Windows path semantics, test design (characterization tests, contract tests, shell-level hook suites), CI on Linux and Windows, data-contract design, and measurement-driven decisions.
 
