@@ -17,7 +17,9 @@ questions        queued questions across all sessions (--all, --json)
 answer <id> <t>  record an answer (--via session|fleet); refuses an answered one
 open [pick...]   list projects to open; with picks (number, name or folder) or --all
                  open them as named tabs in one Windows Terminal window, each a fresh
-                 claude running /resume-handoff (--dry-run prints the command)
+                 claude running /resume-handoff (--dry-run prints the command); --all lists
+                 every project and asks which in a terminal, else opens nothing; --all
+                 --yes opens every one
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
 Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
@@ -1005,28 +1007,59 @@ def answer_question(qid: str, text: str, via: str) -> str:
     return line
 
 
-def open_sessions(picks: list[str], everything: bool, dry_run: bool) -> str:
-    """List openable projects, or open the picked ones as Windows Terminal tabs."""
+def _project_lines(found: list[launch.Target]) -> list[str]:
+    return [f"projects ({len(found)}):"] + [
+        f"  {i:>2}  {_cell(t.title, 24)} {_when(t.last) if t.last else '-':16}  {t.cwd}"
+        for i, t in enumerate(found, 1)
+    ]
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def open_sessions(
+    picks: list[str], everything: bool, dry_run: bool, yes: bool = False
+) -> str:
+    """List openable projects, or open the picked ones as Windows Terminal tabs.
+
+    ``--all`` on an interactive terminal lists every project (plus any picks) and asks
+    which to open; without a terminal it only lists them. ``--yes`` opens them all.
+    """
     found = launch.candidates(model.load_state())
     if not picks and not everything:
         if not found:
             return (
                 "no projects to open (none with a transcript, a folder and a handoff)"
             )
-        lines = [f"projects ({len(found)}):"]
-        lines += [
-            f"  {i:>2}  {_cell(t.title, 24)} {_when(t.last) if t.last else '-':16}  {t.cwd}"
-            for i, t in enumerate(found, 1)
-        ]
+        lines = _project_lines(found)
         lines.append("open: fleet.py open <number|name|folder>... (or --all)")
         return "\n".join(lines)
     try:
         targets = launch.select(found, picks)
-        if everything:  # --all with picks opens every listed project plus the picks
+        if everything:  # --all with picks: every listed project plus the picks
             listed = {launch.path_key(t.cwd) for t in found}
             targets = found + [
                 t for t in targets if launch.path_key(t.cwd) not in listed
             ]
+            if not yes and not _interactive():  # no terminal to ask in
+                lines = _project_lines(targets)
+                lines.append(
+                    "nothing opened: --all asks which in a terminal; here pick with"
+                    " fleet.py open <number|name|folder>... or add --yes for every one"
+                )
+                return "\n".join(lines)
+            if not yes:
+                print("\n".join(_project_lines(targets)))
+                try:
+                    answer = input(
+                        "open which? numbers, ranges (5-7) or names; a = all; Enter = cancel: "
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    answer = ""
+                targets = launch.choose(targets, answer)
+                if not targets:
+                    return "cancelled: nothing opened"
         if dry_run:
             return "wt " + subprocess.list2cmdline(launch.wt_args(targets))
         launch.launch(targets)
@@ -1094,7 +1127,14 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--via", choices=questions.VIA, default="session")
     p = sub.add_parser("open", help="open projects as named Windows Terminal tabs")
     p.add_argument("picks", nargs="*", help="list number, project name or folder")
-    p.add_argument("--all", action="store_true", help="every listed project")
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="every listed project (asks which in a terminal)",
+    )
+    p.add_argument(
+        "--yes", action="store_true", help="with --all: open every one without asking"
+    )
     p.add_argument("--dry-run", action="store_true", help="print the wt command only")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
@@ -1114,7 +1154,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "questions": lambda a: list_questions(a.all, a.json),
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
-    "open": lambda a: open_sessions(a.picks, a.all, a.dry_run),
+    "open": lambda a: open_sessions(a.picks, a.all, a.dry_run, a.yes),
 }
 
 

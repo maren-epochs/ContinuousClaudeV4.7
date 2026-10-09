@@ -151,9 +151,12 @@ name, else the folder name (`--suppressApplicationTitle` keeps it).
    per question, up to 4 questions (projects 1-4, 5-8, ...), header `Open 1/2` etc. More than
    16: list the rest in prose and let the user name them via Other. A folder not listed (a
    project with no session yet) can be named by path.
+   "Open all" in the request still goes through these boxes: the user picks, not `--all`.
 3. `open <pick>... --dry-run` shows the `wt` command; then `open <pick>...` (numbers, names or
-   folder paths; `--all` for every listed project). It starts the window and returns; the new
-   sessions are independent of this one. Exit 1 = unknown name, missing folder or no `wt.exe`.
+   folder paths). It starts the window and returns; the new sessions are independent of this
+   one. Exit 1 = unknown name, missing folder or no `wt.exe`. `--all` without a terminal only
+   lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
+   them. In the user's own terminal, `open --all` lists them and asks which to open.
 
 ## /fleet dashboard
 

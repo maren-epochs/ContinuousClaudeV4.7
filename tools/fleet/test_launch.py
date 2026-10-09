@@ -203,9 +203,13 @@ class WtArgsTests(unittest.TestCase):
 
 
 class OpenCommandTests(LaunchHome):
-    def run_cli(self, *args):
+    def run_cli(self, *args, interactive=False):
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with (
+            mock.patch.object(fleet, "_interactive", return_value=interactive),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
             code = fleet.main(["open", *args])
         return code, out.getvalue(), err.getvalue()
 
@@ -232,14 +236,14 @@ class OpenCommandTests(LaunchHome):
         self.assertTrue(out.startswith("wt -w new new-tab --title amber"))
         self.assertIn("\"claude '/resume-handoff'\"", out)
 
-    def test_all_opens_every_project(self):
+    def test_all_yes_opens_every_project(self):
         self.project("amber")
         self.project("myrtle")
         with (
             mock.patch.object(launch.shutil, "which", return_value="C:\\wt.exe"),
             mock.patch.object(launch.subprocess, "Popen") as popen,
         ):
-            code, out, _ = self.run_cli("--all")
+            code, out, _ = self.run_cli("--all", "--yes")
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "opened 2 tab(s): amber, myrtle")
         self.assertEqual(popen.call_args.args[0].count("new-tab"), 2)
@@ -248,10 +252,76 @@ class OpenCommandTests(LaunchHome):
         self.project("amber")
         extra = self.root / "docs" / "epoch_harness"
         extra.mkdir()
-        code, out, _ = self.run_cli("--all", str(extra), "--dry-run")
+        code, out, _ = self.run_cli("--all", "--yes", str(extra), "--dry-run")
         self.assertEqual(code, 0)
         self.assertEqual(out.count("new-tab"), 2)
         self.assertIn("--title epoch_harness", out)
+
+    def test_all_without_a_terminal_lists_and_opens_nothing(self):
+        self.project("amber")
+        self.project("myrtle")
+        with mock.patch.object(launch.subprocess, "Popen") as popen:
+            code, out, _ = self.run_cli("--all")
+        self.assertEqual(code, 0)
+        popen.assert_not_called()
+        self.assertIn("projects (2):", out)
+        self.assertIn("nothing opened", out)
+
+    def run_interactive(self, answer, *args):
+        with mock.patch("builtins.input", side_effect=[answer]) as ask:
+            result = self.run_cli(*args, interactive=True)
+        return (*result, ask)
+
+    def test_all_in_a_terminal_asks_and_opens_only_the_chosen(self):
+        for name in ("amber", "massave", "myrtle", "privacy"):
+            self.project(name)
+        code, out, _, ask = self.run_interactive("1 3-4", "--all", "--dry-run")
+        self.assertEqual(code, 0)
+        ask.assert_called_once()
+        self.assertIn("projects (4):", out)
+        self.assertEqual(out.count("new-tab"), 3)
+        self.assertNotIn("--title massave", out)
+
+    def test_all_in_a_terminal_accepts_names_and_a_for_all(self):
+        self.project("amber")
+        self.project("myrtle")
+        _, out, _, _ = self.run_interactive("myrtle", "--all", "--dry-run")
+        self.assertEqual(out.count("new-tab"), 1)
+        self.assertIn("--title myrtle", out)
+        _, out, _, _ = self.run_interactive("a", "--all", "--dry-run")
+        self.assertEqual(out.count("new-tab"), 2)
+
+    def test_all_in_a_terminal_lists_an_extra_directory_pick(self):
+        self.project("amber")
+        extra = self.root / "docs" / "epoch_harness"
+        extra.mkdir()
+        _, out, _, _ = self.run_interactive("2", "--all", str(extra), "--dry-run")
+        self.assertRegex(out, r"\n\s+2\s+epoch_harness ")
+        self.assertIn("--title epoch_harness", out)
+        self.assertNotIn("--title amber", out)
+
+    def test_all_in_a_terminal_enter_cancels(self):
+        self.project("amber")
+        with mock.patch.object(launch.subprocess, "Popen") as popen:
+            code, out, _, _ = self.run_interactive("", "--all")
+        self.assertEqual(code, 0)
+        popen.assert_not_called()
+        self.assertIn("cancelled: nothing opened", out)
+
+    def test_all_in_a_terminal_bad_answer_refuses(self):
+        self.project("amber")
+        code, _, err, _ = self.run_interactive("5-9", "--all", "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertIn("range out of 1-1: 5-9", err)
+
+    def test_yes_skips_the_question(self):
+        self.project("amber")
+        self.project("myrtle")
+        with mock.patch("builtins.input") as ask:
+            code, out, _ = self.run_cli("--all", "--yes", "--dry-run", interactive=True)
+        self.assertEqual(code, 0)
+        ask.assert_not_called()
+        self.assertEqual(out.count("new-tab"), 2)
 
     def test_unknown_pick_refuses_with_exit_1(self):
         self.project("amber")

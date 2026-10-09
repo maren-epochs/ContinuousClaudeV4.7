@@ -141,6 +141,28 @@ def _resolve(found: list[Target], pick: str) -> Target:
     raise LaunchError(f"no project named {pick!r} (fleet.py open lists them)")
 
 
+def choose(listed: list[Target], answer: str) -> list[Target]:
+    """Targets an interactive answer picks from ``listed``; [] when it is empty.
+
+    Tokens split on spaces or commas: a list number, a range ``5-7``, a title or folder
+    name, or ``a``/``all`` for every listed project.
+    """
+    chosen: dict[str, Target] = {}
+    for token in answer.replace(",", " ").split():
+        if token.lower() in ("a", "all"):
+            picked = listed
+        elif re.fullmatch(r"\d+-\d+", token):
+            lo, hi = (int(n) for n in token.split("-"))
+            if not (1 <= lo <= hi <= len(listed)):
+                raise LaunchError(f"range out of 1-{len(listed)}: {token}")
+            picked = listed[lo - 1 : hi]
+        else:
+            picked = [_resolve(listed, token)]
+        for t in picked:
+            chosen.setdefault(path_key(t.cwd), t)
+    return list(chosen.values())
+
+
 def wt_args(targets: list[Target], shell: str = "pwsh") -> list[str]:
     """wt.exe arguments: one new window, one titled tab per target."""
     args = ["-w", "new"]
