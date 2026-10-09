@@ -134,7 +134,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-05_22-04_decisions-applied-restart.yaml
-  in ~/Documents/ccv47-readme-fix.
+  in ~/Documents/epoch_harness.
   This is the first session after a restart: confirm the new hook registrations loaded
   (SessionStart matcher "compact" -> session-start.mjs; PostToolUse report check with
   if Edit(**/continuum/autonomous/*/reports/*.json)) and run the statusline `test:` command -

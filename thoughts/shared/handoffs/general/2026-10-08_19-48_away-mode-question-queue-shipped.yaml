@@ -117,7 +117,7 @@ next:
   - "Myrtle conflicts are the user's to settle (in its handoff)"
 
 next_session_prompt: |
-  Resume from thoughts/shared/handoffs/general/2026-10-08_19-48_away-mode-question-queue-shipped.yaml in ccv47-readme-fix.
+  Resume from thoughts/shared/handoffs/general/2026-10-08_19-48_away-mode-question-queue-shipped.yaml in epoch_harness.
   Confirm CI is green for c1a6b66. Then help the user live-test away mode: in a freshly started session run
   `py -3.13 tools/fleet/fleet.py away on`, trigger a question there, verify it is queued in
   ~/.claude/fleet/questions/ and the session keeps working, answer it with /fleet questions from here, then

@@ -119,7 +119,7 @@ next:
   - "TODO (user request 2026-10-08): build `/fleet handoff-all` - tell every live Claude Code session in the fleet to write a handoff. Leads: ~/.claude/sessions/<pid>.json has messagingSocketPath/peerProtocol/peerFeatures, and ListAgents + SendMessage can already reach other local sessions; overlaps the deferred 'broadcast notices' item. Design questions for the user (A-D): include idle/bg sessions or only interactive; skip busy sessions or queue; how to confirm each handoff landed (newest file under each project's handoff root); whether a session mid-task is interrupted or messaged after its current turn"
 
 next_session_prompt: |
-  Resume from thoughts/shared/handoffs/general/2026-10-08_07-45_fleet-live-explainer-published.yaml in ccv47-readme-fix.
+  Resume from thoughts/shared/handoffs/general/2026-10-08_07-45_fleet-live-explainer-published.yaml in epoch_harness.
   Fleet control is installed and its hooks are registered; sessions started now have them. First verify live: from a
   session in another project, try an edit of ~/.claude/hooks/status.mjs and confirm the deny and the inbox proposal
   (/fleet inbox), then reject it. Then fix test_tldr_read.sh so it never touches the live tldr-read cache, and the fixed

@@ -130,7 +130,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-06_22-38_readiness-27-of-27.yaml in the
-  ccv47-readme-fix repo. readiness.sh is 27/27 (level 5); contract
+  epoch_harness repo. readiness.sh is 27/27 (level 5); contract
   continuum/autonomous/readiness-l5/contract.json is closed. First confirm the user ran
   `py -3.13 install/sync_global.py --apply` and pushed; if not, hand them the commands again.
   Run `make test` and `bash scripts/readiness.sh` in the foreground. Then ask (A-D, with a

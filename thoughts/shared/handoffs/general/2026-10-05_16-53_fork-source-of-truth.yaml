@@ -15,7 +15,7 @@ mental_model: |
   Continuous Claude v4.7 lives in TWO places: the live global install in ~/.claude
   (skills/, agents/, hooks/, scripts/, tools/ — hooks registered in ~/.claude/settings.json
   with absolute `node "~/.claude/hooks/*.mjs"` commands) and the git
-  clone at ~/Documents/ccv47-readme-fix.
+  clone at ~/Documents/epoch_harness.
   As of this session the clone's `origin` is the fork (maren-epochs/ContinuousClaudeV4.7)
   and `upstream` is parcadei/ContinuousClaudeV4.7. Fork main = upstream main (a500a2c, the
   only upstream commit) + seven fix branches merged --no-ff (one merge commit each, so each
@@ -137,7 +137,7 @@ questions:
 
 # ── NEXT STEPS ───────────────────────────────────────────────────
 next:
-  - Commit this handoff file in ccv47-readme-fix (only untracked change on main)
+  - Commit this handoff file in epoch_harness (only untracked change on main)
   - Verify fresh session loads updated harness; statusline hook (status.mjs) should render; tldr-read nav map should appear on Reads of large code files
   - Exercise /autonomous on a small task; in EVOLVE confirm findings land via `bloks new rule` and that `bloks context .` in a subsequent PREPARE emits them (the loop PR #16 fixes)
   - If user approves - delete ~/.claude/scripts/*.orig, ~/.claude/hooks/post-edit-diagnostics.mjs.orig, ~/.claude/tools/ouros_harness.py.bak-prestdoutfix
@@ -146,7 +146,7 @@ next:
 # ── NEXT SESSION PROMPT (REQUIRED) ───────────────────────────────
 next_session_prompt: |
   Resume from handoff thoughts/shared/handoffs/general/2026-10-05_16-53_fork-source-of-truth.yaml
-  in ~/Documents/ccv47-readme-fix.
+  in ~/Documents/epoch_harness.
   Context: my fork maren-epochs/ContinuousClaudeV4.7 is now the source of truth for the
   Continuous Claude harness; ~/.claude was synced to fork main f1f7553 via
   install/sync_global.py, but the previous session's hooks/skills predated that sync.

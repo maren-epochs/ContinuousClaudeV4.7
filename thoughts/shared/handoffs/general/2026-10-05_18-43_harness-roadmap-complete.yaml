@@ -162,7 +162,7 @@ next:
 # ── NEXT SESSION PROMPT (REQUIRED) ───────────────────────────────
 next_session_prompt: |
   Resume from handoff thoughts/shared/handoffs/general/2026-10-05_18-43_harness-roadmap-complete.yaml
-  in ~/Documents/ccv47-readme-fix.
+  in ~/Documents/epoch_harness.
   Context: the full harness roadmap shipped last session (fork main 4e36ca2, pushed;
   ~/.claude synced; 12/12 assertions across 4 milestones). You are the first session
   running the new harness: 3.3KB autonomous router with phases/, cached+shim-capable

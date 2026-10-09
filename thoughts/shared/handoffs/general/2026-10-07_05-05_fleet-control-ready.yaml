@@ -86,7 +86,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-07_05-05_fleet-control-ready.yaml in the
-  ccv47-readme-fix repo. First: check CI on main (`gh run list -R maren-epochs/ContinuousClaudeV4.7
+  epoch_harness repo. First: check CI on main (`gh run list -R maren-epochs/ContinuousClaudeV4.7
   --branch main --limit 1`) and confirm the user ran `py -3.13 install/sync_global.py --apply`.
   Then build the fleet view + harness control plane with /autonomous from the saved contract
   continuum/autonomous/fleet-control/contract.json (11 assertions, decisions recorded in it):

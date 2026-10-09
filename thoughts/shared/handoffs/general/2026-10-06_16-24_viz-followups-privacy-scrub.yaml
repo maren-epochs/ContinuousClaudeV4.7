@@ -144,7 +144,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-06_16-24_viz-followups-privacy-scrub.yaml in
-  the ccv47-readme-fix repo. m5 (VAL-501..507) is done and validated
+  the epoch_harness repo. m5 (VAL-501..507) is done and validated
   (continuum/autonomous/dataviz-suite/validation/m5-followups.json). First confirm the user ran
   `py -3.13 install/sync_global.py --apply` and the history purge + force push; if not, hand them
   the commands again. Run the statusline test: command. Then do the `next:` items as one

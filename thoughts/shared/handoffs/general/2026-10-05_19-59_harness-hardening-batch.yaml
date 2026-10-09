@@ -147,7 +147,7 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-05_19-59_harness-hardening-batch.yaml
-  in ~/Documents/ccv47-readme-fix.
+  in ~/Documents/epoch_harness.
   First: `git status -sb` - if still ahead of origin, `git push origin main` (GitHub 500'd).
   Confirm .claude/settings.json was removed (it held only fastedit-hook, which denies Edit).
   Run the statusline `test:` command - all suites should pass.

@@ -109,7 +109,7 @@ next:
   - "Optional: create-handoff could write session_id into frontmatter so attribution need not read transcripts"
 
 next_session_prompt: |
-  Resume from thoughts/shared/handoffs/general/2026-10-08_17-12_guard-verified-handoff-all-shipped.yaml in ccv47-readme-fix.
+  Resume from thoughts/shared/handoffs/general/2026-10-08_17-12_guard-verified-handoff-all-shipped.yaml in epoch_harness.
   Confirm CI is green for 99cb626. Then run `py -3.13 tools/fleet/fleet.py handoffs --fresh --since 1791493540` and
   report which of ripplemark, privacy, druckenmiller, myrtle have written handoffs. Do not message other sessions with
   anything the user did not ask for. Explain in plain words; ask only via A-D options.

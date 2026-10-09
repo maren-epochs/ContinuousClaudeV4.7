@@ -75,6 +75,6 @@ next:
 
 next_session_prompt: |
   Resume from thoughts/shared/handoffs/general/2026-10-07_06-20_options-ci-cleanenv.yaml in the
-  ccv47-readme-fix repo. main is green in CI on Ubuntu and Windows; readiness 27/27. Confirm the user
+  epoch_harness repo. main is green in CI on Ubuntu and Windows; readiness 27/27. Confirm the user
   ran `py -3.13 install/sync_global.py --apply`. Then ask (A-D, with a recommendation) which
   optional `next:` item to take. Repo is public; the pre-commit guard and CI enforce privacy.
