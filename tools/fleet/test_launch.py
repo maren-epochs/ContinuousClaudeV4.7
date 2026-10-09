@@ -102,6 +102,22 @@ class CandidateTests(LaunchHome):
             )
         self.assertEqual(launch.candidates(None), [])
 
+    def test_renamed_folder_with_renamed_transcript_folder_is_listed(self):
+        old = self.project("ccv47-readme-fix", local=True)
+        new = old.parent / "epoch_harness"
+        old.rename(new)
+        slug = re.sub(r"[^A-Za-z0-9]", "-", str(old))
+        (self.projects / slug).rename(
+            self.projects / re.sub(r"[^A-Za-z0-9]", "-", str(new))
+        )
+        (found,) = launch.candidates(None)
+        self.assertEqual((found.title, found.cwd), ("epoch_harness", str(new)))
+
+    def test_renamed_folder_with_old_transcript_folder_is_skipped(self):
+        old = self.project("ccv47-readme-fix", local=True)
+        old.rename(old.parent / "epoch_harness")
+        self.assertEqual(launch.candidates(None), [])
+
     def test_transcript_without_cwd_is_skipped(self):
         folder = self.projects / "x"
         folder.mkdir()

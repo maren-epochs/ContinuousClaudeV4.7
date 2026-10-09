@@ -24,6 +24,7 @@ from .model import FleetState
 TAB_PROMPT = "claude '/resume-handoff'"
 CWD_HEAD_BYTES = 64 * 1024
 _CWD = re.compile(r'"cwd":\s*("(?:[^"\\]|\\.)*")')
+_SLUG = re.compile(r"[^A-Za-z0-9]")
 
 
 class LaunchError(Exception):
@@ -71,6 +72,22 @@ def _excluded(cwd: str) -> bool:
     return key == temp or key.startswith(temp + os.sep)
 
 
+def renamed_cwd(slug: str, cwd: str) -> str | None:
+    """The renamed project folder: a sibling of the missing ``cwd`` whose slug is ``slug``.
+
+    Claude Code names a transcript folder after its cwd with every non-alphanumeric
+    character replaced by '-'; when the project folder was renamed and the transcript
+    folder renamed to match, the transcripts still record the old cwd.
+    """
+    parent = Path(cwd).parent
+    if not parent.is_dir():
+        return None
+    for child in parent.iterdir():
+        if child.is_dir() and _SLUG.sub("-", str(child)) == slug:
+            return str(child)
+    return None
+
+
 def candidates(state: FleetState | None) -> list[Target]:
     """Openable projects, by title: live session name, else the folder name."""
     names = {
@@ -87,7 +104,9 @@ def candidates(state: FleetState | None) -> list[Target]:
             continue
         newest = max(transcripts, key=_mtime)
         cwd = transcript_cwd(newest)
-        if not cwd or not Path(cwd).is_dir() or _excluded(cwd):
+        if cwd and not Path(cwd).is_dir():
+            cwd = renamed_cwd(folder.name, cwd)
+        if not cwd or _excluded(cwd):
             continue
         if collect.newest_handoff_file(collect.handoff_root(cwd, claude)) is None:
             continue
