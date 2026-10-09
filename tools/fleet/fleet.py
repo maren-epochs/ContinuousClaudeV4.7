@@ -15,6 +15,9 @@ handoffs         newest handoff per live session; --since T marks landed/waiting
 away [on|off]    away mode: while on, sessions queue questions instead of a box
 questions        queued questions across all sessions (--all, --json)
 answer <id> <t>  record an answer (--via session|fleet); refuses an answered one
+open [pick...]   list projects to open; with picks (number, name or folder) or --all
+                 open them as named tabs in one Windows Terminal window, each a fresh
+                 claude running /resume-handoff (--dry-run prints the command)
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
 Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
@@ -35,17 +38,18 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import ModuleType
 from typing import Any
 
 if __package__:
-    from . import collect, lessons, model, questions
+    from . import collect, launch, lessons, model, questions
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from fleet import collect, lessons, model, questions
+    from fleet import collect, launch, lessons, model, questions
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
 LESSONS_MAX = 10
@@ -1001,6 +1005,31 @@ def answer_question(qid: str, text: str, via: str) -> str:
     return line
 
 
+def open_sessions(picks: list[str], everything: bool, dry_run: bool) -> str:
+    """List openable projects, or open the picked ones as Windows Terminal tabs."""
+    found = launch.candidates(model.load_state())
+    if not picks and not everything:
+        if not found:
+            return (
+                "no projects to open (none with a transcript, a folder and a handoff)"
+            )
+        lines = [f"projects ({len(found)}):"]
+        lines += [
+            f"  {i:>2}  {_cell(t.title, 24)} {_when(t.last) if t.last else '-':16}  {t.cwd}"
+            for i, t in enumerate(found, 1)
+        ]
+        lines.append("open: fleet.py open <number|name|folder>... (or --all)")
+        return "\n".join(lines)
+    try:
+        targets = found if everything else launch.select(found, picks)
+        if dry_run:
+            return "wt " + subprocess.list2cmdline(launch.wt_args(targets))
+        launch.launch(targets)
+    except launch.LaunchError as exc:
+        raise Refused(str(exc)) from None
+    return f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets)
+
+
 def _epoch(value: str) -> float:
     try:
         return float(value)
@@ -1058,6 +1087,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("text")
     p.add_argument("--via", choices=questions.VIA, default="session")
+    p = sub.add_parser("open", help="open projects as named Windows Terminal tabs")
+    p.add_argument("picks", nargs="*", help="list number, project name or folder")
+    p.add_argument("--all", action="store_true", help="every listed project")
+    p.add_argument("--dry-run", action="store_true", help="print the wt command only")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1076,6 +1109,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "questions": lambda a: list_questions(a.all, a.json),
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
+    "open": lambda a: open_sessions(a.picks, a.all, a.dry_run),
 }
 
 

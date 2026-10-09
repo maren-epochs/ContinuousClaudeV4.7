@@ -17,7 +17,7 @@ Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-
 | `/resume-handoff` | Session start | Resume from handoff document |
 | `/upgrade-harness` | Extend Ouros | Add new external functions to Ouros sandbox |
 | `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
-| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
+| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
 
 ## Agents
 
@@ -95,7 +95,7 @@ Consumers import `from ccv_viz import ...` after the one-line PRELUDE in `/visua
 
 ## Fleet (tools/fleet)
 
-Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|handoffs|away|questions|answer|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
+Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|handoffs|away|questions|answer|open|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
 
 | Path | What |
 |------|------|

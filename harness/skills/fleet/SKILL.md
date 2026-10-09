@@ -1,6 +1,6 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects"
 user-invocable: true
 allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
@@ -137,6 +137,23 @@ with `/fleet questions`.
    text. `not live: kept in queue` -> no message; the project's next session reads it with
    `questions --all`.
 4. Repeat until no pending question is left, then report how many were answered and relayed.
+
+## /fleet open [project...]
+
+Opens projects as tabs of ONE new Windows Terminal window, one PowerShell tab per project,
+each a fresh `claude '/resume-handoff'` in the project folder. Tab title = the live session's
+name, else the folder name (`--suppressApplicationTitle` keeps it).
+
+1. With project names in the request, skip to step 3 with them as picks.
+2. `open` lists the candidates, numbered: every project with a transcript in
+   `~/.claude/projects`, a folder that still exists and a handoff to resume (home and temp
+   folders skipped). Ask which to open with AskUserQuestion, `multiSelect: true`, 4 options
+   per question, up to 4 questions (projects 1-4, 5-8, ...), header `Open 1/2` etc. More than
+   16: list the rest in prose and let the user name them via Other. A folder not listed (a
+   project with no session yet) can be named by path.
+3. `open <pick>... --dry-run` shows the `wt` command; then `open <pick>...` (numbers, names or
+   folder paths; `--all` for every listed project). It starts the window and returns; the new
+   sessions are independent of this one. Exit 1 = unknown name, missing folder or no `wt.exe`.
 
 ## /fleet dashboard
 
