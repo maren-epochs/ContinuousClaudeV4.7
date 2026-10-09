@@ -39,7 +39,8 @@ class Target:
     last: float = 0.0
 
 
-def _key(path: str) -> str:
+def path_key(path: str) -> str:
+    """Comparison key for a folder path (case and separators normalized)."""
     return os.path.normcase(os.path.normpath(path))
 
 
@@ -63,17 +64,17 @@ def transcript_cwd(path: Path) -> str | None:
 
 
 def _excluded(cwd: str) -> bool:
-    key = _key(cwd)
-    if key == _key(str(model.home_dir())):
+    key = path_key(cwd)
+    if key == path_key(str(model.home_dir())):
         return True
-    temp = _key(tempfile.gettempdir())
+    temp = path_key(tempfile.gettempdir())
     return key == temp or key.startswith(temp + os.sep)
 
 
 def candidates(state: FleetState | None) -> list[Target]:
     """Openable projects, by title: live session name, else the folder name."""
     names = {
-        _key(s.cwd): s.name
+        path_key(s.cwd): s.name
         for s in (state.sessions if state else [])
         if s.alive and s.cwd and s.name
     }
@@ -90,7 +91,7 @@ def candidates(state: FleetState | None) -> list[Target]:
             continue
         if collect.newest_handoff_file(collect.handoff_root(cwd, claude)) is None:
             continue
-        key, last = _key(cwd), _mtime(newest)
+        key, last = path_key(cwd), _mtime(newest)
         if key not in found or last > found[key].last:
             title = names.get(key) or Path(os.path.normpath(cwd)).name
             found[key] = Target(title=title, cwd=os.path.normpath(cwd), last=last)
@@ -102,7 +103,7 @@ def select(found: list[Target], picks: list[str]) -> list[Target]:
     chosen: dict[str, Target] = {}
     for pick in picks:
         target = _resolve(found, pick)
-        chosen.setdefault(_key(target.cwd), target)
+        chosen.setdefault(path_key(target.cwd), target)
     return list(chosen.values())
 
 

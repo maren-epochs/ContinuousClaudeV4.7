@@ -1021,7 +1021,12 @@ def open_sessions(picks: list[str], everything: bool, dry_run: bool) -> str:
         lines.append("open: fleet.py open <number|name|folder>... (or --all)")
         return "\n".join(lines)
     try:
-        targets = found if everything else launch.select(found, picks)
+        targets = launch.select(found, picks)
+        if everything:  # --all with picks opens every listed project plus the picks
+            listed = {launch.path_key(t.cwd) for t in found}
+            targets = found + [
+                t for t in targets if launch.path_key(t.cwd) not in listed
+            ]
         if dry_run:
             return "wt " + subprocess.list2cmdline(launch.wt_args(targets))
         launch.launch(targets)

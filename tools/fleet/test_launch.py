@@ -228,6 +228,15 @@ class OpenCommandTests(LaunchHome):
         self.assertEqual(out.strip(), "opened 2 tab(s): amber, myrtle")
         self.assertEqual(popen.call_args.args[0].count("new-tab"), 2)
 
+    def test_all_with_a_directory_pick_adds_it(self):
+        self.project("amber")
+        extra = self.root / "docs" / "epoch_harness"
+        extra.mkdir()
+        code, out, _ = self.run_cli("--all", str(extra), "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("new-tab"), 2)
+        self.assertIn("--title epoch_harness", out)
+
     def test_unknown_pick_refuses_with_exit_1(self):
         self.project("amber")
         code, _, err = self.run_cli("nope")
