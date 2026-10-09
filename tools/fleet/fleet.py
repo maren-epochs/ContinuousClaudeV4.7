@@ -1019,7 +1019,11 @@ def _interactive() -> bool:
 
 
 def open_sessions(
-    picks: list[str], everything: bool, dry_run: bool, yes: bool = False
+    picks: list[str],
+    everything: bool,
+    dry_run: bool,
+    yes: bool = False,
+    profile: str | None = None,
 ) -> str:
     """List openable projects, or open the picked ones as Windows Terminal tabs.
 
@@ -1061,8 +1065,10 @@ def open_sessions(
                 if not targets:
                     return "cancelled: nothing opened"
         if dry_run:
-            return "wt " + subprocess.list2cmdline(launch.wt_args(targets))
-        launch.launch(targets)
+            return "wt " + subprocess.list2cmdline(
+                launch.wt_args(targets, profile=profile)
+            )
+        launch.launch(targets, profile)
     except launch.LaunchError as exc:
         raise Refused(str(exc)) from None
     return f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets)
@@ -1136,6 +1142,9 @@ def _parser() -> argparse.ArgumentParser:
         "--yes", action="store_true", help="with --all: open every one without asking"
     )
     p.add_argument("--dry-run", action="store_true", help="print the wt command only")
+    p.add_argument(
+        "--profile", help="Windows Terminal profile for the tabs (its icon and colors)"
+    )
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1154,7 +1163,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "questions": lambda a: list_questions(a.all, a.json),
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
-    "open": lambda a: open_sessions(a.picks, a.all, a.dry_run, a.yes),
+    "open": lambda a: open_sessions(a.picks, a.all, a.dry_run, a.yes, a.profile),
 }
 
 

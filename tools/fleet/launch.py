@@ -163,13 +163,22 @@ def choose(listed: list[Target], answer: str) -> list[Target]:
     return list(chosen.values())
 
 
-def wt_args(targets: list[Target], shell: str = "pwsh") -> list[str]:
-    """wt.exe arguments: one new window, one titled tab per target."""
+def wt_args(
+    targets: list[Target], shell: str = "pwsh", profile: str | None = None
+) -> list[str]:
+    """wt.exe arguments: one new window, one titled tab per target.
+
+    ``profile`` names a Windows Terminal profile for every tab; the tab keeps its own
+    command line and takes the profile's icon (which the taskbar shows) and colors.
+    """
     args = ["-w", "new"]
     for i, t in enumerate(targets):
         if i:
             args.append(";")
-        args += ["new-tab", "--title", t.title, "--suppressApplicationTitle"]
+        args.append("new-tab")
+        if profile:
+            args += ["-p", profile]
+        args += ["--title", t.title, "--suppressApplicationTitle"]
         args += ["-d", t.cwd, shell, "-NoExit", "-Command", TAB_PROMPT]
     return args
 
@@ -191,7 +200,7 @@ def clean_env(env: dict[str, str]) -> dict[str, str]:
     }
 
 
-def launch(targets: list[Target]) -> list[str]:
+def launch(targets: list[Target], profile: str | None = None) -> list[str]:
     """Start Windows Terminal with the tabs; returns the full command."""
     if not targets:
         raise LaunchError("nothing to open")
@@ -199,6 +208,6 @@ def launch(targets: list[Target]) -> list[str]:
     if wt is None:
         raise LaunchError("Windows Terminal (wt.exe) not found on PATH")
     shell = "pwsh" if shutil.which("pwsh") else "powershell"
-    command = [wt, *wt_args(targets, shell)]
+    command = [wt, *wt_args(targets, shell, profile)]
     subprocess.Popen(command, close_fds=True, env=clean_env(dict(os.environ)))
     return command

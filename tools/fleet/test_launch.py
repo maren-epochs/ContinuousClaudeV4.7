@@ -180,6 +180,15 @@ class WtArgsTests(unittest.TestCase):
             ],
         )
 
+    def test_profile_on_every_tab(self):
+        targets = [launch.Target("a", r"C:\p\a"), launch.Target("b", r"C:\p\b")]
+        args = launch.wt_args(targets, profile="epoch harness")
+        self.assertEqual(args.count("-p"), 2)
+        tab = args[args.index(";") + 1 :]
+        self.assertEqual(tab[:3], ["new-tab", "-p", "epoch harness"])
+        self.assertEqual(tab[-4:], ["pwsh", "-NoExit", "-Command", launch.TAB_PROMPT])
+        self.assertNotIn("-p", launch.wt_args(targets))
+
     def test_launch_refuses_without_wt_or_targets(self):
         with self.assertRaises(launch.LaunchError):
             launch.launch([])
