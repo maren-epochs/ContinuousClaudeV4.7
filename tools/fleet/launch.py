@@ -174,6 +174,23 @@ def wt_args(targets: list[Target], shell: str = "pwsh") -> list[str]:
     return args
 
 
+def clean_env(env: dict[str, str]) -> dict[str, str]:
+    """``env`` without the calling Claude Code session's markers.
+
+    Run from a session's shell, the tabs would inherit CLAUDE_CODE_CHILD_SESSION and
+    friends, and each new claude would take itself for a child session and not save its
+    transcript. User settings env (settings.json ``env``) is reapplied by claude itself.
+    """
+    return {
+        k: v
+        for k, v in env.items()
+        if not (
+            k.upper() in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT")
+            or k.upper().startswith("CLAUDE_CODE_")
+        )
+    }
+
+
 def launch(targets: list[Target]) -> list[str]:
     """Start Windows Terminal with the tabs; returns the full command."""
     if not targets:
@@ -183,5 +200,5 @@ def launch(targets: list[Target]) -> list[str]:
         raise LaunchError("Windows Terminal (wt.exe) not found on PATH")
     shell = "pwsh" if shutil.which("pwsh") else "powershell"
     command = [wt, *wt_args(targets, shell)]
-    subprocess.Popen(command, close_fds=True)
+    subprocess.Popen(command, close_fds=True, env=clean_env(dict(os.environ)))
     return command

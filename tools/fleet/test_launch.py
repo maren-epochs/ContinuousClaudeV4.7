@@ -201,6 +201,29 @@ class WtArgsTests(unittest.TestCase):
         self.assertIn("powershell", command)
         self.assertNotIn("pwsh", command)
 
+    def test_launch_drops_the_calling_sessions_markers(self):
+        markers = {
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_CHILD_SESSION": "1",
+            "CLAUDE_CODE_SESSION_ID": "x",
+            "CLAUDE_PID": "1",
+            "CLAUDE_EFFORT": "medium",
+        }
+        kept = {
+            "PATH": os.environ.get("PATH", ""),
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
+        }
+        with (
+            mock.patch.dict(os.environ, {**markers, **kept}),
+            mock.patch.object(launch.shutil, "which", return_value="C:\\wt.exe"),
+            mock.patch.object(launch.subprocess, "Popen") as popen,
+        ):
+            launch.launch([launch.Target("a", "C:\\a")])
+        env = popen.call_args.kwargs["env"]
+        self.assertFalse(set(markers) & {k.upper() for k in env})
+        self.assertEqual(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "90")
+        self.assertIn("PATH", {k.upper() for k in env})
+
 
 class OpenCommandTests(LaunchHome):
     def run_cli(self, *args, interactive=False):
