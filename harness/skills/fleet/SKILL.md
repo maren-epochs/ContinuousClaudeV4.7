@@ -141,8 +141,8 @@ with `/fleet questions`.
 ## /fleet open [project...]
 
 Opens projects as tabs of ONE new Windows Terminal window, one PowerShell tab per project,
-each a fresh `claude '/resume-handoff'` in the project folder. Tab title = the live session's
-name, else the folder name (`--suppressApplicationTitle` keeps it).
+each a fresh `claude '/resume-handoff'` in the project folder. Tab title = the project folder
+name (`--suppressApplicationTitle` keeps it).
 
 1. With project names in the request, skip to step 3 with them as picks.
 2. `open` lists the candidates, numbered: every project with a transcript in

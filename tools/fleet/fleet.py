@@ -1030,7 +1030,7 @@ def open_sessions(
     ``--all`` on an interactive terminal lists every project (plus any picks) and asks
     which to open; without a terminal it only lists them. ``--yes`` opens them all.
     """
-    found = launch.candidates(model.load_state())
+    found = launch.candidates()
     if not picks and not everything:
         if not found:
             return (

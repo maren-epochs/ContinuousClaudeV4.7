@@ -3,7 +3,7 @@
 Candidates come from ~/.claude/projects: each transcript folder's newest transcript
 names its cwd; a project is offered when that folder still exists, is not home or a
 temp dir, and has a handoff to resume. Each tab runs a fresh ``claude '/resume-handoff'``
-in PowerShell, titled with the live session's name, else the project folder name
+in PowerShell, titled with the project folder name
 (``--suppressApplicationTitle`` keeps Claude Code from retitling it).
 """
 
@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import collect, model
-from .model import FleetState
 
 TAB_PROMPT = "claude '/resume-handoff'"
 CWD_HEAD_BYTES = 64 * 1024
@@ -88,13 +87,8 @@ def renamed_cwd(slug: str, cwd: str) -> str | None:
     return None
 
 
-def candidates(state: FleetState | None) -> list[Target]:
-    """Openable projects, by title: live session name, else the folder name."""
-    names = {
-        path_key(s.cwd): s.name
-        for s in (state.sessions if state else [])
-        if s.alive and s.cwd and s.name
-    }
+def candidates() -> list[Target]:
+    """Openable projects, by title: the project folder name."""
     claude = model.claude_dir()
     projects = claude / "projects"
     found: dict[str, Target] = {}
@@ -112,8 +106,8 @@ def candidates(state: FleetState | None) -> list[Target]:
             continue
         key, last = path_key(cwd), _mtime(newest)
         if key not in found or last > found[key].last:
-            title = names.get(key) or Path(os.path.normpath(cwd)).name
-            found[key] = Target(title=title, cwd=os.path.normpath(cwd), last=last)
+            cwd = os.path.normpath(cwd)
+            found[key] = Target(title=Path(cwd).name, cwd=cwd, last=last)
     return sorted(found.values(), key=lambda t: t.title.lower())
 
 

@@ -22,7 +22,6 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from tools.fleet import fleet, launch
-from tools.fleet.model import FleetState, Session
 
 
 class LaunchHome(unittest.TestCase):
@@ -76,20 +75,12 @@ class CandidateTests(LaunchHome):
         self.project("alpha", local=True)
         self.project("nohandoff", handoff=False)
         shutil.rmtree(self.project("gone"))
-        titles = [t.title for t in launch.candidates(None)]
+        titles = [t.title for t in launch.candidates()]
         self.assertEqual(titles, ["alpha", "zeta"])
 
-    def test_live_session_name_becomes_the_title(self):
-        cwd = self.project("myrtle")
-        state = FleetState(
-            sessions=[Session(cwd=str(cwd), name="myrtle budget", alive=True)]
-        )
-        self.assertEqual([t.title for t in launch.candidates(state)], ["myrtle budget"])
-
-    def test_ended_session_name_is_not_used(self):
-        cwd = self.project("myrtle")
-        state = FleetState(sessions=[Session(cwd=str(cwd), name="old", alive=False)])
-        self.assertEqual([t.title for t in launch.candidates(state)], ["myrtle"])
+    def test_title_is_the_folder_name(self):
+        self.project("myrtle")
+        self.assertEqual([t.title for t in launch.candidates()], ["myrtle"])
 
     def test_home_and_temp_folders_are_skipped(self):
         for cwd in (self.home, self.systemp / "x"):
@@ -100,7 +91,7 @@ class CandidateTests(LaunchHome):
             (folder / "a.jsonl").write_text(
                 json.dumps({"cwd": str(cwd)}) + "\n", encoding="utf-8"
             )
-        self.assertEqual(launch.candidates(None), [])
+        self.assertEqual(launch.candidates(), [])
 
     def test_renamed_folder_with_renamed_transcript_folder_is_listed(self):
         old = self.project("ccv47-readme-fix", local=True)
@@ -110,19 +101,19 @@ class CandidateTests(LaunchHome):
         (self.projects / slug).rename(
             self.projects / re.sub(r"[^A-Za-z0-9]", "-", str(new))
         )
-        (found,) = launch.candidates(None)
+        (found,) = launch.candidates()
         self.assertEqual((found.title, found.cwd), ("epoch_harness", str(new)))
 
     def test_renamed_folder_with_old_transcript_folder_is_skipped(self):
         old = self.project("ccv47-readme-fix", local=True)
         old.rename(old.parent / "epoch_harness")
-        self.assertEqual(launch.candidates(None), [])
+        self.assertEqual(launch.candidates(), [])
 
     def test_transcript_without_cwd_is_skipped(self):
         folder = self.projects / "x"
         folder.mkdir()
         (folder / "a.jsonl").write_text('{"type":"user"}\n', encoding="utf-8")
-        self.assertEqual(launch.candidates(None), [])
+        self.assertEqual(launch.candidates(), [])
 
 
 class SelectTests(LaunchHome):
@@ -130,7 +121,7 @@ class SelectTests(LaunchHome):
         super().setUp()
         self.project("amber")
         self.project("myrtle")
-        self.found = launch.candidates(None)
+        self.found = launch.candidates()
 
     def test_number_name_and_case_insensitive_name(self):
         picked = launch.select(self.found, ["2", "AMBER"])
