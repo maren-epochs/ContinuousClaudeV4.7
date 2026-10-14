@@ -829,6 +829,85 @@ class DriftTests(ChecksHome):
         self.assertEqual(self.alerts(dead, "drift"), [])
 
 
+class MemoryTests(ChecksHome):
+    """VAL-812: low-memory machine alert (15% of total, FLEET_MEM_WARN_GB overrides)."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(checks.MEM_WARN_ENV, None)
+
+    def state(self, total, free, *sessions) -> FleetState:
+        state = FleetState(
+            sessions=list(sessions),
+            machine=model.Machine(mem_total_gb=total, mem_free_gb=free),
+        )
+        return checks.run_checks(state, now=NOW)
+
+    def test_low_memory_raises_one_machine_alert(self):
+        s = self.sess("sess-m1", self.repo("project-A"))
+        state = self.state(15.7, 2.1, s)
+        self.assertEqual(len(state.machine_alerts), 1)
+        a = state.machine_alerts[0]
+        self.assertEqual(a.kind, "memory")
+        self.assertEqual(a.severity, "warn")
+        self.assertIsNone(a.session)
+        self.assertEqual(a.detail, "free memory 2.1 GB of 15.7 GB (below 2.4 GB)")
+        self.assertEqual(s.alerts, [])
+
+    def test_at_or_above_threshold_no_alert(self):
+        self.assertEqual(self.state(20.0, 3.0).machine_alerts, [])
+        self.assertEqual(self.state(20.0, 8.0).machine_alerts, [])
+
+    def test_unknown_memory_no_alert(self):
+        for total, free in ((None, 0.5), (16.0, None), (None, None)):
+            with self.subTest(total=total, free=free):
+                self.assertEqual(self.state(total, free).machine_alerts, [])
+
+    def test_env_overrides_threshold(self):
+        os.environ[checks.MEM_WARN_ENV] = "6"
+        state = self.state(32.0, 5.0)
+        self.assertEqual(
+            [a.detail for a in state.machine_alerts],
+            ["free memory 5.0 GB of 32.0 GB (below 6.0 GB)"],
+        )
+        os.environ[checks.MEM_WARN_ENV] = "1.5"
+        self.assertEqual(self.state(16.0, 2.0).machine_alerts, [])
+
+    def test_invalid_env_uses_default(self):
+        for raw in ("abc", "", "nan", "inf", "-1", "  "):
+            with self.subTest(raw=raw):
+                os.environ[checks.MEM_WARN_ENV] = raw
+                self.assertEqual(self.state(32.0, 5.0).machine_alerts, [])
+                self.assertEqual(len(self.state(32.0, 4.0).machine_alerts), 1)
+
+    def test_threshold_helper(self):
+        self.assertAlmostEqual(checks.mem_threshold_gb(20.0, {}), 3.0)
+        self.assertEqual(
+            checks.mem_threshold_gb(20.0, {"FLEET_MEM_WARN_GB": "2.5"}), 2.5
+        )
+        self.assertAlmostEqual(
+            checks.mem_threshold_gb(20.0, {"FLEET_MEM_WARN_GB": "x"}), 3.0
+        )
+
+    def test_rerun_replaces_machine_alerts(self):
+        state = FleetState(machine=model.Machine(mem_total_gb=16.0, mem_free_gb=1.0))
+        checks.run_checks(state, now=NOW)
+        state.machine.mem_free_gb = 10.0
+        checks.run_checks(state, now=NOW)
+        self.assertEqual(state.machine_alerts, [])
+
+    def test_machine_alerts_round_trip(self):
+        state = self.state(15.7, 2.1)
+        saved = model.load_state(model.save_state(state))
+        self.assertEqual(saved.machine_alerts[0].kind, "memory")
+        self.assertIsNone(saved.machine_alerts[0].session)
+        data = json.loads(state.to_json())
+        self.assertEqual(data["machine_alerts"][0]["severity"], "warn")
+
+
 class CollectWiringTests(ChecksHome):
     def test_collect_runs_checks(self):
         alive = mock.patch.object(collect, "process_alive", return_value=True)

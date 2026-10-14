@@ -19,6 +19,8 @@ writes (newest ``SUBAGENT_MAX_FILES`` only, read once per session).
 - drift: installed files whose sha256 differs from the manifest (kept entries
   skipped); one ``stale`` entry instead when the manifest does not match the
   ``.ccv47-installed`` marker; alive sessions started before the last sync.
+- memory (machine, ``FleetState.machine_alerts``): free memory below 15% of total,
+  or below ``FLEET_MEM_WARN_GB`` (GB) when that env value is a finite number >= 0.
 
 Evidence is ``<transcript>:<line>``. Session files and ``*.key`` are never opened.
 """
@@ -28,6 +30,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -56,6 +59,8 @@ WRITE_TOOLS = {
 AGENT_TOOLS = frozenset({"Agent", "Task"})
 ASK_TOOL = "AskUserQuestion"
 INSTALLED_MARKER = ".ccv47-installed"
+MEM_WARN_FRACTION = 0.15
+MEM_WARN_ENV = "FLEET_MEM_WARN_GB"
 
 _NOTIFICATION = re.compile(r"<task-notification>.*?</task-notification>", re.DOTALL)
 _TOOL_USE_ID = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
@@ -990,6 +995,42 @@ def check_session_sync(
         )
 
 
+def mem_threshold_gb(total_gb: float, env: Mapping[str, str] | None = None) -> float:
+    """Low-memory threshold: ``FLEET_MEM_WARN_GB`` when a finite number >= 0, else
+    ``MEM_WARN_FRACTION`` of total."""
+    raw = (os.environ if env is None else env).get(MEM_WARN_ENV)
+    if raw is not None:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = math.nan
+        if math.isfinite(value) and value >= 0:
+            return value
+    return total_gb * MEM_WARN_FRACTION
+
+
+def check_memory(state: FleetState, env: Mapping[str, str] | None = None) -> None:
+    """Set ``machine_alerts``: one ``memory`` warn when free memory is below the
+    threshold; none when total or free memory is unknown."""
+    state.machine_alerts = []
+    total, free = state.machine.mem_total_gb, state.machine.mem_free_gb
+    if total is None or free is None:
+        return
+    threshold = mem_threshold_gb(total, env)
+    if free < threshold:
+        state.machine_alerts.append(
+            Alert(
+                kind="memory",
+                severity="warn",
+                session=None,
+                detail=(
+                    f"free memory {free:.1f} GB of {total:.1f} GB"
+                    f" (below {threshold:.1f} GB)"
+                ),
+            )
+        )
+
+
 def _project_roots(sessions: list[Session], roots: _Roots, claude: str) -> set[str]:
     """Repo root (else cwd) of every session outside home and ~/.claude."""
     found = set()
@@ -1008,7 +1049,7 @@ def run_checks(
     now: float | None = None,
     tick: Callable[[], None] | None = None,
 ) -> FleetState:
-    """Add check alerts, ``collisions`` and ``harness.drift`` to ``state``.
+    """Add check alerts, ``collisions``, ``harness.drift`` and ``machine_alerts``.
 
     ``tick`` runs before each per-session step (the collector's deadline check).
     """
@@ -1025,6 +1066,7 @@ def run_checks(
     ctx = _Context(roots, _project_roots(sessions, roots, claude), claude, now)
     state.collisions = check_collisions(sessions, scans, roots, now)
     last_sync = check_drift(state, now)
+    check_memory(state)
     for s, scan in zip(sessions, scans, strict=True):
         tick()
         check_stuck(s, scan, now)

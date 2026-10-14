@@ -290,6 +290,23 @@ run_hook "$(fpay)"
 case "$OUT" in *' | fleet 1 live') r=0;; *) r=1;; esac
 check "h15 info-only alerts -> no alert part (got: ${OUT:0:160})" $r
 
+# VAL-812: machine-level alerts (FleetState.machine_alerts) count too, warn/error only
+printf '{"sessions":[{"alive":true,"alerts":[{"severity":"warn"}]}],"machine_alerts":[{"kind":"memory","severity":"warn","session":null},{"kind":"x","severity":"info"},{"severity":"error"}],"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 1 live | 3 alert') r=0;; *) r=1;; esac
+check "h16 machine_alerts warn/error added to the alert count (got: ${OUT:0:160})" $r
+printf '{"sessions":[],"machine_alerts":[{"kind":"memory","severity":"warn","session":null}],"generated_at":"%s"}' "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 1 alert') r=0;; *) r=1;; esac
+check "h17 machine alert alone (no live sessions) -> 'fleet 1 alert' (got: ${OUT:0:160})" $r
+for ma in '"x"' 'null' '[null,1,"warn",{"severity":"WARN"}]'; do
+  printf '{"sessions":[{"alive":true}],"machine_alerts":%s,"generated_at":"%s"}' "$ma" "$(iso_ago 1)" > "$STATE"
+  run_hook "$(fpay)"
+  case "$OUT" in *' | fleet 1 live') r=0;; *) r=1;; esac
+  [ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+  check "h18 junk machine_alerts $ma ignored (got: ${OUT:0:160})" $r
+done
+
 rm -f "$STATE"; mkdir -p "$STATE"
 run_hook "$(fpay)"
 [ "$RC" -eq 0 ] && [ -z "$ERR" ] && [ "$OUT" = "$BASE" ]; check "h12 state.json is a directory -> no segment, no throw" $?

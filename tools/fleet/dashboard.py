@@ -1,8 +1,9 @@
 """Fleet dashboard (VAL-810): one self-contained HTML page from a FleetState.
 
 ``build_page(state)`` returns the page; ``write_page(state, path)`` writes it.
-Sections: pending questions (only when any), summary, alerts (collisions + per-session alerts, worst first),
-sessions, inbox, recent audit, harness drift, collector warnings.
+Sections: pending questions (only when any), summary, alerts (collisions + machine and
+per-session alerts, worst first), sessions, inbox, recent audit, harness drift (with
+``behind_files`` as Files differing), collector warnings.
 
 Colors come only from ``tools/viz/palette.css_tokens`` (light on ``:root``, dark
 under ``prefers-color-scheme`` and ``[data-theme="dark"]``), the font stack from
@@ -217,8 +218,15 @@ def _labels(state: FleetState) -> dict[str, str]:
     return {s.session_id: _label(s) for s in state.sessions if s.session_id}
 
 
-def _alerts(state: FleetState) -> list[tuple[Session, Alert]]:
-    pairs = [(s, a) for s in state.sessions for a in s.alerts]
+def _alerts(state: FleetState) -> list[tuple[str, Alert]]:
+    """(who, alert) for machine alerts (who ``machine``) and session alerts, worst first."""
+    labels = _labels(state)
+    pairs = [("machine", a) for a in state.machine_alerts]
+    pairs += [
+        (labels.get(a.session or "", _label(s)), a)
+        for s in state.sessions
+        for a in s.alerts
+    ]
     return sorted(pairs, key=lambda p: _RANK[_severity(p[1].severity)])
 
 
@@ -279,18 +287,19 @@ def _alerts_section(state: FleetState) -> str:
         [
             _sev_cell(a.severity),
             _e(a.kind),
-            _e(labels.get(a.session or "", _label(s))),
+            _e(who),
             _e(a.detail),
             f"<code>{_e(a.evidence)}</code>" if a.evidence else "-",
         ]
-        for s, a in _alerts(state)
+        for who, a in _alerts(state)
     ]
     alerts = _table(
         ("Severity", "Kind", "Session", "Detail", "Evidence"), rows, "No alerts."
     )
     return (
         '<section id="alerts" class="card"><h2>Alerts</h2>'
-        f"<h3>Collisions</h3>{collisions}<h3>Session alerts</h3>{alerts}</section>"
+        f"<h3>Collisions</h3>{collisions}<h3>Machine and session alerts</h3>"
+        f"{alerts}</section>"
     )
 
 
@@ -409,6 +418,7 @@ def _harness_section(state: FleetState) -> str:
         ("HEAD", h.head_sha),
         ("Installed", h.installed_sha),
         ("In sync", None if in_sync is None else ("yes" if in_sync else "no")),
+        ("Files differing", h.extra.get("behind_files")),
         ("Dirty at sync", None if dirty is None else ("yes" if dirty else "no")),
         ("Synced at", h.extra.get("synced_at")),
     ]

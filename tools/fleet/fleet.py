@@ -214,18 +214,21 @@ def _session_lines(state: FleetState) -> list[str]:
 
 
 def _alert_lines(state: FleetState) -> list[str]:
-    found = [(s, a) for s in state.sessions for a in s.alerts]
+    """Machine alerts (who = ``machine``) and session alerts, worst first."""
+    found = [("machine", a) for a in state.machine_alerts]
+    found += [
+        (s.project or s.session_id or "-", a) for s in state.sessions for a in s.alerts
+    ]
     if not found:
         return ["alerts: none"]
-    found.sort(key=lambda sa: SEVERITY_ORDER.get(sa[1].severity or "", 3))
+    found.sort(key=lambda wa: SEVERITY_ORDER.get(wa[1].severity or "", 3))
     lines = [f"alerts ({len(found)}):"]
-    for s, a in found:
-        lines += _alert_line(s, a)
+    for who, a in found:
+        lines += _alert_line(who, a)
     return lines
 
 
-def _alert_line(s: Session, a: Alert) -> list[str]:
-    who = s.project or s.session_id or "-"
+def _alert_line(who: str, a: Alert) -> list[str]:
     line = f"  [{a.severity or '-'}] {a.kind or '-'} {who}: {a.detail or '-'}"
     return [line, f"      at {a.evidence}"] if a.evidence else [line]
 
@@ -294,7 +297,7 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
     alive = sum(1 for s in state.sessions if s.alive)
     h = state.harness
     sync = h.extra.get("in_sync")
-    sync_text = {True: "in sync", False: "behind HEAD", None: "unknown"}[
+    sync_text = {True: "in sync", False: "differs from repo", None: "unknown"}[
         sync if isinstance(sync, bool) else None
     ]
     behind = h.extra.get("behind_files")

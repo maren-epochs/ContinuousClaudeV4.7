@@ -18,7 +18,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from tools.fleet import dashboard
-from tools.fleet.model import FleetState
+from tools.fleet.model import Alert, FleetState
 from tools.viz import palette
 
 EVIL = "<script>alert(1)</script> & \"q\" 'a'"
@@ -264,6 +264,49 @@ class StructureTests(unittest.TestCase):
         )
         page = dashboard.build_page(state)
         self.assertIn('id="sessions"', page)
+
+
+class MachineAlertTests(unittest.TestCase):
+    """VAL-812: machine-level alerts and behind_files on the dashboard."""
+
+    def setUp(self):
+        state = fixture()
+        state.machine_alerts = [
+            Alert(
+                kind="memory",
+                severity="warn",
+                detail="free memory 2.1 GB of 15.7 GB (below 2.4 GB)",
+            )
+        ]
+        state.harness.extra["behind_files"] = 3
+        self.page = dashboard.build_page(state)
+
+    def section(self, name: str) -> str:
+        m = re.search(rf'<section[^>]* id="{name}".*?</section>', self.page, re.DOTALL)
+        assert m is not None, name
+        return m.group(0)
+
+    def test_machine_alert_listed(self):
+        plain = text_of(self.section("alerts"))
+        self.assertIn("free memory 2.1 GB of 15.7 GB (below 2.4 GB)", plain)
+        self.assertRegex(plain, r"memory\s+machine")
+
+    def test_summary_counts_machine_alert(self):
+        base = text_of(dashboard.build_page(fixture()))
+        plain = text_of(self.section("summary"))
+        n_base = int(re.search(r"Alerts\s+(\d+)", base).group(1))
+        self.assertRegex(plain, rf"Alerts\s+{n_base + 1}\b")
+
+    def test_behind_files_next_to_in_sync(self):
+        sec = self.section("harness")
+        self.assertRegex(
+            sec, r"<dt>In sync</dt><dd>no</dd><dt>Files differing</dt><dd>3</dd>"
+        )
+
+    def test_only_machine_alert_not_empty(self):
+        state = FleetState(machine_alerts=[Alert(kind="memory", severity="warn")])
+        page = dashboard.build_page(state)
+        self.assertNotIn("No alerts", page)
 
 
 class EscapingTests(unittest.TestCase):

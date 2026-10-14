@@ -751,15 +751,51 @@ class ReportTests(CliHome):
     def test_report_sync_labels(self):
         cases = [
             ({"in_sync": True, "behind_files": 0}, "harness: in sync ("),
-            ({"in_sync": False, "behind_files": 3}, "harness: behind HEAD (3 files)"),
-            ({"in_sync": False, "behind_files": 1}, "harness: behind HEAD (1 file)"),
-            ({"in_sync": False}, "harness: behind HEAD ("),
+            (
+                {"in_sync": False, "behind_files": 3},
+                "harness: differs from repo (3 files)",
+            ),
+            (
+                {"in_sync": False, "behind_files": 1},
+                "harness: differs from repo (1 file)",
+            ),
+            ({"in_sync": False}, "harness: differs from repo ("),
             ({"in_sync": None, "behind_files": None}, "harness: unknown ("),
         ]
         for extra, needle in cases:
             with self.subTest(extra=extra):
                 state = FleetState(harness=Harness(extra=extra))
-                self.assertIn(needle, fleet.report(state, []))
+                text = fleet.report(state, [])
+                self.assertIn(needle, text)
+                self.assertNotIn("behind HEAD", text)
+
+    def test_report_machine_alerts(self):
+        state = _state()
+        state.machine_alerts = [
+            Alert(
+                kind="memory",
+                severity="warn",
+                detail="free memory 2.1 GB of 15.7 GB (below 2.4 GB)",
+            )
+        ]
+        text = fleet.report(state, [])
+        self.assertIn("alerts (3):", text)
+        self.assertIn(
+            "[warn] memory machine: free memory 2.1 GB of 15.7 GB (below 2.4 GB)", text
+        )
+        self.assertLess(text.index("[error]"), text.index("memory machine"))
+        only = FleetState(machine_alerts=state.machine_alerts)
+        self.assertIn("alerts (1):", fleet.report(only, []))
+
+    def test_json_includes_machine_alerts(self):
+        state = _state()
+        state.machine_alerts = [Alert(kind="memory", severity="warn", detail="low")]
+        model.save_state(state)
+        code, out, err = self.run_main("json")
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        self.assertEqual(data["machine_alerts"][0]["kind"], "memory")
+        self.assertIsNone(data["machine_alerts"][0]["session"])
 
     def test_report_empty_sections(self):
         text = fleet.report(FleetState(), [])

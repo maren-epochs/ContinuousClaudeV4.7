@@ -234,7 +234,7 @@ class Handoff(Record):
 
 @dataclass(kw_only=True)
 class Alert(Record):
-    """A check finding attached to a session."""
+    """A check finding on a session, or on the machine (``session`` None)."""
 
     kind: str | None = None
     severity: str | None = None
@@ -308,6 +308,7 @@ class FleetState(Record):
     audit_recent: list[AuditEvent] = field(default_factory=list)
     collisions: list[Collision] = field(default_factory=list)
     machine: Machine = field(default_factory=Machine)
+    machine_alerts: list[Alert] = field(default_factory=list)
 
 
 # --- Proposal (~/.claude/harness-inbox/<id>.json) ---

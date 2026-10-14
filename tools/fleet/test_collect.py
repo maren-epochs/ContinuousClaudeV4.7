@@ -855,6 +855,32 @@ class StateTests(FleetHome):
         self.assertIsNone(data["machine"]["mem_free_gb"])
         self.assertIsNone(data["sessions"][0]["context_pct"])
 
+    def test_low_memory_alert_saved_on_state(self):
+        low = Machine(mem_total_gb=15.7, mem_free_gb=2.1)
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(collect, "machine_memory", return_value=low),
+        ):
+            os.environ.pop("FLEET_MEM_WARN_GB", None)
+            path = collect.collect_and_save()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["machine_alerts"],
+            [
+                {
+                    "kind": "memory",
+                    "severity": "warn",
+                    "session": None,
+                    "detail": "free memory 2.1 GB of 15.7 GB (below 2.4 GB)",
+                    "evidence": None,
+                }
+            ],
+        )
+
+    def test_unknown_memory_no_machine_alert(self):
+        with mock.patch.object(collect, "machine_memory", return_value=Machine()):
+            self.assertEqual(collect.collect().machine_alerts, [])
+
     def test_save_is_atomic_and_round_trips(self):
         self.session(4242)
         with mock.patch.object(model, "write_atomic", wraps=model.write_atomic) as wa:

@@ -60,6 +60,7 @@ rejects them).
 | `audit_recent` | AuditEvent[] | newest audit events |
 | `collisions` | Collision[] | cross-session overlaps |
 | `machine` | Machine | host memory |
+| `machine_alerts` | Alert[] | machine-level check findings (`session` null), e.g. `memory` |
 
 **Harness**: `repo` (str\|null, repo root), `head_sha` (repo HEAD), `installed_sha`
 (sha recorded at last sync), `drift` (DriftEntry[]).
@@ -91,9 +92,10 @@ rejects them).
 
 **Handoff**: `path` (str\|null), `age_h` (float\|null, hours), `goal`, `now` (str\|null).
 
-**Alert**: `kind` (e.g. `collision`, `stuck`, `compliance`, `drift`, `schema_unknown`),
-`severity` (e.g. `info`, `warn`, `error`), `session` (session id), `detail`, `evidence`
-(`file:line` in the transcript). All str\|null.
+**Alert**: `kind` (e.g. `collision`, `stuck`, `compliance`, `drift`, `schema_unknown`,
+`memory`), `severity` (e.g. `info`, `warn`, `error`), `session` (session id; null on
+`machine_alerts`), `detail`, `evidence` (`file:line` in the transcript; null on machine
+alerts). All str\|null.
 
 **Collision**: `kind` (`path` or `repo`), `target` (path or repo root), `sessions`
 (str[] of session ids), `detail`.
@@ -109,7 +111,7 @@ Keys the collector adds outside the declared fields (kept in `extra`):
 | FleetState | `warnings` | str[]: unreadable session files, invalid manifest, failed audit rotation |
 | FleetState | `collect_s` | float: collection time in seconds |
 | Harness | `in_sync` | bool\|null: `behind_files == 0`. Computed from file contents, not commits: a commit that changes no installed file (e.g. `thoughts/` only) stays in sync even though `head_sha != installed_sha` |
-| Harness | `behind_files` | int\|null: `new` + `update` entries of the manifest repo's own `install/sync_global.py` `target_plan(~/.claude, manifest eol)` (loaded by path with importlib; rendered bytes, default `--python`, `.ccv47-keep` paths ignored). null (and `in_sync` null) when the repo, script, import, eol or plan fails. `fleet.py report` shows `behind HEAD (N files)` |
+| Harness | `behind_files` | int\|null: `new` + `update` entries of the manifest repo's own `install/sync_global.py` `target_plan(~/.claude, manifest eol)` (loaded by path with importlib; rendered bytes, default `--python`, `.ccv47-keep` paths ignored). null (and `in_sync` null) when the repo, script, import, eol or plan fails. `fleet.py report` shows `differs from repo (N files)` (installed tree vs the repo working tree, not commits); the dashboard shows it as `Files differing` next to `In sync` |
 | Harness | `dirty`, `synced_at` | manifest `dirty` and `generated_at` |
 | Session | `transcript` | absolute path of the transcript read |
 | Session | `status_updated_at`, `waiting_for` | `statusUpdatedAt` (ISO), `waitingFor` |
@@ -149,7 +151,7 @@ each transcript and the last 256 KB of `audit.jsonl`, which it renames to
 `extra.transcript` tail (512 KB, absolute line numbers) plus subagent transcripts
 under `<transcript stem>/` modified in the last 30 min (newest 16 files, read once per
 session; their writes count for path collisions and foreign writes), and fills `collisions`,
-`harness.drift` and per-session `alerts`. Evidence is `<transcript path>:<line>`
+`harness.drift`, per-session `alerts` and `machine_alerts`. Evidence is `<transcript path>:<line>`
 (`<pid>.json` when a session has no transcript). Session files and `*.key` are never
 opened; manifest keys that are absolute, contain `..`, sit under `sessions/` or end in
 `.key` are skipped.
@@ -165,6 +167,7 @@ opened; manifest keys that are absolute, contain `..`, sit under `sessions/` or 
 | `compliance` | `info` | completed turns (closed by a user prompt, or the final turn when status is not `busy` and no tool call is pending) whose last block is text ending in `?` with no AskUserQuestion in the turn; one alert with the count, evidence = newest |
 | `compliance` | `warn` | a write (main or subagent transcript) outside the session's own root (git root of cwd, else cwd) into another git root or another session's cwd; `~/.claude` excluded; one alert per foreign root |
 | `drift` | `info` | alive session `started_at` before the last sync (max of manifest `generated_at` and the `.ccv47-installed` mtime) |
+| `memory` | `warn` | machine-level (in `machine_alerts`, `session` and `evidence` null): `machine.mem_free_gb` < threshold. Threshold = 15% of `mem_total_gb`; env `FLEET_MEM_WARN_GB` (float GB, finite and >= 0) overrides it, any other value falls back to 15%. Detail `free memory 2.1 GB of 15.7 GB (below 2.4 GB)`. No alert when total or free memory is unknown. Counted by `fleet.py report`, the dashboard and the status.mjs `fleet` segment (warn/error) |
 
 **Drift entries**: for every non-kept manifest file with a `sha256`, the sha256 of
 `<manifest dir>/<key>` is compared to it: `modified` (differs) or `missing`. When the
@@ -269,7 +272,8 @@ One compact JSON object per line, appended. Readers skip blank or invalid lines.
   "inbox_count": 0,
   "audit_recent": [],
   "collisions": [],
-  "machine": {"mem_total_gb": 32.0, "mem_free_gb": 7.5}
+  "machine": {"mem_total_gb": 32.0, "mem_free_gb": 7.5},
+  "machine_alerts": []
 }
 ```
 
