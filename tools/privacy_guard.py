@@ -37,6 +37,8 @@ Reversible redaction (same rules, rewrite instead of reject):
   redact(text, guard, key=None) -> str
       (a) home prefix (<drive>:/Users/<name> in every HOME_PATTERNS spelling,
           incl. doubled backslashes, /c/Users/<name>, C--Users-<name>) -> `~`;
+          the guard's known home names (homes=home_names() on the CLI, plus the
+          usernames) are consumed whole even with spaces, hyphens or dots;
           the rest of the path keeps its own separators, so C:\\Users\\x\\p
           becomes ~\\p and C--Users-x-Docs becomes ~-Docs;
       (b) the guard's usernames elsewhere (whole word) -> `<user>`;
@@ -60,8 +62,11 @@ Reversible redaction (same rules, rewrite instead of reject):
   load_or_create_key(path=None) -> bytes
       Reads the key file, default default_key_file() = env CCV_PRIVACY_KEY_FILE
       or ~/.claude/privacy-key; when missing, creates it (parents too) with 32
-      random bytes, mode 0600, exclusive create. A file under 32 bytes raises
-      ValueError. The key is local only: never commit or sync it.
+      random bytes, mode 0600: written to a temp file in the same dir, then
+      linked into place without replacing, so concurrent creators converge on
+      one key. A 0-byte file (a creator killed before writing; it never made a
+      token) is replaced once older than KEY_STALE_S; a 1-31 byte file raises
+      ValueError and is kept. The key is local only: never commit or sync it.
 
 Stdlib only.
 """
@@ -75,6 +80,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,20 +91,35 @@ PLACEHOLDER_NAMES = {"x", "user", "name", "you"}
 # on Windows; root in containers). Not personal, and as whole words they hit ordinary
 # text ("runner.os", "repo root"), so CI must not flag them.
 SERVICE_ACCOUNTS = {"runner", "runneradmin", "root"}
-_NAME = r"(?P<name><[^>\s]*>|[^/\\\s\"'`<>:;,|*?()\[\]{}]+)"
-HOME_PATTERNS = [
+_NAME_CHAR = r"[^/\\\s\"'`<>:;,|*?()\[\]{}]"  # one char of a generic home-dir name
+_DIR_NAME_CHAR = r"[A-Za-z0-9_.]"  # ... in the transcript-dir form
+_HOME_PRE = [
     # C:/Users/<name>, C:\Users\<name>, C:\\Users\\<name> (escaped in JSON/shell)
-    re.compile(
-        r"(?<![A-Za-z])(?P<pre>[A-Za-z]:(?:/|\\+)Users(?:/|\\+))" + _NAME, re.IGNORECASE
-    ),
+    r"(?<![A-Za-z])(?P<pre>[A-Za-z]:(?:/|\\+)Users(?:/|\\+))",
     # Git Bash: /c/Users/<name>
-    re.compile(r"(?<![\w.])(?P<pre>/[A-Za-z]/Users/)" + _NAME, re.IGNORECASE),
+    r"(?<![\w.])(?P<pre>/[A-Za-z]/Users/)",
     # Claude Code transcript dir: C--Users-<name>-...
-    re.compile(
-        r"(?<![A-Za-z])(?P<pre>[A-Za-z]--Users-)(?P<name><[^>\s]*>|[A-Za-z0-9_.]+)",
-        re.IGNORECASE,
-    ),
+    r"(?<![A-Za-z])(?P<pre>[A-Za-z]--Users-)",
 ]
+
+
+def _home_regexes(known: str = "", known_dir: str = "") -> list[re.Pattern[str]]:
+    """HOME_PATTERNS; `known` / `known_dir` (alternations) are tried before the
+    generic name, each only as a whole name (no generic name char may follow)."""
+    k1 = f"(?:{known})(?!{_NAME_CHAR})|" if known else ""
+    k3 = f"(?:{known_dir})(?!{_DIR_NAME_CHAR})|" if known_dir else ""
+    names = [
+        rf"(?P<name><[^>\s]*>|{k1}{_NAME_CHAR}+)",
+        rf"(?P<name><[^>\s]*>|{k1}{_NAME_CHAR}+)",
+        rf"(?P<name><[^>\s]*>|{k3}{_DIR_NAME_CHAR}+)",
+    ]
+    return [
+        re.compile(pre + n, re.IGNORECASE)
+        for pre, n in zip(_HOME_PRE, names, strict=True)
+    ]
+
+
+HOME_PATTERNS = _home_regexes()
 UUID_RE = re.compile(
     r"(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])",
     re.IGNORECASE,
@@ -112,6 +134,8 @@ NO_TERMS_WARNING = (
 ENV_KEY_FILE = "CCV_PRIVACY_KEY_FILE"
 KEY_BYTES = 32
 TOKEN_HEX = 8
+KEY_STALE_S = 3.0  # a 0-byte key older than this is an abandoned create
+KEY_WAIT_S = 10.0  # overall bound on waiting for / repairing the key file
 TOKEN_RE = re.compile(r"<private:(?P<hex>[0-9a-f]{8})>")
 USER_TOKEN = "<user>"
 HOME_TOKEN = "~"
@@ -216,6 +240,38 @@ def _is_placeholder(name: str) -> bool:
     return name.startswith("<") or name.lower() in PLACEHOLDER_NAMES
 
 
+def home_names(env: Mapping[str, str] | None = None) -> list[str]:
+    """Basenames of this machine's home dir (Path.home(), $HOME, $USERPROFILE)."""
+    env = os.environ if env is None else env
+    try:
+        paths = [str(Path.home())]
+    except RuntimeError:  # no home directory can be determined
+        paths = []
+    paths += [env.get("HOME", ""), env.get("USERPROFILE", "")]
+    out: list[str] = []
+    for p in paths:
+        name = re.split(r"[\\/]", p.rstrip("\\/"))[-1]
+        if name and not name.endswith(":") and name not in out:
+            out.append(name)
+    return out
+
+
+def home_regexes(names: Iterable[str]) -> list[re.Pattern[str]]:
+    """HOME_PATTERNS that consume each known home-dir name whole, even with spaces,
+    hyphens or dots (longest first); the transcript-dir form also matches the name
+    with every non-alphanumeric char as `-`, as Claude Code writes it."""
+    known = [n for n in dict.fromkeys(names) if n and not _is_placeholder(n)]
+    if not known:
+        return HOME_PATTERNS
+    dashed = [re.sub(r"[^A-Za-z0-9]", "-", n) for n in known]
+    dir_names = list(dict.fromkeys(known + dashed))
+
+    def alt(xs: list[str]) -> str:
+        return "|".join(re.escape(x) for x in sorted(xs, key=len, reverse=True))
+
+    return _home_regexes(alt(known), alt(dir_names))
+
+
 class Guard:
     """Compiled privacy rules: home paths, usernames, UUIDs, terms, allowlist."""
 
@@ -224,8 +280,13 @@ class Guard:
         usernames: list[str],
         terms: list[tuple[str, str]],
         allow: list[re.Pattern[str]],
+        homes: Iterable[str] = (),
     ):
-        """Compile whole-word username and substring term patterns (names >= 3 chars)."""
+        """Compile whole-word username and substring term patterns (names >= 3 chars).
+
+        homes (home_names() on the CLI) plus the usernames are the known home-dir
+        names that redact() consumes whole in a home prefix.
+        """
         seen: dict[str, str] = {}
         for n in usernames:
             if n and len(n) >= 3:
@@ -240,6 +301,8 @@ class Guard:
             (label, re.compile(re.escape(t), re.IGNORECASE)) for t, label in terms
         ]
         self.allow = allow
+        self.homes = [h for h in homes if h]
+        self.home_res = home_regexes([*self.homes, *self.usernames])
 
     def _allowed(self, text: str) -> bool:
         """True when some allowlist regex fully matches the hit text."""
@@ -294,25 +357,123 @@ def default_key_file() -> Path:
     return Path.home() / ".claude" / "privacy-key"
 
 
-def load_or_create_key(path: Path | None = None) -> bytes:
-    """Key bytes from path (default_key_file()); created with 32 random bytes if absent."""
-    path = default_key_file() if path is None else Path(path)
+def _link_no_replace(src: Path, dst: Path) -> None:
+    """Make src visible as dst in one step, never replacing an existing dst.
+
+    Windows sharing violations (a racer replacing dst) are left to the caller's
+    retry loop.
+    """
     try:
-        data = path.read_bytes()
-    except FileNotFoundError:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        os.link(src, dst)
+    except FileExistsError:
+        pass
+    except PermissionError:
+        if os.name != "nt":
+            raise
+    except OSError:
+        if os.name != "nt":
+            raise
+        try:  # no hard links here (e.g. FAT); a Windows rename never replaces
+            os.rename(src, dst)
+        except (FileExistsError, PermissionError):
+            pass
+
+
+def _new_key_file(path: Path) -> Path:
+    """Temp file beside path holding 32 fresh random bytes (mode 0600, synced)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    with os.fdopen(fd, "wb") as f:
+        f.write(os.urandom(KEY_BYTES))
+        f.flush()
+        os.fsync(f.fileno())
+    return Path(tmp)
+
+
+def _publish_key(path: Path) -> None:
+    """Link a complete new key into place unless one exists: no reader ever sees a
+    partial key, and concurrent creators converge on the first one linked."""
+    tmp = _new_key_file(path)
+    try:
+        _link_no_replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _replace_empty_key(path: Path) -> None:
+    """Replace an abandoned 0-byte key in one step (os.replace, so the path never
+    goes missing), under an exclusive `<key>.lock`; the emptiness is re-checked
+    under the lock. A lock older than KEY_STALE_S (holder killed) is removed."""
+    lock = path.with_name(path.name + ".lock")
+    try:
+        os.close(os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except (FileExistsError, PermissionError):  # held (Windows: being deleted)
         try:
-            fd = os.open(path, flags, 0o600)
-        except FileExistsError:  # another process created it first
+            if time.time() - lock.stat().st_mtime >= KEY_STALE_S:
+                lock.unlink()
+        except OSError:
+            pass
+        time.sleep(0.02)
+        return
+    tmp = None
+    try:
+        if path.stat().st_size == 0:
+            tmp = _new_key_file(path)
+            os.replace(tmp, path)
+    except PermissionError:  # Windows: a reader has the key open; retry
+        if os.name != "nt":
+            raise
+    except FileNotFoundError:
+        pass
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+        lock.unlink(missing_ok=True)
+
+
+def _read_key(path: Path, deadline: float) -> tuple[bytes | None, float]:
+    """(key file bytes or None when missing, age in s of an empty file)."""
+    while True:
+        try:
             data = path.read_bytes()
+            return data, (time.time() - path.stat().st_mtime) if not data else 0.0
+        except FileNotFoundError:
+            return None, 0.0
+        except PermissionError:
+            # Windows: a racer is renaming or deleting it (sharing violation)
+            if os.name != "nt" or path.is_dir() or time.monotonic() > deadline:
+                raise
+            time.sleep(0.01)
+
+
+def load_or_create_key(path: Path | None = None) -> bytes:
+    """Key bytes from path (default_key_file()); created with 32 random bytes if absent.
+
+    Creation is atomic (temp file + link, never replacing), so concurrent creators
+    converge on one key. A 0-byte file never produced a token: it is waited on while
+    younger than KEY_STALE_S (its creator may be writing), then replaced under a
+    lock. A 1-31 byte file may have, so it raises ValueError and is left alone.
+    """
+    path = default_key_file() if path is None else Path(path)
+    deadline = time.monotonic() + KEY_WAIT_S
+    while True:
+        data, age = _read_key(path, deadline)
+        if data is not None and len(data) >= KEY_BYTES:
+            return data
+        if data:
+            raise ValueError(
+                f"privacy key {path} is corrupt ({len(data)} bytes, expected "
+                f"{KEY_BYTES}); not replaced because redacted files may use it: "
+                "restore it from a backup, or move it aside to start a new key"
+            )
+        if time.monotonic() > deadline:
+            raise ValueError(f"privacy key {path} could not be created")
+        if data is None:
+            _publish_key(path)
+        elif age >= KEY_STALE_S:
+            _replace_empty_key(path)
         else:
-            data = os.urandom(KEY_BYTES)
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-    if len(data) < KEY_BYTES:
-        raise ValueError(f"privacy key {path} is shorter than {KEY_BYTES} bytes")
-    return data
+            time.sleep(0.05)
 
 
 def placeholder_token(term: str, key: bytes) -> str:
@@ -329,7 +490,7 @@ def _redact_home(text: str, guard: Guard) -> str:
             return m.group(0)
         return HOME_TOKEN
 
-    for pat in HOME_PATTERNS:
+    for pat in guard.home_res:
         text = pat.sub(sub, text)
     return text
 
@@ -432,7 +593,7 @@ def _build_guard(args: argparse.Namespace) -> Guard | None:
     allow = _load_allow(args.allow_file or default_allow_file())
     if allow is None:
         return None
-    return Guard(args.username or detect_usernames(), terms, allow)
+    return Guard(args.username or detect_usernames(), terms, allow, home_names())
 
 
 def _read_text(path: str) -> str | None:

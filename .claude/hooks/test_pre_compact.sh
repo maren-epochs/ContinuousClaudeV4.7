@@ -156,8 +156,10 @@ subst() { sed -e "s/@U@/Users/g" -e "s/@UUID@/$UUIDV/g" "$1" > "$2"; }
 
 node --check "$LIB" 2>/dev/null
 check "VAL-803a privacy-redact.mjs exists and passes node --check" $?
-grep -q "from './privacy-redact.mjs'" "$HERE/fleet-audit.mjs"
-check "VAL-803a fleet-audit.mjs takes its privacy rules from privacy-redact.mjs" $?
+grep -q "import(new URL('./privacy-redact.mjs'" "$HERE/fleet-audit.mjs" \
+  && ! grep -q "^import .*privacy-redact" "$HERE/fleet-audit.mjs" \
+  && ! grep -q "^} from './privacy-redact.mjs'" "$HERE/fleet-audit.mjs"
+check "VAL-803a fleet-audit.mjs loads privacy-redact.mjs lazily (dynamic import, no static import)" $?
 grep -q '"privacy-redact.mjs"' "$REPO/install/sync_global.py"
 check "VAL-803a sync_global lists privacy-redact.mjs as an installed non-event hook" $?
 
@@ -176,36 +178,67 @@ Turkish: KİT and kıt and Kit and kit
 Kept: <private:0123abcd> <PRIVATE:0123ABCD> and <user> stay
 UUID: @UUID@ stays
 Unicode: café naïve — résumé ﬅ
+Spaced: C:\@U@\Alice Smith\Docs, "C:\\@U@\\ALICE SMITH\\x", /c/@U@/alice smith/y, C--@U@-Alice-Smith-Docs
+Dotted: C:/@U@/a-b.c/x and C--@U@-a-b-c-Docs and C--@U@-a-b.c-z
+Boundary: C:/@U@/Alice Smithers/p and C--@U@-a-b-cd-q
 EOF
 printf 'CRLF line zedtester\r\nlast acmeproj line without newline' >> "$WORK/parity.in"
 subst "$WORK/parity.in" "$WORK/parity.txt"
 "${PY[@]}" -c "import sys; open(sys.argv[1],'wb').write(bytes(range(32)))" "$WORK/parity.key"
 TERMS_JSON='["acmeproj","Zeta Widget","zedtester-labs","ssh-box","kit"]'
-"${PY[@]}" - "$REPO" "$WORK/parity.txt" "$WORK/parity.key" "$WORK/parity.py.out" "$TERMS_JSON" <<'EOF'
+cat > "$WORK/parity_py.py" <<'EOF'
 import importlib.util, json, sys
-repo, src, keyf, out, terms = sys.argv[1:6]
+repo, src, keyf, out, terms, users, homes = sys.argv[1:8]
 spec = importlib.util.spec_from_file_location("pg", repo + "/tools/privacy_guard.py")
 pg = importlib.util.module_from_spec(spec); sys.modules["pg"] = pg; spec.loader.exec_module(pg)
 text = open(src, "rb").read().decode("utf-8")
-g = pg.Guard(["zedtester"], [(t, "t") for t in json.loads(terms)], [])
+g = pg.Guard(json.loads(users), [(t, "t") for t in json.loads(terms)], [], homes=json.loads(homes))
 open(out, "wb").write(pg.redact(text, g, open(keyf, "rb").read()).encode("utf-8"))
 EOF
-check "VAL-803b python redact ran on the parity fixture" $?
-node --input-type=module - "$LIB" "$WORK/parity.txt" "$WORK/parity.key" "$WORK/parity.js.out" "$TERMS_JSON" <<'EOF' 2>/dev/null
+cat > "$WORK/parity_js.mjs" <<'EOF'
 import { readFileSync, writeFileSync } from 'fs';
 import { pathToFileURL } from 'url';
-const [lib, src, keyf, out, terms] = process.argv.slice(2);
+const [lib, src, keyf, out, terms, users, homes] = process.argv.slice(2);
 const { redact } = await import(pathToFileURL(lib).href);
 const text = readFileSync(src, 'utf-8');
-writeFileSync(out, redact(text, { users: ['zedtester'], terms: JSON.parse(terms), key: readFileSync(keyf) }), 'utf-8');
+writeFileSync(out, redact(text, { users: JSON.parse(users), terms: JSON.parse(terms), key: readFileSync(keyf), homes: JSON.parse(homes) }), 'utf-8');
 EOF
-check "VAL-803b JS redact ran on the parity fixture" $?
+parity() { # <fixture> <out prefix> <terms json> <users json> <homes json> -> PY_RC, JS_RC
+  "${PY[@]}" "$WORK/parity_py.py" "$REPO" "$1" "$WORK/parity.key" "$2.py.out" "$3" "$4" "$5"; PY_RC=$?
+  node "$WORK/parity_js.mjs" "$LIB" "$1" "$WORK/parity.key" "$2.js.out" "$3" "$4" "$5" 2>/dev/null; JS_RC=$?
+}
+HOMES_JSON='["Alice Smith","a-b.c"]'
+parity "$WORK/parity.txt" "$WORK/parity" "$TERMS_JSON" '["zedtester"]' "$HOMES_JSON"
+check "VAL-803b python redact ran on the parity fixture" $PY_RC
+check "VAL-803b JS redact ran on the parity fixture" $JS_RC
 cmp -s "$WORK/parity.py.out" "$WORK/parity.js.out"
 check "VAL-803b Python and JS redaction give identical bytes" $?
 grep -q '^Home: ~/Documents/<private:[0-9a-f]\{8\}>/src' "$WORK/parity.js.out" \
   && grep -q '^User: <user> ran it; <user> too' "$WORK/parity.js.out" \
   && grep -q '^Win: ~\\AppData' "$WORK/parity.js.out" && ! grep -qi "acmeproj" "$WORK/parity.js.out"
 check "VAL-803b parity output is actually redacted (home, user, terms)" $?
+grep -q '^Spaced: ~\\Docs, "~\\\\x", ~/y, ~-Docs$' "$WORK/parity.js.out" \
+  && grep -q '^Dotted: ~/x and ~-Docs and ~-z$' "$WORK/parity.js.out" \
+  && grep -q '^Boundary: ~ Smithers/p and ~-b-cd-q$' "$WORK/parity.js.out"
+check "F2 known home names with space/hyphen/dot consumed whole (JS)" $?
+# the reviewer's case: the home name known only as a username, no homes list
+printf 'C:\\%s\\Alice Smith\\Docs and C--%s-Alice-Smith-Docs\n' Users Users > "$WORK/spaced.txt"
+parity "$WORK/spaced.txt" "$WORK/spaced" '[]' '["Alice Smith"]' '[]'
+[ "$PY_RC" -eq 0 ] && [ "$JS_RC" -eq 0 ] && cmp -s "$WORK/spaced.py.out" "$WORK/spaced.js.out" \
+  && [ "$(cat "$WORK/spaced.js.out")" = '~\Docs and ~-Docs' ]
+r=$?; check "F2 username 'Alice Smith': Python and JS both give ~\\Docs and ~-Docs (got: $(cat "$WORK/spaced.js.out" 2>/dev/null))" $r
+# JS default homes come from the environment (homeNames: os.homedir(), HOME, USERPROFILE)
+node --input-type=module - "$LIB" <<'EOF' 2>/dev/null
+import { pathToFileURL } from 'url';
+const [lib] = process.argv.slice(2);
+process.env.HOME = '/home/a-b.c'; process.env.USERPROFILE = 'D:\\' + 'Users\\Alice Smith\\';
+const { redact, homeNames } = await import(pathToFileURL(lib).href);
+const names = homeNames();
+if (!names.includes('a-b.c') || !names.includes('Alice Smith')) process.exit(1);
+const out = redact('C--' + 'Users-a-b-c-x C:/' + 'Users/Alice Smith/y', { users: [], terms: [] });
+if (out !== '~-x ~/y') { console.error(out); process.exit(1); }
+EOF
+check "F2 JS homeNames() reads HOME/USERPROFILE and redact uses it by default" $?
 # lazily created key: no term match -> no key file; JS token == Python placeholder_token
 node --input-type=module - "$LIB" "$WORK/lazy/never-key" <<'EOF' 2>/dev/null
 import { pathToFileURL } from 'url';
@@ -216,6 +249,56 @@ if (redact('nothing private here', { users: ['zedtester'], terms: ['acmeproj'] }
 EOF
 [ $? -eq 0 ] && [ ! -e "$WORK/lazy/never-key" ]
 check "VAL-803b key file not created when no term matches" $?
+
+# --- F1: atomic key creation, shared by Python and JS ---
+cat > "$WORK/key_js.mjs" <<'EOF'
+import { writeFileSync } from 'fs';
+import { pathToFileURL } from 'url';
+const [lib, keyf, out] = process.argv.slice(2);
+const { loadOrCreateKey } = await import(pathToFileURL(lib).href);
+try { writeFileSync(out, loadOrCreateKey(keyf).toString('hex')); }
+catch (e) { writeFileSync(out, 'ERR ' + e.message); }
+EOF
+cat > "$WORK/key_py.py" <<'EOF'
+import importlib.util, sys
+repo, keyf, out = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("pg", repo + "/tools/privacy_guard.py")
+pg = importlib.util.module_from_spec(spec); sys.modules["pg"] = pg; spec.loader.exec_module(pg)
+try:
+    res = pg.load_or_create_key(keyf).hex()
+except Exception as e:
+    res = "ERR " + str(e)
+open(out, "w").write(res)
+EOF
+race() { # <key file> <out dir>: 6 node + 4 python creators at once
+  mkdir -p "$2"
+  for i in 1 2 3 4 5 6; do node "$WORK/key_js.mjs" "$LIB" "$1" "$2/js$i" & done
+  for i in 1 2 3 4; do "${PY[@]}" "$WORK/key_py.py" "$REPO" "$1" "$2/py$i" & done
+  wait
+}
+converged() { # <key file> <out dir>: every creator got the key on disk
+  local want; want="$(od -An -tx1 -v "$1" | tr -d ' \n')"
+  [ "${#want}" -eq 64 ] || return 1
+  for f in "$2"/*; do [ "$(cat "$f")" = "$want" ] || { echo "  $f: $(cat "$f")"; return 1; }; done
+  [ "$(ls "$2" | wc -l)" -eq 10 ]
+}
+race "$WORK/race1/privacy-key" "$WORK/race1.out"
+converged "$WORK/race1/privacy-key" "$WORK/race1.out" && [ "$(ls -A "$WORK/race1")" = privacy-key ]
+check "F1 10 concurrent Python+JS creators converge on one 32-byte key, no temp left" $?
+mkdir -p "$WORK/race2"; : > "$WORK/race2/privacy-key"; touch -d '1 minute ago' "$WORK/race2/privacy-key"
+race "$WORK/race2/privacy-key" "$WORK/race2.out"
+converged "$WORK/race2/privacy-key" "$WORK/race2.out" && [ "$(ls -A "$WORK/race2")" = privacy-key ]
+check "F1 stale 0-byte key: 10 concurrent repairers converge on one new key, no lock left" $?
+printf 'short' > "$WORK/short-key"
+node "$WORK/key_js.mjs" "$LIB" "$WORK/short-key" "$WORK/short.out" 2>/dev/null
+grep -q '^ERR .*corrupt (5 bytes' "$WORK/short.out" && [ "$(cat "$WORK/short-key")" = short ]
+r=$?; check "F1 JS: 1-31 byte key is a clear error and is left alone (got: $(cat "$WORK/short.out" 2>/dev/null))" $r
+: > "$WORK/young-key"
+( sleep 0.4; printf '0123456789abcdef0123456789abcdef' > "$WORK/young-key" ) &
+node "$WORK/key_js.mjs" "$LIB" "$WORK/young-key" "$WORK/young.out" 2>/dev/null
+wait
+[ "$(cat "$WORK/young.out")" = "$(printf '0123456789abcdef0123456789abcdef' | od -An -tx1 -v | tr -d ' \n')" ]
+check "F1 JS: fresh 0-byte key is waited on while its writer finishes" $?
 
 # --- end to end: the hook writes a redacted handoff ---
 TR="$WORK/private.in.jsonl"
@@ -284,6 +367,15 @@ H8=$(find "$PROJ8/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/nul
 [ "$RC" -eq 0 ] && [ -n "$H8" ] && [ ! -e "$WORK/keys/unused-key" ]
 check "VAL-803d no matching term: handoff written, no key file created" $?
 mv "$WORK/user-terms.off" "$FAKEHOME/.claude/privacy-terms"
+
+# F1 end to end: a 0-byte key left by a killed creator no longer forces home-only mode
+PROJ11="$WORK/proj11"; mkdir -p "$PROJ11/thoughts/shared/handoffs" "$WORK/keys11"
+: > "$WORK/keys11/privacy-key"; touch -d '1 minute ago' "$WORK/keys11/privacy-key"
+run_private "$PROJ11" "$WORK/keys11/privacy-key"
+H11=$(find "$PROJ11/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ "$RC" -eq 0 ] && [ -n "$H11" ] && ! grep -qi "acmeproj" "$H11" && grep -q '<private:[0-9a-f]\{8\}>' "$H11" \
+  && ! printf '%s' "$OUT" | grep -qi "home paths only" && [ "$(wc -c < "$WORK/keys11/privacy-key" | tr -d ' ')" = 32 ]
+check "F1 hook: stale 0-byte key replaced, handoff fully redacted (got: ${OUT:0:160})" $?
 
 # --- fail open: key unusable -> home paths only, hook never crashes ---
 mkdir -p "$WORK/keydir"

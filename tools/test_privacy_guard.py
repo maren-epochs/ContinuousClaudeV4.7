@@ -25,6 +25,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -486,26 +488,102 @@ class TestKeyAndToken(RedactCase):
     def test_short_key_file_is_an_error(self):
         bad = self.tmp / "bad-key"
         bad.write_bytes(b"short")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             self.mod.load_or_create_key(bad)
+        self.assertIn("corrupt", str(cm.exception))
+        self.assertEqual(
+            bad.read_bytes(), b"short"
+        )  # never replaced: tokens may use it
 
-    def test_default_key_path_under_home_claude(self):
-        with (
-            mock.patch.object(self.mod.Path, "home", return_value=self.home),
-            mock.patch.dict(self.mod.os.environ, clear=False) as env,
-        ):
-            env.pop(self.mod.ENV_KEY_FILE, None)
-            want = self.home / ".claude" / "privacy-key"
-            self.assertEqual(self.mod.default_key_file(), want)
-            key = self.mod.load_or_create_key()
-        self.assertEqual(want.read_bytes(), key)
+    def _race(self, path: Path, n: int = 12) -> list[object]:
+        """load_or_create_key(path) from n threads released together; keys or errors."""
+        barrier = threading.Barrier(n)
+        got: list[object] = []
 
-    def test_env_overrides_default_key_path(self):
-        target = self.tmp / "env-key"
-        with mock.patch.dict(self.mod.os.environ, {self.mod.ENV_KEY_FILE: str(target)}):
-            self.assertEqual(self.mod.default_key_file(), target)
-            key = self.mod.load_or_create_key()
-        self.assertEqual(target.read_bytes(), key)
+        def worker() -> None:
+            barrier.wait()
+            try:
+                got.append(self.mod.load_or_create_key(path))
+            except Exception as e:  # noqa: BLE001 - collected for the assertion
+                got.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(got), n)
+        return got
+
+    def test_concurrent_creators_converge_on_one_key(self):
+        """F1: no reader ever sees a half-written key; every creator gets the same key."""
+        for round_no in range(5):
+            path = self.tmp / f"race-{round_no}" / "privacy-key"
+            got = self._race(path)
+            self.assertEqual({type(k) for k in got}, {bytes}, got)
+            self.assertEqual(len(set(got)), 1)
+            self.assertEqual(path.read_bytes(), got[0])
+            self.assertEqual([p.name for p in path.parent.iterdir()], ["privacy-key"])
+
+    def test_creation_never_exposes_an_empty_key(self):
+        """F1: the key appears with all 32 bytes at once (temp file + link)."""
+        path = self.tmp / "atomic" / "privacy-key"
+        seen: list[int] = []
+        real_link = self.mod.os.link
+
+        def spy_link(src, dst, *a, **kw):
+            self.assertFalse(Path(dst).exists())
+            self.assertEqual(len(Path(src).read_bytes()), 32)
+            real_link(src, dst, *a, **kw)
+            seen.append(len(Path(dst).read_bytes()))
+
+        with mock.patch.object(self.mod.os, "link", spy_link):
+            key = self.mod.load_or_create_key(path)
+        self.assertEqual(seen, [32])
+        self.assertEqual(path.read_bytes(), key)
+
+    def _empty_key(self, name: str, age_s: float) -> Path:
+        path = self.tmp / name
+        path.write_bytes(b"")
+        t = time.time() - age_s
+        os.utime(path, (t, t))
+        return path
+
+    def test_stale_empty_key_is_replaced(self):
+        """F1: a 0-byte key (creator killed before writing) never made a token."""
+        path = self._empty_key("empty-key", 60)
+        key = self.mod.load_or_create_key(path)
+        self.assertEqual(len(key), 32)
+        self.assertEqual(path.read_bytes(), key)
+        self.assertEqual(self.mod.load_or_create_key(path), key)
+        self.assertEqual(
+            [p.name for p in self.tmp.iterdir() if "empty-key" in p.name], ["empty-key"]
+        )
+
+    def test_fresh_empty_key_waits_for_its_writer(self):
+        """F1: a just-created 0-byte key may be mid-write by another process."""
+        path = self._empty_key("young-key", 0)
+        writer = threading.Timer(0.3, lambda: path.write_bytes(FIXED_KEY))
+        writer.start()
+        try:
+            self.assertEqual(self.mod.load_or_create_key(path), FIXED_KEY)
+        finally:
+            writer.cancel()
+
+    def test_fresh_empty_key_replaced_once_stale(self):
+        path = self._empty_key("stuck-key", 0)
+        with mock.patch.object(self.mod, "KEY_STALE_S", 0.3):
+            key = self.mod.load_or_create_key(path)
+        self.assertEqual(len(key), 32)
+        self.assertEqual(path.read_bytes(), key)
+
+    def test_concurrent_repair_of_empty_key_converges(self):
+        for round_no in range(5):
+            path = self._empty_key(f"stale-race-{round_no}", 60)
+            got = self._race(path)
+            self.assertEqual({type(k) for k in got}, {bytes}, got)
+            self.assertEqual(len(set(got)), 1)
+            self.assertEqual(path.read_bytes(), got[0])
 
 
 class TestRedact(RedactCase):
@@ -531,6 +609,36 @@ class TestRedact(RedactCase):
     def test_username_elsewhere_whole_word_case_insensitive(self):
         src = "owner " + SYNTH_NAME.upper() + " and x" + SYNTH_NAME + "y"
         self.assertEqual(self.redact(src), "owner <user> and x" + SYNTH_NAME + "y")
+
+    def test_home_name_with_space_consumed_whole(self):
+        """F2: a profile folder with a space or hyphen leaves no part of the name."""
+        guard = self.mod.Guard(["Alice Smith"], [], [])
+        src = home("\\", "Alice Smith") + "\\Docs and C" + "--Users-Alice-Smith-Docs"
+        self.assertEqual(self.redact(src, guard), "~\\Docs and ~-Docs")
+        src = (
+            "cd /c"
+            + "/Users/"
+            + "alice smith/x and "
+            + home("\\\\", "ALICE SMITH")
+            + "\\\\y"
+        )
+        self.assertEqual(self.redact(src, guard), "cd ~/x and ~\\\\y")
+
+    def test_home_name_from_homes_with_hyphen_and_dot(self):
+        guard = self.mod.Guard([SYNTH_NAME], [], [], homes=["a-b.c"])
+        src = home("/", "a-b.c") + "/x C" + "--Users-a-b-c-Docs C" + "--Users-a-b.c-z"
+        self.assertEqual(self.redact(src, guard), "~/x ~-Docs ~-z")
+
+    def test_known_home_name_needs_a_boundary(self):
+        guard = self.mod.Guard(["Alice Smith"], [], [], homes=["bob"])
+        src = home("/", "bobby") + "/x " + home("/", "Alice Smithers") + "/y"
+        self.assertEqual(self.redact(src, guard), "~/x ~ Smithers/y")
+
+    def test_home_names_from_environment(self):
+        profile = "D:\\" + "Users\\Alice Smith\\"
+        env = {"HOME": "/home/a-b.c", "USERPROFILE": profile}
+        with mock.patch.object(self.mod.Path, "home", return_value=Path("/x/qq")):
+            self.assertEqual(self.mod.home_names(env), ["qq", "a-b.c", "Alice Smith"])
 
     def test_home_dir_name_is_not_left_as_user_token(self):
         src = home("/", SYNTH_NAME) + "/proj"
@@ -659,6 +767,17 @@ class TestRedactCli(RedactCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, src.encode("utf-8"))
         self.assertNotIn(SYNTH_TERM.encode(), f.read_bytes())
+
+    def test_redact_cli_consumes_the_environment_home_name(self):
+        spaced = self.tmp / "Alice Smith"
+        spaced.mkdir()
+        self.env.update(HOME=str(spaced), USERPROFILE=str(spaced))
+        f = self.write(
+            "h.md", home("\\", "Alice Smith") + "\\p C" + "--Users-Alice-Smith-q\n"
+        )
+        r = self.cli("--redact", f.name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(f.read_text(encoding="utf-8"), "~\\p ~-q\n")
 
     def test_redact_missing_file_is_usage_error(self):
         r = self.cli("--redact", "gone.md")

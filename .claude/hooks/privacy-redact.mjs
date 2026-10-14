@@ -6,26 +6,35 @@
  *    loadTerms(cwd) (env CCV_PRIVACY_TERMS, ~/.claude/privacy-terms, the repo's
  *    .git/info/privacy-terms; worktrees: the common dir), usernames().
  * 2. A byte-for-byte port of privacy_guard.redact(), used by pre-compact.mjs:
- *      redact(text, { users, terms, key }) -> home prefix (every HOME_PATTERNS
- *        spelling) -> `~`; usernames (whole word) -> `<user>`; each term
+ *      redact(text, { users, terms, key, homes }) -> home prefix (every HOME_PATTERNS
+ *        spelling; the known home names, homes = homeNames() plus the users, are
+ *        consumed whole even with spaces, hyphens or dots) -> `~`; usernames
+ *        (whole word) -> `<user>`; each term
  *        (case-insensitive, longest first, one pass) -> placeholderToken(term, key).
  *        Placeholder home names and existing `<private:..>` / `<user>` tokens stay;
  *        UUIDs stay. The key (loadOrCreateKey()) is read only when a term matches.
- *      redactHome(text) -> the home step alone (fail-open fallback).
+ *      redactHome(text, { homes, users }) -> the home step alone (fail-open fallback).
+ *      homeNames() -> basenames of os.homedir(), $HOME, $USERPROFILE.
  *      placeholderToken(term, key) -> `<private:XXXXXXXX>`, first 8 hex of
  *        HMAC-SHA256(key, casefold(term)).
  *      loadOrCreateKey(path = defaultKeyFile()) -> env CCV_PRIVACY_KEY_FILE or
- *        ~/.claude/privacy-key; created (parents too, mode 0600, exclusive) with
- *        32 random bytes when missing; under 32 bytes throws.
+ *        ~/.claude/privacy-key; when missing, 32 random bytes are written to a temp
+ *        file beside it and linked into place without replacing (concurrent
+ *        creators converge on one key, never a partial one). A 0-byte file (creator
+ *        killed before writing; it never made a token) is waited on, then replaced
+ *        under `<key>.lock` once older than KEY_STALE_S; 1-31 bytes throws.
  *    Python semantics are emulated: \w / \s are Python's Unicode classes, re.I's
  *    extra i/İ/ı (and a few Greek) equivalences, str.casefold(). Not ported: the
  *    repo allowlist `.privacy-allow` (repo-specific; holds only UUID entries, which
  *    redact never touches). Known gap: characters newer than Python's Unicode
  *    database (case/word data from Node's ICU) can match differently.
  */
-import { readFileSync, statSync, mkdirSync, openSync, writeSync, closeSync } from 'fs';
+import {
+  readFileSync, statSync, mkdirSync, openSync, writeSync, closeSync, fsyncSync, linkSync,
+  renameSync, unlinkSync, copyFileSync, constants as fsConstants,
+} from 'fs';
 import { homedir, userInfo } from 'os';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, resolve, basename } from 'path';
 import { createHmac, randomBytes } from 'crypto';
 
 // --- rule sources (shared with fleet-audit.mjs; behaviour unchanged there) ---
@@ -97,6 +106,8 @@ export function usernames() {
 // --- reversible redaction: port of privacy_guard.redact() ---
 
 const KEY_BYTES = 32;
+const KEY_STALE_S = 3; // a 0-byte key older than this is an abandoned create
+const KEY_WAIT_S = 10; // overall bound on waiting for / repairing the key file
 const TOKEN_HEX = 8;
 const USER_TOKEN = '<user>';
 const HOME_TOKEN = '~';
@@ -125,16 +136,60 @@ function pyLiteral(s) {
   return out;
 }
 
-const NAME_CLASS = '[^/\\\\' + PY_S + '"\'`<>:;,|*?()\\[\\]{}]+';
-const PY_HOME_PATTERNS = [
-  new RegExp(String.raw`(?<![${AZ}])(?<pre>[${AZ}]:(?:\/|\\+)Users(?:\/|\\+))(?<name><[^>${PY_S}]*>|${NAME_CLASS})`, 'giu'),
-  new RegExp(String.raw`(?<![${PY_W}.])(?<pre>\/[${AZ}]\/Users\/)(?<name><[^>${PY_S}]*>|${NAME_CLASS})`, 'giu'),
-  new RegExp(String.raw`(?<![${AZ}])(?<pre>[${AZ}]--Users-)(?<name><[^>${PY_S}]*>|[${AZ}0-9_.]+)`, 'giu'),
+const NAME_CHAR = '[^/\\\\' + PY_S + '"\'`<>:;,|*?()\\[\\]{}]'; // one char of a generic home-dir name
+const DIR_NAME_CHAR = `[${AZ}0-9_.]`; // ... in the transcript-dir form
+const HOME_PRE = [
+  String.raw`(?<![${AZ}])(?<pre>[${AZ}]:(?:\/|\\+)Users(?:\/|\\+))`,
+  String.raw`(?<![${PY_W}.])(?<pre>\/[${AZ}]\/Users\/)`,
+  String.raw`(?<![${AZ}])(?<pre>[${AZ}]--Users-)`,
 ];
+// privacy_guard._home_regexes: known / knownDir alternations are tried before the generic
+// name, each only as a whole name (no generic name char may follow).
+function homeRegexes(known = '', knownDir = '') {
+  const k1 = known ? `(?:${known})(?!${NAME_CHAR})|` : '';
+  const k3 = knownDir ? `(?:${knownDir})(?!${DIR_NAME_CHAR})|` : '';
+  const names = [
+    `(?<name><[^>${PY_S}]*>|${k1}${NAME_CHAR}+)`,
+    `(?<name><[^>${PY_S}]*>|${k1}${NAME_CHAR}+)`,
+    `(?<name><[^>${PY_S}]*>|${k3}${DIR_NAME_CHAR}+)`,
+  ];
+  return HOME_PRE.map((pre, i) => new RegExp(pre + names[i], 'giu'));
+}
+const PY_HOME_PATTERNS = homeRegexes();
 const KEEP = `(?<keep>${pyLiteral('<private:')}[0-9a-f]{8}>|${pyLiteral(USER_TOKEN)})`;
 
 const isPlaceholder = (name) => name.startsWith('<') || PLACEHOLDER_NAMES.has(name.toLowerCase());
 const pyLen = (s) => [...s].length;
+const byLenDesc = (xs) => [...xs].sort((a, b) => pyLen(b) - pyLen(a));
+
+// privacy_guard.home_names(): basenames of this machine's home dir.
+export function homeNames() {
+  const paths = [];
+  try { paths.push(homedir()); } catch {}
+  paths.push(process.env.HOME || '', process.env.USERPROFILE || '');
+  const out = [];
+  for (const p of paths) {
+    const name = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+    if (name && !name.endsWith(':') && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+// Guard.usernames: length >= 3, first spelling of each lowercased name.
+function guardUsers(users) {
+  const seen = new Map();
+  for (const n of users) if (n && pyLen(n) >= 3 && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+  return [...seen.values()];
+}
+
+// privacy_guard.home_regexes(): HOME_PATTERNS consuming each known home name whole.
+function knownHomeRegexes(names) {
+  const known = [...new Set(names)].filter((n) => n && !isPlaceholder(n));
+  if (!known.length) return PY_HOME_PATTERNS;
+  const dirNames = [...new Set([...known, ...known.map((n) => n.replace(/[^A-Za-z0-9]/gu, '-'))])];
+  const alt = (xs) => byLenDesc(xs).map(pyLiteral).join('|');
+  return homeRegexes(alt(known), alt(dirNames));
+}
 
 // Python str.casefold() for one code point.
 function foldChar(ch) {
@@ -154,28 +209,89 @@ export function defaultKeyFile() {
   return process.env.CCV_PRIVACY_KEY_FILE || join(homedir(), '.claude', 'privacy-key');
 }
 
-export function loadOrCreateKey(path = defaultKeyFile()) {
-  let data;
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const BUSY = new Set(['EPERM', 'EACCES', 'EBUSY']); // Windows: a racer holds or replaces the file
+const isBusy = (e) => process.platform === 'win32' && e && BUSY.has(e.code);
+
+// src visible as dst in one step, never replacing an existing dst.
+function linkNoReplace(src, dst) {
+  try { linkSync(src, dst); } catch (e) {
+    if (e && e.code === 'EEXIST') return;
+    if (isBusy(e)) return; // the caller's loop retries
+    if (process.platform !== 'win32') throw e;
+    try { copyFileSync(src, dst, fsConstants.COPYFILE_EXCL); } // no hard links (e.g. FAT)
+    catch (e2) { if (!e2 || (e2.code !== 'EEXIST' && !isBusy(e2))) throw e2; }
+  }
+}
+
+// Temp file beside path holding 32 fresh random bytes (mode 0600, synced).
+function newKeyFile(path) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  const fd = openSync(tmp, 'wx', 0o600);
+  try { writeSync(fd, randomBytes(KEY_BYTES)); fsyncSync(fd); } finally { closeSync(fd); }
+  return tmp;
+}
+
+const unlinkQuiet = (p) => { try { unlinkSync(p); } catch {} };
+
+function publishKey(path) {
+  const tmp = newKeyFile(path);
+  try { linkNoReplace(tmp, path); } finally { unlinkQuiet(tmp); }
+}
+
+// An abandoned 0-byte key replaced in one step (rename over it, so the path never goes
+// missing) under an exclusive `<key>.lock`, emptiness re-checked under the lock.
+function replaceEmptyKey(path) {
+  const lock = `${path}.lock`;
+  try { closeSync(openSync(lock, 'wx', 0o600)); } catch (e) {
+    if (!e || (e.code !== 'EEXIST' && !isBusy(e))) throw e;
+    try { if (Date.now() - statSync(lock).mtimeMs >= KEY_STALE_S * 1000) unlinkSync(lock); } catch {}
+    sleepMs(20);
+    return;
+  }
+  let tmp = null;
   try {
-    data = readFileSync(path);
-  } catch (err) {
-    if (!err || err.code !== 'ENOENT') throw err;
-    mkdirSync(dirname(path), { recursive: true });
-    let fd;
-    try {
-      fd = openSync(path, 'wx', 0o600);
-    } catch (e) {
-      if (!e || e.code !== 'EEXIST') throw e;
-      fd = null; // another process created it first
+    if (statSync(path).size === 0) {
+      tmp = newKeyFile(path);
+      renameSync(tmp, path);
     }
-    if (fd === null) data = readFileSync(path);
-    else {
-      data = randomBytes(KEY_BYTES);
-      try { writeSync(fd, data); } finally { closeSync(fd); }
+  } catch (e) {
+    if (!e || (e.code !== 'ENOENT' && !isBusy(e))) throw e;
+  } finally {
+    if (tmp) unlinkQuiet(tmp);
+    unlinkQuiet(lock);
+  }
+}
+
+// [bytes or null when missing, age in s of an empty file]
+function readKey(path, deadline) {
+  for (;;) {
+    try {
+      const data = readFileSync(path);
+      return [data, data.length ? 0 : (Date.now() - statSync(path).mtimeMs) / 1000];
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return [null, 0];
+      if (!isBusy(e) || Date.now() > deadline) throw e;
+      sleepMs(10);
     }
   }
-  if (data.length < KEY_BYTES) throw new Error(`privacy key ${path} is shorter than ${KEY_BYTES} bytes`);
-  return data;
+}
+
+export function loadOrCreateKey(path = defaultKeyFile()) {
+  const deadline = Date.now() + KEY_WAIT_S * 1000;
+  for (;;) {
+    const [data, age] = readKey(path, deadline);
+    if (data && data.length >= KEY_BYTES) return data;
+    if (data && data.length) {
+      throw new Error(`privacy key ${path} is corrupt (${data.length} bytes, expected ${KEY_BYTES}); `
+        + 'not replaced because redacted files may use it: restore it from a backup, or move it aside to start a new key');
+    }
+    if (Date.now() > deadline) throw new Error(`privacy key ${path} could not be created`);
+    if (data === null) publishKey(path);
+    else if (age >= KEY_STALE_S) replaceEmptyKey(path);
+    else sleepMs(50);
+  }
 }
 
 export function placeholderToken(term, key) {
@@ -183,8 +299,8 @@ export function placeholderToken(term, key) {
   return `<private:${hex.slice(0, TOKEN_HEX)}>`;
 }
 
-export function redactHome(text) {
-  for (const re of PY_HOME_PATTERNS) {
+export function redactHome(text, { homes = homeNames(), users = usernames() } = {}) {
+  for (const re of knownHomeRegexes([...homes, ...guardUsers(users)])) {
     text = text.replace(re, (...args) => {
       const groups = args[args.length - 1];
       return isPlaceholder(groups.name) ? args[0] : HOME_TOKEN;
@@ -193,14 +309,14 @@ export function redactHome(text) {
   return text;
 }
 
-// privacy_guard.redact(text, Guard(users, terms, []), key) in JS; users/terms default to
-// usernames() / loadTerms(cwd), key to loadOrCreateKey() on the first term match.
-export function redact(text, { users = usernames(), terms, key = null, cwd = process.cwd() } = {}) {
-  text = redactHome(text);
-  const termList = [...(terms ?? loadTerms(cwd))].sort((a, b) => pyLen(b) - pyLen(a));
-  const seen = new Map();
-  for (const n of users) if (n && pyLen(n) >= 3 && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
-  const userList = [...seen.values()].sort((a, b) => pyLen(b) - pyLen(a));
+// privacy_guard.redact(text, Guard(users, terms, [], homes), key) in JS; users/terms/homes
+// default to usernames() / loadTerms(cwd) / homeNames(), key to loadOrCreateKey() on the
+// first term match.
+export function redact(text, { users = usernames(), terms, key = null, cwd = process.cwd(), homes = homeNames() } = {}) {
+  const guarded = guardUsers(users);
+  text = redactHome(text, { homes, users: guarded });
+  const termList = byLenDesc(terms ?? loadTerms(cwd));
+  const userList = byLenDesc(guarded);
   const alts = [KEEP, ...termList.map((t, i) => `(?<t${i}>${pyLiteral(t)})`)];
   if (userList.length) {
     alts.push(`(?<user>(?<![${PY_W}])(?:${userList.map(pyLiteral).join('|')})(?![${PY_W}]))`);

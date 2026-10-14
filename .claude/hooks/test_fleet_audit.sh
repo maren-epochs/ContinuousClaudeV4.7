@@ -278,6 +278,30 @@ run "rm -rf C:/$U/user/old"
 case "$(field command)" in *"C:/$U/user/old"*) r=0;; *) r=1;; esac
 check "placeholder home name kept" $r
 
+# --- F4: privacy-redact.mjs missing (partial install): built-in rules, still logs ---
+LONE="$WORK/lone"; mkdir -p "$LONE"; cp "$HOOK" "$LONE/fleet-audit.mjs"
+LCMD="git push --force C:/$U/alice/repo /c/$U/alice/x C--$U-alice-repo zedtester $UUID acmeproj filterterm TOKEN=s3cr3tval"
+rm -f "$AUDIT"
+OUT=$(payload "$LCMD" | env USERNAME=zedtester CCV_PRIVACY_TERMS=acmeproj node "$LONE/fleet-audit.mjs" 2>/dev/null); RC=$?
+C="$(field command)"
+r=0; [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "$(cats)" = force-push ] && [ -n "$C" ] || r=1
+for leak in alice zedtester "$UUID" acmeproj filterterm s3cr3tval; do
+  case "$C" in *"$leak"*) r=1; echo "  leaked: $leak";; esac
+done
+check "module missing: exit 0, no stdout, event logged and redacted (got: ${C:0:90})" $r
+node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [real, lone, cmd] = process.argv.slice(1);
+const a = await import(pathToFileURL(real).href + "?lib");
+const b = await import(pathToFileURL(lone).href + "?lib");
+const o = { users: ["zedtester"], terms: ["acmeproj", "filterterm"] };
+const ra = a.auditCommand(cmd, "C:/work/project-A", o), rb = b.auditCommand(cmd, "C:/work/project-A", o);
+if (ra.command !== rb.command || ra.cats.join() !== rb.cats.join()) { console.error(ra.command + "\n" + rb.command); process.exit(1); }
+' "$HOOK" "$LONE/fleet-audit.mjs" "$LCMD" 2>/dev/null
+check "module missing: built-in rules redact exactly like the shared module" $?
+! grep -qE "^(import|\}) .*from '\./privacy-redact\.mjs'" "$HOOK"
+check "privacy-redact.mjs is not a static import" $?
+
 # --- fail open ---
 rm -f "$AUDIT"
 run_raw 'not json at all'

@@ -19,26 +19,105 @@
  * glpat-/sk-/sk_live_/sk_test_/rk_/npm_/hf_/xox*-/AKIA/AIza tokens, ConvertTo-SecureString
  * plaintext, attached mysql -p<pass>) plus the rules ported from tools/privacy_guard.py
  * (user-home paths, OS username, UUID-shaped ids, private terms from CCV_PRIVACY_TERMS,
- * ~/.claude/privacy-terms and .git/info/privacy-terms; an unreadable .git is skipped).
+ * ~/.claude/privacy-terms and .git/info/privacy-terms; an unreadable .git is skipped),
+ * taken from privacy-redact.mjs via a lazy import; when that module is missing (partial
+ * install) a built-in copy of the same rules is used, so the event is still logged.
  * Every regex is bounded (no nested or unbounded quantifiers) and the scanners are linear:
  * a 100k-char command costs well under 50 ms. Heuristic, quote-aware tokenizing; nested
  * `bash -c` / `cmd /c` / `pwsh -Command` are analyzed. Never blocks: always exit 0, no
  * stdout; any failure is a note on stderr. Imported as `fleet-audit.mjs?lib` it only
  * exports (auditCommand, categorize, redact) for tests.
  */
-import { readFileSync, appendFileSync, mkdirSync } from 'fs';
-import { homedir, tmpdir } from 'os';
-import { join, posix } from 'path';
-import {
-  PLACEHOLDER_NAMES, HOME_PATTERNS, UUID_RE, escapeRe, loadTerms, usernames,
-} from './privacy-redact.mjs';
+import { readFileSync, appendFileSync, mkdirSync, statSync } from 'fs';
+import { homedir, tmpdir, userInfo } from 'os';
+import { join, dirname, resolve, posix } from 'path';
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const MAX_COMMAND = 4000;
 const REDACT_MARGIN = 600;
 const REDACTED = '<redacted>';
 
-// --- redaction (privacy rules shared via privacy-redact.mjs, ported from tools/privacy_guard.py) ---
+// --- privacy rules: shared privacy-redact.mjs, loaded lazily; built-in copy as fallback ---
+
+// The rules as they were before privacy-redact.mjs existed (same behaviour), used only
+// when that module is missing or fails to load (partial install), so auditing never stops.
+function builtinRules() {
+  const fileLines = (p) => {
+    try {
+      return readFileSync(p, 'utf-8').replace(/^﻿/, '').split(/\r?\n/)
+        .map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    } catch { return []; }
+  };
+  // .git/info/privacy-terms of the repo containing cwd (worktrees: the common dir).
+  const cloneTermsFile = (cwd) => {
+    let dir = cwd;
+    for (let i = 0; dir && i < 40; i++) {
+      const dotgit = join(dir, '.git');
+      let st = null;
+      try { st = statSync(dotgit); } catch {}
+      if (st && st.isDirectory()) return join(dotgit, 'info', 'privacy-terms');
+      if (st && st.isFile()) {
+        let body = '';
+        try { body = readFileSync(dotgit, 'utf-8'); } catch { return null; }
+        const m = body.match(/^gitdir:\s*(.+)$/m);
+        if (!m) return null;
+        const gitdir = resolve(dir, m[1].trim());
+        let common = gitdir;
+        try { common = resolve(gitdir, readFileSync(join(gitdir, 'commondir'), 'utf-8').trim()); } catch {}
+        return join(common, 'info', 'privacy-terms');
+      }
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+    return null;
+  };
+  const SERVICE_ACCOUNTS = new Set(['runner', 'runneradmin', 'root']);
+  return {
+    PLACEHOLDER_NAMES: new Set(['x', 'user', 'name', 'you']),
+    HOME_PATTERNS: [
+      /(?<![A-Za-z])(?<pre>[A-Za-z]:(?:\/|\\+)Users(?:\/|\\+))(?<name><[^>\s]*>|[^/\\\s"'`<>:;,|*?()[\]{}]+)/gi,
+      /(?<![\w.])(?<pre>\/[A-Za-z]\/Users\/)(?<name><[^>\s]*>|[^/\\\s"'`<>:;,|*?()[\]{}]+)/gi,
+      /(?<![A-Za-z])(?<pre>[A-Za-z]--Users-)(?<name><[^>\s]*>|[A-Za-z0-9_.]+)/gi,
+    ],
+    UUID_RE: /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi,
+    escapeRe: (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    loadTerms(cwd) {
+      const env = (process.env.CCV_PRIVACY_TERMS || '').split(/[,\r\n]/)
+        .map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
+      const clone = cwd ? cloneTermsFile(cwd) : null;
+      const all = [...env, ...fileLines(join(homedir(), '.claude', 'privacy-terms')), ...(clone ? fileLines(clone) : [])];
+      const seen = new Map();
+      for (const t of all) if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
+      return [...seen.values()];
+    },
+    usernames() {
+      const names = [];
+      try { names.push(userInfo().username); } catch {}
+      names.push(process.env.USERNAME || '', process.env.USER || '');
+      const seen = new Map();
+      for (const n of names) {
+        if (n && n.length >= 3 && !SERVICE_ACCOUNTS.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+      }
+      return [...seen.values()];
+    },
+  };
+}
+
+async function privacyRules() {
+  try {
+    return await import(new URL('./privacy-redact.mjs', import.meta.url).href);
+  } catch (e) {
+    process.stderr.write(`fleet-audit: privacy-redact.mjs unavailable (${e && e.code ? e.code : e}); built-in rules\n`);
+    return builtinRules();
+  }
+}
+
+const {
+  PLACEHOLDER_NAMES, HOME_PATTERNS, UUID_RE, escapeRe, loadTerms, usernames,
+} = await privacyRules();
+
+// --- redaction (credential shapes here; privacy rules from above) ---
 
 // Credential shapes; group `s` (when present) is the secret, else the whole match.
 // Linear by construction: every quantifier is bounded and none is nested.
