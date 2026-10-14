@@ -10,6 +10,8 @@ writes (newest ``SUBAGENT_MAX_FILES`` only, read once per session).
 - collision: two alive sessions wrote the same absolute path in the last 30 min
   (Write/Edit/MultiEdit/NotebookEdit), or two alive sessions active in the last
   30 min (``last_activity``) sit in one git repo.
+- pending ask (alive sessions, no alert): ``extra.pending_ask`` = {since, line} of
+  the last AskUserQuestion with no tool result, at any age.
 - stuck (alive sessions): an AskUserQuestion, a ``waiting`` status or a prose
   question unanswered for 20 min; the same tool call failing 3+ times in a row at
   the end of the transcript; a subagent stopped at its turn limit with no report.
@@ -657,6 +659,24 @@ def _pending_ask(scan: _Scan | None) -> _Call | None:
     return None
 
 
+def record_pending_ask(session: Session, scan: _Scan | None) -> None:
+    """Set ``extra.pending_ask`` = {since, line} for an alive session's open ask.
+
+    No threshold: any AskUserQuestion without a tool result counts. A question
+    queued by away mode (ask-queue denies the box) has a result, so it does not.
+    The key is removed otherwise (dead session, answered, no ask, no transcript).
+    """
+    ask = _pending_ask(scan) if session.alive else None
+    if ask is None:
+        session.extra.pop("pending_ask", None)
+        return
+    since = None
+    if ask.ts is not None:
+        stamp = _dt.datetime.fromtimestamp(ask.ts, _dt.UTC)
+        since = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    session.extra["pending_ask"] = {"since": since, "line": ask.line}
+
+
 def _ask_wait(ask: _Call | None, now: float) -> _Finding | None:
     if ask and ask.ts and now - ask.ts > STUCK_WAIT_S:
         return (
@@ -1049,7 +1069,8 @@ def run_checks(
     now: float | None = None,
     tick: Callable[[], None] | None = None,
 ) -> FleetState:
-    """Add check alerts, ``collisions``, ``harness.drift`` and ``machine_alerts``.
+    """Add check alerts, ``collisions``, ``harness.drift``, ``machine_alerts`` and
+    per-session ``extra.pending_ask``.
 
     ``tick`` runs before each per-session step (the collector's deadline check).
     """
@@ -1069,6 +1090,7 @@ def run_checks(
     check_memory(state)
     for s, scan in zip(sessions, scans, strict=True):
         tick()
+        record_pending_ask(s, scan)
         check_stuck(s, scan, now)
         check_compliance(s, scan, ctx)
         check_session_sync(s, scan, last_sync)

@@ -445,6 +445,62 @@ class StuckTests(ChecksHome):
         self.assertEqual(self.alerts(answered, "stuck"), [])
         self.assertEqual(self.alerts(recent, "stuck"), [])
 
+    def test_pending_ask_recorded_regardless_of_threshold(self):
+        cwd = self.repo("project-A")
+        ask = use("q1", "AskUserQuestion", questions=[{"question": "A or B?"}])
+        recent = self.sess("sess-a1", cwd, [prompt("hi"), say(ask, ago=5)])
+        old = self.sess("sess-b1", cwd, [prompt("hi", ago=40), say(ask, ago=30)])
+        self.run_checks(recent, old)
+        line = self.line_of(recent, '"q1"')
+        self.assertEqual(
+            recent.extra["pending_ask"],
+            {"since": iso(5)[:19] + "Z", "line": line},
+        )
+        self.assertEqual(self.alerts(recent, "stuck"), [])
+        self.assertEqual(old.extra["pending_ask"]["since"], iso(30)[:19] + "Z")
+        self.assertEqual(len(self.alerts(old, "stuck")), 1)
+
+    def test_no_pending_ask_when_answered_dead_or_absent(self):
+        cwd = self.repo("project-A")
+        ask = use("q1", "AskUserQuestion", questions=[{"question": "A or B?"}])
+        answered = self.sess(
+            "sess-a1", cwd, [prompt("hi"), say(ask, ago=5), result("q1", ago=4)]
+        )
+        dead = self.sess("sess-b1", cwd, [prompt("hi"), say(ask, ago=5)], alive=False)
+        plain = self.sess("sess-c1", cwd, [prompt("hi"), say(text("ok"), ago=5)])
+        none = self.sess("sess-d1", cwd)
+        dead.extra["pending_ask"] = {"since": iso(90), "line": 2}  # stale value
+        self.run_checks(answered, dead, plain, none)
+        for s in (answered, dead, plain, none):
+            self.assertIsNone(s.extra.get("pending_ask"), s.session_id)
+
+    def test_away_mode_queued_ask_is_not_pending(self):
+        # ask-queue denies the box: Claude Code writes an error tool_result.
+        cwd = self.repo("project-A")
+        ask = use("q1", "AskUserQuestion", questions=[{"question": "A or B?"}])
+        denied = result(
+            "q1",
+            ago=29,
+            error=True,
+            content="fleet question queue: the user is away, so no question box "
+            "opens (a box would stop this session from reading messages). "
+            "Queued as q-1.",
+        )
+        s = self.sess("sess-a1", cwd, [prompt("hi", ago=40), say(ask, ago=30), denied])
+        self.run_checks(s)
+        self.assertIsNone(s.extra.get("pending_ask"))
+        self.assertEqual(self.alerts(s, "stuck"), [])
+
+    def test_pending_ask_serialized_in_state(self):
+        cwd = self.repo("project-A")
+        ask = use("q1", "AskUserQuestion", questions=[{"question": "A or B?"}])
+        s = self.sess("sess-a1", cwd, [prompt("hi"), say(ask, ago=5)])
+        state = self.run_checks(s)
+        saved = model.load_state(model.save_state(state))
+        self.assertEqual(saved.sessions[0].extra["pending_ask"], s.extra["pending_ask"])
+        data = json.loads(state.to_json())
+        self.assertEqual(data["sessions"][0]["pending_ask"]["line"], 2)
+
     def test_prose_question_unanswered(self):
         cwd = self.repo("project-A")
         records = [prompt("hi", ago=40), say(text("Should I commit?"), ago=30)]

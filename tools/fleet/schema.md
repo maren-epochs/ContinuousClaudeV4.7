@@ -116,6 +116,7 @@ Keys the collector adds outside the declared fields (kept in `extra`):
 | Session | `transcript` | absolute path of the transcript read |
 | Session | `status_updated_at`, `waiting_for` | `statusUpdatedAt` (ISO), `waitingFor` |
 | Session | `context_source` | `statusline`, `statusline-idle` or `transcript`: where `context_pct` came from (absent when null) |
+| Session | `pending_ask` | `{since, line}` set by `checks.run_checks` on alive sessions whose last AskUserQuestion has no tool result yet, at any age (no 20 min threshold, no alert of its own): `since` = the call's transcript timestamp as `YYYY-MM-DDTHH:MM:SSZ` (null when the record has none), `line` = its absolute transcript line. Absent otherwise (answered, dead, no ask, no transcript). A question queued by away mode is not pending: ask-queue denies the box, so the call has a tool result |
 
 `context_pct` prefers `<tmpdir>/claude-context-pct-<session_id[:8]>.txt`, the integer
 status.mjs writes from Claude Code's `used_percentage`, when its mtime is at most
