@@ -748,6 +748,19 @@ class ReportTests(CliHome):
             self.assertIn(needle, text)
         self.assertLess(text.index("[error]"), text.index("[warn]"))
 
+    def test_report_sync_labels(self):
+        cases = [
+            ({"in_sync": True, "behind_files": 0}, "harness: in sync ("),
+            ({"in_sync": False, "behind_files": 3}, "harness: behind HEAD (3 files)"),
+            ({"in_sync": False, "behind_files": 1}, "harness: behind HEAD (1 file)"),
+            ({"in_sync": False}, "harness: behind HEAD ("),
+            ({"in_sync": None, "behind_files": None}, "harness: unknown ("),
+        ]
+        for extra, needle in cases:
+            with self.subTest(extra=extra):
+                state = FleetState(harness=Harness(extra=extra))
+                self.assertIn(needle, fleet.report(state, []))
+
     def test_report_empty_sections(self):
         text = fleet.report(FleetState(), [])
         self.assertIn("no live sessions", text)

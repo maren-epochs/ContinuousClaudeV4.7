@@ -296,6 +296,9 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
     sync_text = {True: "in sync", False: "behind HEAD", None: "unknown"}[
         sync if isinstance(sync, bool) else None
     ]
+    behind = h.extra.get("behind_files")
+    if sync is False and isinstance(behind, int) and not isinstance(behind, bool):
+        sync_text += f" ({behind} file{'' if behind == 1 else 's'})"
     m = state.machine
     lines = [
         f"fleet state {state.generated_at or '-'}",

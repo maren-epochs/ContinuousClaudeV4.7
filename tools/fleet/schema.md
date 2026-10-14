@@ -108,7 +108,8 @@ Keys the collector adds outside the declared fields (kept in `extra`):
 |--------|-----|---------|
 | FleetState | `warnings` | str[]: unreadable session files, invalid manifest, failed audit rotation |
 | FleetState | `collect_s` | float: collection time in seconds |
-| Harness | `in_sync` | bool\|null: `head_sha == installed_sha` (null when either is unknown) |
+| Harness | `in_sync` | bool\|null: `behind_files == 0`. Computed from file contents, not commits: a commit that changes no installed file (e.g. `thoughts/` only) stays in sync even though `head_sha != installed_sha` |
+| Harness | `behind_files` | int\|null: `new` + `update` entries of the manifest repo's own `install/sync_global.py` `target_plan(~/.claude, manifest eol)` (loaded by path with importlib; rendered bytes, default `--python`, `.ccv47-keep` paths ignored). null (and `in_sync` null) when the repo, script, import, eol or plan fails. `fleet.py report` shows `behind HEAD (N files)` |
 | Harness | `dirty`, `synced_at` | manifest `dirty` and `generated_at` |
 | Session | `transcript` | absolute path of the transcript read |
 | Session | `status_updated_at`, `waiting_for` | `statusUpdatedAt` (ISO), `waitingFor` |

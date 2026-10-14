@@ -439,6 +439,20 @@ class UpdateDiffBackup(unittest.TestCase):
             self.assertEqual(dry.returncode, 1)
             self.assertIn("update  tools/requirements.txt", dry.stdout.splitlines())
 
+    def test_target_plan_matches_main(self) -> None:
+        """target_plan (fleet in_sync) plans exactly what main's --apply wrote."""
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "lf").returncode, 0)
+            self.assertEqual(_sync.actionable(_sync.target_plan(target, "lf")), [])
+            crlf = _sync.actionable(_sync.target_plan(target, "crlf"))
+            self.assertIn(
+                "tools/requirements.txt",
+                {dst.relative_to(target).as_posix() for _, dst, _, _ in crlf},
+            )
+            with self.assertRaises(KeyError):
+                _sync.target_plan(target, "cr")
+
 
 class KeepList(unittest.TestCase):
     """VAL-713: <target>/.ccv47-keep pins install-relative paths against --apply."""

@@ -620,39 +620,140 @@ class HandoffTests(FleetHome):
         self.assertIsNone(self.collect_one().handoff)
 
 
+SYNC_SCRIPT = Path(REPO_ROOT) / "install" / "sync_global.py"
+
+
 class HarnessTests(FleetHome):
-    def manifest(self, **fields):
-        data = {
-            "schema_version": 1,
-            "generated_at": "2026-10-07T12:00:00Z",
-            "repo": str(self.root / "repo"),
-            "head_sha": "a" * 40,
-            "dirty": False,
-            "files": {},
-        }
+    """in_sync = the manifest repo's own sync_global build_plan has nothing to write."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "repo" / "install").mkdir(parents=True)
+        # resolved: sync_global records REPO resolved (8.3 temp names expand)
+        self.repo = (self.root / "repo").resolve()
+        (self.repo / "install" / "sync_global.py").write_bytes(SYNC_SCRIPT.read_bytes())
+        self.put("harness/skills/demo/SKILL.md", "run py -3.13 tools/demo.py\n")
+        self.put("tools/demo.py", "print('demo')\n")
+        self.put(".claude/hooks/demo.mjs", "export default 1;\n")
+
+    def put(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def sync(self, eol="lf"):
+        """Run the fake repo's sync_global --apply into the temp ~/.claude."""
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(self.repo / "install" / "sync_global.py"),
+                "--apply",
+                "--target",
+                str(self.claude),
+                "--eol",
+                eol,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def edit_manifest(self, **fields):
+        data = json.loads(model.manifest_path().read_text(encoding="utf-8"))
         data.update(fields)
-        (self.root / "repo").mkdir(exist_ok=True)
         model.manifest_path().write_text(json.dumps(data), encoding="utf-8")
 
-    def test_in_sync(self):
-        self.manifest()
-        with mock.patch.object(collect, "git_head", return_value="a" * 40) as head:
+    def git(self, *args):
+        subprocess.run(
+            ["git", "-C", str(self.repo), "-c", "user.name=t", "-c"]
+            + ["user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+
+    def test_in_sync_even_when_head_moved(self):
+        self.sync()
+        self.edit_manifest(head_sha="a" * 40)
+        synced = json.loads(model.manifest_path().read_text("utf-8"))["generated_at"]
+        with mock.patch.object(collect, "git_head", return_value="b" * 40) as head:
             h = collect.collect().harness
-        head.assert_called_once_with(str(self.root / "repo"))
-        self.assertEqual(h.repo, str(self.root / "repo"))
-        self.assertEqual(h.head_sha, "a" * 40)
+        head.assert_called_once_with(str(self.repo))
+        self.assertEqual(h.repo, str(self.repo))
+        self.assertEqual(h.head_sha, "b" * 40)
         self.assertEqual(h.installed_sha, "a" * 40)
         self.assertEqual(h.drift, [])
         self.assertIs(h.extra["in_sync"], True)
+        self.assertEqual(h.extra["behind_files"], 0)
         self.assertIs(h.extra["dirty"], False)
-        self.assertEqual(h.extra["synced_at"], "2026-10-07T12:00:00Z")
+        self.assertRegex(synced, r"^\d{4}-\d\d-\d\dT")
+        self.assertEqual(h.extra["synced_at"], synced)
 
-    def test_behind(self):
-        self.manifest(dirty=True)
-        with mock.patch.object(collect, "git_head", return_value="b" * 40):
+    def test_crlf_install_in_sync(self):
+        self.sync(eol="crlf")
+        self.assertIs(collect.collect().harness.extra["in_sync"], True)
+
+    def test_behind_counts_new_and_updated_files(self):
+        self.sync()
+        self.put("tools/demo.py", "print('changed')\n")
+        self.put("tools/added.py", "x = 1\n")
+        with mock.patch.object(collect, "git_head", return_value="a" * 40):
             h = collect.collect().harness
         self.assertIs(h.extra["in_sync"], False)
-        self.assertIs(h.extra["dirty"], True)
+        self.assertEqual(h.extra["behind_files"], 2)
+
+    def test_kept_paths_ignored(self):
+        self.sync()
+        self.put("tools/demo.py", "print('changed')\n")
+        (self.claude / ".ccv47-keep").write_text("tools/demo.py\n", encoding="utf-8")
+        h = collect.collect().harness
+        self.assertIs(h.extra["in_sync"], True)
+        self.assertEqual(h.extra["behind_files"], 0)
+
+    def test_thoughts_only_commit_is_in_sync(self):
+        self.git("init", "-q")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "one")
+        self.sync()
+        installed = json.loads(model.manifest_path().read_text("utf-8"))["head_sha"]
+        self.put("thoughts/shared/handoffs/h.md", "# Handoff: x\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "two")
+        with mock.patch.object(collect, "git_head", side_effect=self.real_git_head):
+            h = collect.collect().harness
+        self.assertRegex(installed or "", r"^[0-9a-f]{40}$")
+        self.assertNotEqual(h.head_sha, installed)
+        self.assertIs(h.extra["in_sync"], True)
+
+    def test_unknown_when_sync_script_missing(self):
+        self.sync()
+        (self.repo / "install" / "sync_global.py").unlink()
+        with mock.patch.object(collect, "git_head", return_value="a" * 40):
+            h = collect.collect().harness
+        self.assertIsNone(h.extra["in_sync"])
+        self.assertIsNone(h.extra["behind_files"])
+
+    def test_unknown_when_sync_script_raises_on_import(self):
+        self.sync()
+        self.put("install/sync_global.py", "raise SystemExit(4)\n")
+        self.assertIsNone(collect.collect().harness.extra["in_sync"])
+
+    def test_unknown_when_plan_fails(self):
+        self.sync()
+        self.edit_manifest(eol="cr")
+        self.assertIsNone(collect.collect().harness.extra["in_sync"])
+        self.edit_manifest(eol=None)
+        self.assertIsNone(collect.collect().harness.extra["in_sync"])
+
+    def test_unknown_when_repo_missing(self):
+        self.sync()
+        self.edit_manifest(repo=str(self.root / "gone"))
+        h = collect.collect().harness
+        self.assertIsNone(h.extra["in_sync"])
+        self.assertIsNone(h.head_sha)
 
     def test_no_manifest(self):
         h = collect.collect().harness
@@ -660,6 +761,7 @@ class HarnessTests(FleetHome):
         self.assertIsNone(h.installed_sha)
         self.assertIsNone(h.head_sha)
         self.assertIsNone(h.extra["in_sync"])
+        self.assertIsNone(h.extra["behind_files"])
 
     def test_corrupt_manifest(self):
         model.manifest_path().write_text('{"repo": 5, "head_sha": [', "utf-8")

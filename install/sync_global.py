@@ -56,6 +56,10 @@ INCLUDE_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".py", ".txt", ".json"}
 # installed .mjs not registered in settings.json: skip registration check
 # (tldr-shim is spawned by tldr-read; worker-report-check is a worker.md frontmatter hook)
 NOT_EVENT_HOOKS = {"tldr-shim.mjs", "worker-report-check.mjs"}
+# --python / --eol defaults; EOLS maps the --eol name (recorded as manifest "eol") to bytes
+DEFAULT_PYTHON = "py -3.13" if sys.platform == "win32" else "python3"
+DEFAULT_EOL = "crlf" if sys.platform == "win32" else "lf"
+EOLS = {"crlf": "\r\n", "lf": "\n"}
 
 
 def rewrites(dest: str, python: str) -> list[tuple[re.Pattern, str]]:
@@ -164,13 +168,13 @@ def _parse_args() -> argparse.Namespace:
     )
     ap.add_argument(
         "--python",
-        default="py -3.13" if sys.platform == "win32" else "python3",
+        default=DEFAULT_PYTHON,
         help="interpreter command written into skills",
     )
     ap.add_argument(
         "--eol",
-        choices=["crlf", "lf"],
-        default="crlf" if sys.platform == "win32" else "lf",
+        choices=sorted(EOLS),
+        default=DEFAULT_EOL,
     )
     ap.add_argument(
         "--diff", action="store_true", help="show unified diffs for changed files"
@@ -229,6 +233,18 @@ def build_plan(
         elif dst.read_bytes() != new:
             plan.append((src, dst, new, "update"))
     return plan
+
+
+def target_plan(
+    target: Path, eol: str, python: str = DEFAULT_PYTHON
+) -> list[tuple[Path, Path, bytes, str]]:
+    """build_plan exactly as main runs it for --target/--eol/--python (keep file read).
+
+    eol is the --eol name ('crlf'|'lf', recorded as the manifest "eol"); other
+    values raise KeyError. tools/fleet/collect.py loads this module by path and
+    calls this for the fleet in_sync flag."""
+    rules = rewrites(target.as_posix(), python)
+    return build_plan(target, rules, EOLS[eol], load_keep(target))
 
 
 MANIFEST_FILE = ".ccv47-manifest.json"  # tools/fleet/model.py manifest_path()
@@ -341,11 +357,8 @@ def main() -> int:
     """CLI entry: plan and print the sync to --target; dry run exits 1 if out of sync, --apply writes."""
     args = _parse_args()
     target = Path(args.target)
-    rules = rewrites(target.as_posix(), args.python)
-    eol = "\r\n" if args.eol == "crlf" else "\n"
-
     keep = load_keep(target)
-    full = build_plan(target, rules, eol, keep)
+    full = target_plan(target, args.eol, args.python)
     print_plan(target, full, args.diff)
     kept = {dst.relative_to(target).as_posix() for _, dst, _, k in full if k == "keep"}
     for entry in sorted(keep - kept):

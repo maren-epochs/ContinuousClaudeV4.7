@@ -18,7 +18,8 @@ Sources, all read-only except the audit rotation and state.json:
 Claude Code's files are undocumented: every key is optional, wrong types become
 null, and vanished keys raise a ``schema_unknown`` alert instead of an error.
 ``collect()`` ends with ``checks.run_checks`` (alerts, collisions, per-file
-drift); the harness summary here is HEAD vs the sha recorded at the last sync.
+drift); the harness summary here runs the manifest repo's own sync plan against
+``~/.claude`` (in sync = nothing to write), never HEAD vs the recorded sha.
 It raises ``CollectTimeout`` past ``COLLECT_DEADLINE_S`` (checked between steps) and a
 watchdog thread hard-exits the process ``WATCHDOG_GRACE_S`` later when a step hangs
 (e.g. a network stat), so a stuck collect never replaces the last good state.json.
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import ctypes
 import datetime as _dt
+import importlib.util
 import json
 import math
 import os
@@ -524,21 +526,46 @@ def git_head(repo: str) -> str | None:
     return sha if sha is not None and re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
 
 
+def sync_behind(repo: str, eol: str | None) -> int | None:
+    """Files the repo's own install/sync_global.py would write into ~/.claude.
+
+    Loads the script by path (its REPO is that checkout) and runs ``target_plan``
+    with the manifest ``eol`` and its default --python, so the rendered bytes are
+    compared the way the sync compares them; kept paths never count. None on any
+    failure (missing script, import error, bad eol, unreadable file); never raises.
+    """
+    try:
+        if not isinstance(eol, str):
+            return None
+        script = Path(repo) / "install" / "sync_global.py"
+        spec = importlib.util.spec_from_file_location("_fleet_sync_global", script)
+        if spec is None or spec.loader is None or not script.is_file():
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        plan = mod.target_plan(model.claude_dir(), eol)
+        return sum(1 for entry in plan if entry[3] in ("new", "update"))
+    except (Exception, SystemExit):  # noqa: BLE001 - foreign script: any failure = unknown
+        return None
+
+
 def harness_info(warnings: list[str]) -> Harness:
-    """Repo HEAD vs the head_sha recorded in the install manifest."""
+    """Installed tree vs what the manifest repo's sync would write now (sync_behind)."""
     data = _load_json(model.manifest_path(), warnings, "manifest")
     data = data if isinstance(data, Mapping) else {}
     repo = _str(data.get("repo"))
     installed = _str(data.get("head_sha"))
-    head = git_head(repo) if repo and Path(repo).is_dir() else None
-    in_sync = head == installed if head and installed else None
+    has_repo = repo is not None and Path(repo).is_dir()
+    head = git_head(repo) if repo and has_repo else None
+    behind = sync_behind(repo, _str(data.get("eol"))) if repo and has_repo else None
     dirty = data.get("dirty")
     return Harness(
         repo=repo,
         head_sha=head,
         installed_sha=installed,
         extra={
-            "in_sync": in_sync,
+            "in_sync": None if behind is None else behind == 0,
+            "behind_files": behind,
             "dirty": dirty if isinstance(dirty, bool) else None,
             "synced_at": _str(data.get("generated_at")),
         },
