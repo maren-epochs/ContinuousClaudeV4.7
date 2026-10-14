@@ -13,7 +13,7 @@ test: "py -3.13 ~/.claude/tools/fleet/fleet.py report; py -3.13 -m pytest -q too
 # ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
 mental_model: |
   Desktop launcher lives OUTSIDE the repo, on the user's OneDrive desktop
-  (<Desktop> is what
+  (~\OneDrive - <private:bce66208>\Desktop is what
   [Environment]::GetFolderPath('Desktop') returns; it IS the desktop):
     Desktop\epoch harness.lnk -> %LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe -w new -p "epoch harness"
       (icon "...\claude\boot\epoch harness.ico,0"). Profile "epoch harness" is a WT JSON fragment at
@@ -111,7 +111,7 @@ next:
 
 next_session_prompt: |
   Last session: CI green for a03a634, installed harness in sync, and I got a desktop shortcut
-  "epoch harness" (<Desktop>\epoch harness.lnk)
+  "epoch harness" (~\OneDrive - <private:bce66208>\Desktop\epoch harness.lnk)
   that runs Desktop\claude\boot\epoch harness.ps1 -> fleet.py open --all with the Claude icon.
   1. Ask whether I double-clicked it and which projects I picked.
   2. Run `py -3.13 ~/.claude/tools/fleet/fleet.py report` and confirm those tabs are live,
@@ -123,8 +123,8 @@ next_session_prompt: |
 files:
   created:
     - thoughts/shared/handoffs/general/2026-10-09_18-36_desktop-launcher-ci-green.yaml
-    - "<Desktop>\\epoch harness.lnk (outside repo)"
-    - "<Desktop>\\claude\\boot\\epoch harness.ps1 (outside repo)"
-    - "<Desktop>\\claude\\boot\\epoch harness.ico (outside repo)"
+    - "~\\OneDrive - <private:bce66208>\\Desktop\\epoch harness.lnk (outside repo)"
+    - "~\\OneDrive - <private:bce66208>\\Desktop\\claude\\boot\\epoch harness.ps1 (outside repo)"
+    - "~\\OneDrive - <private:bce66208>\\Desktop\\claude\\boot\\epoch harness.ico (outside repo)"
     - "%LOCALAPPDATA%\\Microsoft\\Windows Terminal\\Fragments\\EpochHarness\\epoch-harness.json (outside repo)"
   modified: []
