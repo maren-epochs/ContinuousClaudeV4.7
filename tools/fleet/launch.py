@@ -5,6 +5,10 @@ names its cwd; a project is offered when that folder still exists, is not home o
 temp dir, and has a handoff to resume. Each tab runs a fresh ``claude '/resume-handoff'``
 in PowerShell, titled with the project folder name
 (``--suppressApplicationTitle`` keeps Claude Code from retitling it).
+
+With a stagger, each tab is its own ``wt`` call a few seconds after the last: the first
+creates a window with a unique name (``wt -w <name>`` makes the window when none has
+that name) and the later ones add tabs to it, so the sessions do not all start at once.
 """
 
 from __future__ import annotations
@@ -15,12 +19,15 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import collect, model
 
 TAB_PROMPT = "claude '/resume-handoff'"
+STAGGER_S = 3.0  # seconds between tabs for fleet.py open; 0 = one chained wt command
 CWD_HEAD_BYTES = 64 * 1024
 _CWD = re.compile(r'"cwd":\s*("(?:[^"\\]|\\.)*")')
 _SLUG = re.compile(r"[^A-Za-z0-9]")
@@ -157,6 +164,14 @@ def choose(listed: list[Target], answer: str) -> list[Target]:
     return list(chosen.values())
 
 
+def _tab_args(t: Target, shell: str, profile: str | None) -> list[str]:
+    args = ["new-tab"]
+    if profile:
+        args += ["-p", profile]
+    args += ["--title", t.title, "--suppressApplicationTitle"]
+    return args + ["-d", t.cwd, shell, "-NoExit", "-Command", TAB_PROMPT]
+
+
 def wt_args(
     targets: list[Target], shell: str = "pwsh", profile: str | None = None
 ) -> list[str]:
@@ -169,12 +184,35 @@ def wt_args(
     for i, t in enumerate(targets):
         if i:
             args.append(";")
-        args.append("new-tab")
-        if profile:
-            args += ["-p", profile]
-        args += ["--title", t.title, "--suppressApplicationTitle"]
-        args += ["-d", t.cwd, shell, "-NoExit", "-Command", TAB_PROMPT]
+        args += _tab_args(t, shell, profile)
     return args
+
+
+def window_name() -> str:
+    """A fresh Windows Terminal window name (not an integer id nor ``new``/``last``)."""
+    return f"fleet-{time.time_ns() // 1_000_000}"
+
+
+def wt_calls(
+    targets: list[Target],
+    shell: str = "pwsh",
+    profile: str | None = None,
+    stagger: float = 0.0,
+    window: str | None = None,
+) -> list[tuple[float, list[str]]]:
+    """``(delay before the call, wt.exe arguments)`` per wt call.
+
+    ``stagger`` <= 0: one call, the chained :func:`wt_args`. Otherwise one call per tab,
+    each ``-w <window>`` (``window`` default: :func:`window_name`) with the same tab
+    arguments; the first creates the named window, the rest wait ``stagger`` seconds.
+    """
+    if stagger <= 0:
+        return [(0.0, wt_args(targets, shell, profile))]
+    name = window or window_name()
+    return [
+        (float(stagger) if i else 0.0, ["-w", name, *_tab_args(t, shell, profile)])
+        for i, t in enumerate(targets)
+    ]
 
 
 def clean_env(env: dict[str, str]) -> dict[str, str]:
@@ -194,14 +232,30 @@ def clean_env(env: dict[str, str]) -> dict[str, str]:
     }
 
 
-def launch(targets: list[Target], profile: str | None = None) -> list[str]:
-    """Start Windows Terminal with the tabs; returns the full command."""
+def launch(
+    targets: list[Target],
+    profile: str | None = None,
+    stagger: float = 0.0,
+    sleep: Callable[[float], object] | None = None,
+    window: str | None = None,
+) -> list[list[str]]:
+    """Start Windows Terminal with the tabs; returns every wt command run.
+
+    ``sleep`` (default :func:`time.sleep`) waits out each delay of :func:`wt_calls`.
+    """
     if not targets:
         raise LaunchError("nothing to open")
     wt = shutil.which("wt")
     if wt is None:
         raise LaunchError("Windows Terminal (wt.exe) not found on PATH")
     shell = "pwsh" if shutil.which("pwsh") else "powershell"
-    command = [wt, *wt_args(targets, shell, profile)]
-    subprocess.Popen(command, close_fds=True, env=clean_env(dict(os.environ)))
-    return command
+    wait = sleep or time.sleep
+    env = clean_env(dict(os.environ))
+    commands = []
+    for delay, args in wt_calls(targets, shell, profile, stagger, window):
+        if delay > 0:
+            wait(delay)
+        command = [wt, *args]
+        subprocess.Popen(command, close_fds=True, env=env)
+        commands.append(command)
+    return commands

@@ -152,9 +152,11 @@ name (`--suppressApplicationTitle` keeps it).
    16: list the rest in prose and let the user name them via Other. A folder not listed (a
    project with no session yet) can be named by path.
    "Open all" in the request still goes through these boxes: the user picks, not `--all`.
-3. `open <pick>... --dry-run` shows the `wt` command; then `open <pick>...` (numbers, names or
-   folder paths). It starts the window and returns; the new sessions are independent of this
-   one. Exit 1 = unknown name, missing folder or no `wt.exe`. `--all` without a terminal only
+3. `open <pick>... --dry-run` shows the `wt` commands; then `open <pick>...` (numbers, names or
+   folder paths). `--stagger SECONDS` (default 3) opens one tab per `wt` call that many seconds
+   apart: the first creates a uniquely named window (`wt -w fleet-<ms>`), the rest add tabs to
+   it; `--stagger 0` = one chained `wt -w new` command. It starts the window and returns once
+   the last tab is requested; the new sessions are independent of this one. Exit 1 = unknown name, missing folder or no `wt.exe`. `--all` without a terminal only
    lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
    them. In the user's own terminal, `open --all` lists them and asks which to open.
 

@@ -36,6 +36,7 @@ import difflib
 import importlib
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -1027,6 +1028,7 @@ def open_sessions(
     dry_run: bool,
     yes: bool = False,
     profile: str | None = None,
+    stagger: float = launch.STAGGER_S,
 ) -> str:
     """List openable projects, or open the picked ones as Windows Terminal tabs.
 
@@ -1068,10 +1070,15 @@ def open_sessions(
                 if not targets:
                     return "cancelled: nothing opened"
         if dry_run:
-            return "wt " + subprocess.list2cmdline(
-                launch.wt_args(targets, profile=profile)
+            return "\n".join(
+                (f"(after {delay:g} s) " if delay else "")
+                + "wt "
+                + subprocess.list2cmdline(args)
+                for delay, args in launch.wt_calls(
+                    targets, profile=profile, stagger=stagger
+                )
             )
-        launch.launch(targets, profile)
+        launch.launch(targets, profile, stagger)
     except launch.LaunchError as exc:
         raise Refused(str(exc)) from None
     return f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets)
@@ -1088,6 +1095,16 @@ def _epoch(value: str) -> float:
         raise argparse.ArgumentTypeError(
             f"expected epoch seconds or ISO time, got {value!r}"
         ) from None
+
+
+def _seconds(value: str) -> float:
+    try:
+        n = float(value)
+    except ValueError:
+        n = math.nan
+    if not n >= 0 or math.isinf(n):
+        raise argparse.ArgumentTypeError(f"expected seconds >= 0, got {value!r}")
+    return n
 
 
 def _positive(value: str) -> int:
@@ -1144,9 +1161,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--yes", action="store_true", help="with --all: open every one without asking"
     )
-    p.add_argument("--dry-run", action="store_true", help="print the wt command only")
+    p.add_argument("--dry-run", action="store_true", help="print the wt commands only")
     p.add_argument(
         "--profile", help="Windows Terminal profile for the tabs (its icon and colors)"
+    )
+    p.add_argument(
+        "--stagger",
+        type=_seconds,
+        default=launch.STAGGER_S,
+        metavar="SECONDS",
+        help=f"seconds between tabs (default {launch.STAGGER_S:g}; 0 = one wt command)",
     )
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
@@ -1166,7 +1190,9 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "questions": lambda a: list_questions(a.all, a.json),
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
-    "open": lambda a: open_sessions(a.picks, a.all, a.dry_run, a.yes, a.profile),
+    "open": lambda a: open_sessions(
+        a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
+    ),
 }
 
 

@@ -195,7 +195,7 @@ class WtArgsTests(unittest.TestCase):
             mock.patch.object(launch.shutil, "which", side_effect=which),
             mock.patch.object(launch.subprocess, "Popen") as popen,
         ):
-            command = launch.launch([launch.Target("a", "C:\\a")])
+            (command,) = launch.launch([launch.Target("a", "C:\\a")])
         popen.assert_called_once()
         self.assertEqual(command[0], "C:\\wt.exe")
         self.assertIn("powershell", command)
@@ -223,6 +223,93 @@ class WtArgsTests(unittest.TestCase):
         self.assertFalse(set(markers) & {k.upper() for k in env})
         self.assertEqual(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "90")
         self.assertIn("PATH", {k.upper() for k in env})
+
+
+class StaggerTests(unittest.TestCase):
+    targets = [
+        launch.Target("a", r"C:\p\a"),
+        launch.Target("b b", r"C:\p\b"),
+        launch.Target("c", r"C:\p\c"),
+    ]
+
+    @staticmethod
+    def tabs(args):
+        """wt_args split into per-tab argument lists (without the leading -w new)."""
+        tabs, tab = [], []
+        for arg in args[2:]:
+            if arg == ";":
+                tabs.append(tab)
+                tab = []
+            else:
+                tab.append(arg)
+        return [*tabs, tab]
+
+    def test_stagger_zero_keeps_the_single_chained_command(self):
+        calls = launch.wt_calls(self.targets, profile="p", stagger=0)
+        self.assertEqual(calls, [(0.0, launch.wt_args(self.targets, profile="p"))])
+
+    def test_first_call_names_the_window_later_calls_target_it_after_a_delay(self):
+        calls = launch.wt_calls(
+            self.targets, "powershell", "p", stagger=3, window="fleet-7"
+        )
+        self.assertEqual([d for d, _ in calls], [0.0, 3.0, 3.0])
+        expected = self.tabs(launch.wt_args(self.targets, "powershell", "p"))
+        for (_, args), tab in zip(calls, expected, strict=True):
+            self.assertEqual(args[:2], ["-w", "fleet-7"])
+            self.assertEqual(args[2:], tab)
+            self.assertNotIn(";", args)
+
+    def test_window_name_is_a_unique_named_window_not_a_reserved_id(self):
+        name = launch.window_name()
+        self.assertRegex(name, r"^fleet-\d+$")
+        self.assertNotIn(name, ("new", "last", "-1", "0"))
+        calls = launch.wt_calls(self.targets, stagger=1)
+        self.assertEqual(len({tuple(args[:2]) for _, args in calls}), 1)
+        self.assertRegex(calls[0][1][1], r"^fleet-\d+$")
+
+    def run_launch(self, targets, **kw):
+        order = mock.Mock()
+        with (
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_CHILD_SESSION": "1"}),
+            mock.patch.object(launch.shutil, "which", return_value="C:\\wt.exe"),
+            mock.patch.object(launch.subprocess, "Popen", order.popen),
+        ):
+            commands = launch.launch(targets, sleep=order.sleep, **kw)
+        return commands, order
+
+    def test_launch_staggered_runs_one_wt_call_per_tab_with_sleeps_between(self):
+        commands, order = self.run_launch(self.targets, stagger=2.5, window="fleet-9")
+        self.assertEqual(
+            [c[0] for c in order.mock_calls],
+            ["popen", "sleep", "popen", "sleep", "popen"],
+        )
+        self.assertEqual(order.sleep.call_args_list, [mock.call(2.5)] * 2)
+        self.assertEqual(len(commands), 3)
+        for call, command in zip(order.popen.call_args_list, commands, strict=True):
+            self.assertEqual(call.args[0], command)
+            self.assertEqual(command[:3], ["C:\\wt.exe", "-w", "fleet-9"])
+            self.assertNotIn("CLAUDE_CODE_CHILD_SESSION", call.kwargs["env"])
+
+    def test_launch_staggered_single_tab_never_sleeps(self):
+        commands, order = self.run_launch(self.targets[:1], stagger=3)
+        order.sleep.assert_not_called()
+        self.assertEqual(len(commands), 1)
+
+    def test_launch_default_sleep_is_time_sleep(self):
+        with (
+            mock.patch.object(launch.shutil, "which", return_value="C:\\wt.exe"),
+            mock.patch.object(launch.subprocess, "Popen") as popen,
+            mock.patch.object(launch.time, "sleep") as sleep,
+        ):
+            launch.launch(self.targets[:2], stagger=4)
+        self.assertEqual(popen.call_count, 2)
+        sleep.assert_called_once_with(4)
+
+    def test_launch_stagger_zero_is_one_popen(self):
+        commands, order = self.run_launch(self.targets, stagger=0)
+        order.popen.assert_called_once()
+        order.sleep.assert_not_called()
+        self.assertEqual(commands[0][1:3], ["-w", "new"])
 
 
 class OpenCommandTests(LaunchHome):
@@ -256,8 +343,37 @@ class OpenCommandTests(LaunchHome):
             code, out, _ = self.run_cli("amber", "--dry-run")
         self.assertEqual(code, 0)
         popen.assert_not_called()
-        self.assertTrue(out.startswith("wt -w new new-tab --title amber"))
+        self.assertRegex(out, r"^wt -w fleet-\d+ new-tab --title amber")
         self.assertIn("\"claude '/resume-handoff'\"", out)
+
+    def test_dry_run_prints_every_staggered_call_with_its_delay(self):
+        self.project("amber")
+        self.project("myrtle")
+        with mock.patch.object(launch.subprocess, "Popen") as popen:
+            code, out, _ = self.run_cli("--all", "--yes", "--dry-run")
+        self.assertEqual(code, 0)
+        popen.assert_not_called()
+        first, second = out.strip().splitlines()
+        name = re.match(r"wt -w (fleet-\d+) new-tab --title amber ", first).group(1)
+        self.assertTrue(
+            second.startswith(f"(after 3 s) wt -w {name} new-tab --title myrtle ")
+        )
+        self.assertNotIn(" ; ", out)
+
+    def test_stagger_option_sets_the_delay_and_zero_keeps_one_command(self):
+        self.project("amber")
+        self.project("myrtle")
+        _, out, _ = self.run_cli("--all", "--yes", "--dry-run", "--stagger", "1.5")
+        self.assertIn("(after 1.5 s) wt -w fleet-", out)
+        _, out, _ = self.run_cli("--all", "--yes", "--dry-run", "--stagger", "0")
+        self.assertEqual(len(out.strip().splitlines()), 1)
+        self.assertTrue(out.startswith("wt -w new new-tab --title amber"))
+        self.assertIn(" ; new-tab --title myrtle", out)
+
+    def test_negative_stagger_is_a_usage_error(self):
+        with self.assertRaises(SystemExit) as exit_:
+            self.run_cli("amber", "--stagger", "-1")
+        self.assertEqual(exit_.exception.code, 2)
 
     def test_all_yes_opens_every_project(self):
         self.project("amber")
@@ -265,11 +381,15 @@ class OpenCommandTests(LaunchHome):
         with (
             mock.patch.object(launch.shutil, "which", return_value="C:\\wt.exe"),
             mock.patch.object(launch.subprocess, "Popen") as popen,
+            mock.patch.object(launch.time, "sleep") as sleep,
         ):
             code, out, _ = self.run_cli("--all", "--yes")
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "opened 2 tab(s): amber, myrtle")
-        self.assertEqual(popen.call_args.args[0].count("new-tab"), 2)
+        self.assertEqual(popen.call_count, 2)
+        sleep.assert_called_once_with(3.0)
+        for call in popen.call_args_list:
+            self.assertEqual(call.args[0].count("new-tab"), 1)
 
     def test_all_with_a_directory_pick_adds_it(self):
         self.project("amber")

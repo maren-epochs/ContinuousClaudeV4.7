@@ -1078,5 +1078,28 @@ class ScriptModeTests(CliHome):
         self.assertIn("dashboard.py", out.stderr)
 
 
+class OpenStaggerParseTests(unittest.TestCase):
+    def test_stagger_defaults_to_three_seconds_and_accepts_zero(self):
+        parse = fleet._parser().parse_args
+        self.assertEqual(parse(["open"]).stagger, 3.0)
+        self.assertEqual(parse(["open", "--stagger", "0"]).stagger, 0.0)
+        self.assertEqual(parse(["open", "--stagger", "0.5"]).stagger, 0.5)
+
+    def test_bad_stagger_is_a_usage_error(self):
+        for bad in ("-1", "soon", "nan"):
+            with (
+                self.subTest(bad=bad),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                fleet._parser().parse_args(["open", "--stagger", bad])
+
+    def test_open_command_passes_the_stagger_through(self):
+        args = fleet._parser().parse_args(["open", "amber", "--stagger", "2"])
+        with mock.patch.object(fleet, "open_sessions", return_value="") as opened:
+            fleet._COMMANDS["open"](args)
+        self.assertEqual(opened.call_args.kwargs["stagger"], 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
