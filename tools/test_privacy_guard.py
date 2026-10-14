@@ -429,5 +429,241 @@ class TestTermSources(GuardCase):
             self.assertNotIn(t, r.stderr)
 
 
+# Synthetic redaction fixtures, assembled at runtime.
+SHORT_T = "quux"
+TERM_WITH_USER = SYNTH_NAME + "-labs"
+FIXED_KEY = bytes(range(32))
+TOKEN_RE = re.compile(r"<private:[0-9a-f]{8}>")
+
+
+def _token(key: bytes, term: str) -> str:
+    """Expected placeholder: first 8 hex of HMAC-SHA256(key, casefolded term)."""
+    import hashlib
+    import hmac
+
+    digest = hmac.new(key, term.casefold().encode("utf-8"), hashlib.sha256)
+    return "<private:" + digest.hexdigest()[:8] + ">"
+
+
+class RedactCase(GuardCase):
+    """VAL-802: reversible redaction (redact / restore / key / placeholder_token)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.mod = _guard_module()
+        self.key_file = self.tmp / "key" / "privacy-key"
+        self.key_file.parent.mkdir()
+        self.key_file.write_bytes(FIXED_KEY)
+        terms = [(SYNTH_TERM, "t1"), (SHORT_T, "t2"), (TERM_WITH_USER, "t3")]
+        self.guard = self.mod.Guard([SYNTH_NAME], terms, [])
+
+    def redact(self, text: str, guard=None) -> str:
+        return self.mod.redact(text, guard or self.guard, key=FIXED_KEY)
+
+
+class TestKeyAndToken(RedactCase):
+    def test_placeholder_token_is_keyed_hmac_of_casefolded_term(self):
+        tok = self.mod.placeholder_token(SYNTH_TERM, FIXED_KEY)
+        self.assertEqual(tok, _token(FIXED_KEY, SYNTH_TERM))
+        self.assertRegex(tok, r"^<private:[0-9a-f]{8}>$")
+        self.assertEqual(self.mod.placeholder_token(SYNTH_TERM.upper(), FIXED_KEY), tok)
+        other = self.mod.placeholder_token(SYNTH_TERM, bytes(32))
+        self.assertNotEqual(other, tok)
+
+    def test_key_created_once_with_32_random_bytes(self):
+        path = self.tmp / "fresh" / "nested" / "privacy-key"
+        key = self.mod.load_or_create_key(path)
+        self.assertEqual(len(key), 32)
+        self.assertEqual(path.read_bytes(), key)
+        self.assertEqual(self.mod.load_or_create_key(path), key)
+        other = self.mod.load_or_create_key(self.tmp / "second-key")
+        self.assertNotEqual(other, key)
+
+    def test_existing_key_is_read_not_replaced(self):
+        self.assertEqual(self.mod.load_or_create_key(self.key_file), FIXED_KEY)
+        self.assertEqual(self.key_file.read_bytes(), FIXED_KEY)
+
+    def test_short_key_file_is_an_error(self):
+        bad = self.tmp / "bad-key"
+        bad.write_bytes(b"short")
+        with self.assertRaises(ValueError):
+            self.mod.load_or_create_key(bad)
+
+    def test_default_key_path_under_home_claude(self):
+        with (
+            mock.patch.object(self.mod.Path, "home", return_value=self.home),
+            mock.patch.dict(self.mod.os.environ, clear=False) as env,
+        ):
+            env.pop(self.mod.ENV_KEY_FILE, None)
+            want = self.home / ".claude" / "privacy-key"
+            self.assertEqual(self.mod.default_key_file(), want)
+            key = self.mod.load_or_create_key()
+        self.assertEqual(want.read_bytes(), key)
+
+    def test_env_overrides_default_key_path(self):
+        target = self.tmp / "env-key"
+        with mock.patch.dict(self.mod.os.environ, {self.mod.ENV_KEY_FILE: str(target)}):
+            self.assertEqual(self.mod.default_key_file(), target)
+            key = self.mod.load_or_create_key()
+        self.assertEqual(target.read_bytes(), key)
+
+
+class TestRedact(RedactCase):
+    def test_home_prefix_every_spelling_keeps_separators(self):
+        cases = {
+            home("/", "alice") + "/proj/a.py": "~/proj/a.py",
+            home("\\", "alice") + "\\proj\\a.py": "~\\proj\\a.py",
+            home("\\\\", "alice") + "\\\\proj\\\\a.py": "~\\\\proj\\\\a.py",
+            "c:" + "/users/" + "alice/x": "~/x",
+            "cd /c" + "/Users/" + "alice/x/y": "cd ~/x/y",
+            "projects/C"
+            + "--Users-"
+            + "alice-Documents-proj": "projects/~-Documents-proj",
+            "end " + home("/", "alice"): "end ~",
+        }
+        for src, want in cases.items():
+            self.assertEqual(self.redact(src), want, src)
+
+    def test_placeholder_home_names_untouched(self):
+        for src in (home("/", "<you>") + "/.claude", home("\\", "x") + "\\p"):
+            self.assertEqual(self.redact(src), src)
+
+    def test_username_elsewhere_whole_word_case_insensitive(self):
+        src = "owner " + SYNTH_NAME.upper() + " and x" + SYNTH_NAME + "y"
+        self.assertEqual(self.redact(src), "owner <user> and x" + SYNTH_NAME + "y")
+
+    def test_home_dir_name_is_not_left_as_user_token(self):
+        src = home("/", SYNTH_NAME) + "/proj"
+        self.assertEqual(self.redact(src), "~/proj")
+
+    def test_terms_case_insensitive_longest_first(self):
+        src = "a " + SYNTH_TERM.title() + " b " + SHORT_T.upper() + " c"
+        want = (
+            "a "
+            + _token(FIXED_KEY, SYNTH_TERM)
+            + " b "
+            + _token(FIXED_KEY, SHORT_T)
+            + " c"
+        )
+        self.assertEqual(self.redact(src), want)
+
+    def test_term_containing_username_wins_over_username(self):
+        src = "x " + TERM_WITH_USER + " y"
+        self.assertEqual(
+            self.redact(src), "x " + _token(FIXED_KEY, TERM_WITH_USER) + " y"
+        )
+
+    def test_uuids_left_as_is(self):
+        src = "resume " + SYNTH_UUID
+        self.assertEqual(self.redact(src), src)
+
+    def test_output_passes_scan_except_uuids(self):
+        src = "\n".join(
+            [
+                "cd " + home("\\\\", "alice") + "\\\\proj",
+                "by " + SYNTH_NAME + " for " + SYNTH_TERM.upper(),
+                "/c" + "/Users/" + SYNTH_NAME + "/" + SHORT_T,
+                "session " + SYNTH_UUID,
+            ]
+        )
+        out = self.redact(src)
+        reasons = [h.reason for ln in out.splitlines() for h in self.guard.scan(ln)]
+        self.assertEqual(len(reasons), 1, out)
+        self.assertIn("session-UUID", reasons[0])
+
+    def test_idempotent(self):
+        src = SYNTH_TERM + " " + SYNTH_NAME + " " + home("/", "alice") + "/p"
+        once = self.redact(src)
+        self.assertEqual(self.redact(once), once)
+
+    def test_allowlisted_hits_left_alone(self):
+        allow = [re.compile(re.escape(SHORT_T), re.IGNORECASE)]
+        guard = self.mod.Guard([SYNTH_NAME], [(SHORT_T, "t")], allow)
+        self.assertEqual(self.redact("a " + SHORT_T, guard), "a " + SHORT_T)
+
+    def test_no_terms_matched_never_loads_key(self):
+        key = self.tmp / "never" / "privacy-key"
+        with mock.patch.dict(self.mod.os.environ, {self.mod.ENV_KEY_FILE: str(key)}):
+            out = self.mod.redact("by " + SYNTH_NAME, self.guard)
+        self.assertEqual(out, "by <user>")
+        self.assertFalse(key.exists())
+
+    def test_default_key_used_when_not_given(self):
+        with mock.patch.dict(
+            self.mod.os.environ, {self.mod.ENV_KEY_FILE: str(self.key_file)}
+        ):
+            out = self.mod.redact(SHORT_T, self.guard)
+        self.assertEqual(out, _token(FIXED_KEY, SHORT_T))
+
+
+class TestRestore(RedactCase):
+    def test_round_trip_terms(self):
+        src = "a " + SYNTH_TERM + " b " + SHORT_T + " c " + TERM_WITH_USER
+        out = self.redact(src)
+        self.assertNotIn(SHORT_T, out)
+        terms = [SYNTH_TERM, SHORT_T, TERM_WITH_USER]
+        self.assertEqual(self.mod.restore(out, terms, key=FIXED_KEY), src)
+
+    def test_accepts_load_terms_tuples(self):
+        out = self.redact(SYNTH_TERM)
+        restored = self.mod.restore(out, [(SYNTH_TERM, "label")], key=FIXED_KEY)
+        self.assertEqual(restored, SYNTH_TERM)
+
+    def test_unknown_tokens_unchanged(self):
+        unknown = "<private:" + "0" * 8 + ">"
+        text = "x " + unknown + " " + self.redact(SHORT_T)
+        out = self.mod.restore(text, [SHORT_T], key=FIXED_KEY)
+        self.assertEqual(out, "x " + unknown + " " + SHORT_T)
+
+    def test_wrong_key_restores_nothing(self):
+        out = self.redact(SHORT_T)
+        self.assertEqual(self.mod.restore(out, [SHORT_T], key=bytes(32)), out)
+
+
+class TestRedactCli(RedactCase):
+    def cli(self, *args: str):
+        cmd = [sys.executable, str(GUARD), "--terms-file", str(self.terms)]
+        cmd += ["--allow-file", str(self.allow), "--username", SYNTH_NAME]
+        cmd += ["--key-file", str(self.key_file), *args]
+        return subprocess.run(cmd, capture_output=True, cwd=self.tmp, env=self.env)
+
+    def test_redact_in_place_preserves_eol_and_utf8(self):
+        crlf = self.tmp / "crlf.md"
+        body = "caf\u00e9 " + SYNTH_TERM + "\r\nhome " + home("/", "alice") + "/p\r\n"
+        crlf.write_bytes(body.encode("utf-8"))
+        lf = self.tmp / "lf.md"
+        lf.write_bytes(("by " + SYNTH_NAME + "\n").encode("utf-8"))
+        r = self.cli("--redact", crlf.name, lf.name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        want = "caf\u00e9 " + _token(FIXED_KEY, SYNTH_TERM) + "\r\nhome ~/p\r\n"
+        self.assertEqual(crlf.read_bytes(), want.encode("utf-8"))
+        self.assertEqual(lf.read_bytes(), b"by <user>\n")
+        # A redacted file passes the guard itself.
+        self.assertEqual(self.run_guard(crlf, lf).returncode, 0)
+
+    def test_redacted_uuid_still_flagged_by_check(self):
+        f = self.write("s.md", SYNTH_TERM + " " + SYNTH_UUID + "\n")
+        self.assertEqual(self.cli("--redact", f.name).returncode, 0)
+        r = self.run_guard(f)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("session-UUID", r.stdout)
+        self.assertNotIn("private term", r.stdout)
+
+    def test_restore_prints_restored_text(self):
+        src = "x " + SYNTH_TERM + "\r\ny\n"
+        f = self.tmp / "r.md"
+        f.write_bytes(src.encode("utf-8"))
+        self.assertEqual(self.cli("--redact", f.name).returncode, 0)
+        self.assertNotIn(SYNTH_TERM.encode(), f.read_bytes())
+        r = self.cli("--restore", f.name)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, src.encode("utf-8"))
+        self.assertNotIn(SYNTH_TERM.encode(), f.read_bytes())
+
+    def test_redact_missing_file_is_usage_error(self):
+        r = self.cli("--redact", "gone.md")
+        self.assertEqual(r.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
