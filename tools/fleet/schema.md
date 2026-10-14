@@ -18,6 +18,7 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/away` | flag file (UTC timestamp line) | `fleet.py away on` / removed by `away off` | `questions.away_path()`, `is_away`, `set_away` |
 | `~/.claude/fleet/questions/<session_id>.json` | `QuestionQueue` (section below) | ask-queue hook while away (append, atomic replace); `fleet.py answer` | `questions.load`, `questions.answer` |
 | `~/.claude/fleet/collect.err` | text, one line per failed collect | `fleet.py collect`, append, capped 256 KB | `fleet._append_err` |
+| `~/.claude/fleet/digests/YYYY-MM-DD.md` | markdown digest (section below), local date | `fleet.py digest --write`, atomic replace | `digest.digest_path`, `digest.write` |
 | `~/.claude/.ccv47-manifest.json` | install manifest (section below) | `install/sync_global.py --apply`, atomic replace | `manifest_path()` |
 
 Home resolution (`home_dir()`): on win32 `USERPROFILE`, then `HOME`; elsewhere `HOME`,
@@ -177,6 +178,32 @@ from manifest `head_sha`, or the marker is more than 60 s newer than `generated_
 a `sync --apply` that failed before rewriting the manifest), `drift` holds one entry
 instead: `status` `stale`, `installed_path` = the manifest, `expected_sha` = marker sha,
 `actual_sha` = manifest `head_sha`, `extra.detail` starting `manifest stale`.
+
+### Digest (`tools/fleet/digest.py`)
+
+`fleet.py digest [--fresh] [--json | --write]` summarizes state.json in plain language
+(`--fresh` collects first). `digest.build(state)` returns the data, `--json` prints it:
+
+| Key | Meaning |
+|-----|---------|
+| `date` | local date `YYYY-MM-DD` (names the `--write` file) |
+| `generated_at`, `state_at`, `state_age_s` | digest time (UTC `...Z`), `state.generated_at` and its age |
+| `machine` | `mem_free_gb`, `mem_total_gb`, `alerts` (`machine_alerts` as `{severity, kind, detail}`) |
+| `harness` | `sync` (`in sync`, `differs from repo (N files)`, `unknown`: the `fleet.py report` wording), `in_sync`, `behind_files`, `drift` (count of drift entries) |
+| `inbox_count` | `state.inbox_count` |
+| `audit_24h` | events in the last 256 KB of `audit.jsonl` whose `ts` is within 24 h (read at digest time, not from `audit_recent`) |
+| `sessions` | alive sessions: `project`, `status`, `last_activity`, `last_activity_age_s`, `handoff_age_s`, `waiting` (has `pending_ask`), `waiting_since`, `waiting_age_s`, `alerts`, `needs_attention` (waiting or a warn/error alert). Order: needs attention first, waiting before alert-only (longest wait first), then worst severity, then most recent activity |
+| `not_running` | count of sessions not alive (omitted from `sessions`) |
+| `needs_you` | `{kind, who, severity, age_s, text}`: pending questions (`question`, longest wait first), then warn/error alerts (`alert`, worst first; machine before sessions within a severity; `who` = project or `machine`) |
+
+Markdown: `# Fleet digest <date>`, the collection time, bullets for machine (plus
+machine alerts), harness sync and drift, inbox, audit; a `## Sessions` table (project,
+status, last activity, handoff, waiting question, alerts as `kind (severity)`); a
+`## Needs you` list. Ages read `<1 min`, `N min`, `N.N h` (under 48 h) or `N.N d`. Every
+string, in the markdown and JSON, is masked by `lessons.mask` with
+`lessons.default_guard(home)` (private terms, home paths, usernames, session ids become
+`<redacted>`). `--write` saves the masked markdown to `digests/<date>.md` via
+`model.write_atomic` and prints only the path.
 
 ## Proposal (`harness-inbox/<id>.json`)
 

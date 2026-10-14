@@ -20,6 +20,10 @@ open [pick...]   list projects to open; with picks (number, name or folder) or -
                  claude running /resume-handoff (--dry-run prints the command); --all lists
                  every project and asks which in a terminal, else opens nothing; --all
                  --yes opens every one
+digest           plain-language markdown summary: machine, harness sync, inbox, audit
+                 in the last 24 h, sessions needing attention first, a "needs you" list
+                 (--fresh collects first; --json the same data; --write saves
+                 ~/.claude/fleet/digests/YYYY-MM-DD.md and prints the path)
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
 Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
@@ -48,11 +52,11 @@ from types import ModuleType
 from typing import Any
 
 if __package__:
-    from . import collect, launch, lessons, model, questions
+    from . import collect, digest, launch, lessons, model, questions
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from fleet import collect, launch, lessons, model, questions
+    from fleet import collect, digest, launch, lessons, model, questions
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
 LESSONS_MAX = 10
@@ -296,13 +300,7 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
         proposals = model.list_proposals()
     alive = sum(1 for s in state.sessions if s.alive)
     h = state.harness
-    sync = h.extra.get("in_sync")
-    sync_text = {True: "in sync", False: "differs from repo", None: "unknown"}[
-        sync if isinstance(sync, bool) else None
-    ]
-    behind = h.extra.get("behind_files")
-    if sync is False and isinstance(behind, int) and not isinstance(behind, bool):
-        sync_text += f" ({behind} file{'' if behind == 1 else 's'})"
+    sync_text = digest.sync_label(h)
     m = state.machine
     lines = [
         f"fleet state {state.generated_at or '-'}",
@@ -1175,6 +1173,15 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"seconds between tabs (default {launch.STAGGER_S:g}; 0 = one wt command)",
     )
+    p = sub.add_parser("digest", help="plain-language summary of every session")
+    p.add_argument("--fresh", action="store_true", help="collect first")
+    out = p.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true", help="the same data as JSON")
+    out.add_argument(
+        "--write",
+        action="store_true",
+        help="save ~/.claude/fleet/digests/YYYY-MM-DD.md, print the path",
+    )
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1193,6 +1200,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "questions": lambda a: list_questions(a.all, a.json),
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
+    "digest": lambda a: digest.render(_state(a.fresh), a.json, a.write),
     "open": lambda a: open_sessions(
         a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
     ),

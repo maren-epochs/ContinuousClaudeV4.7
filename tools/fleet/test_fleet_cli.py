@@ -6,6 +6,7 @@ with a manifest and inbox); the real ~/.claude and this repo are never touched.
 """
 
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -23,14 +24,16 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from tools.fleet import fleet, lessons, model
+from tools.fleet import digest, fleet, lessons, model
 from tools.fleet.model import (
     Alert,
     AuditEvent,
     Collision,
     DriftEntry,
     FleetState,
+    Handoff,
     Harness,
+    Machine,
     Proposal,
     Session,
 )
@@ -1135,6 +1138,268 @@ class OpenStaggerParseTests(unittest.TestCase):
         with mock.patch.object(fleet, "open_sessions", return_value="") as opened:
             fleet._COMMANDS["open"](args)
         self.assertEqual(opened.call_args.kwargs["stagger"], 2.0)
+
+
+DRIVE = "C:"  # split from the path so the privacy guard does not flag the fixture
+DIGEST_NOW = datetime.datetime(2026, 10, 14, 12, 0, tzinfo=datetime.UTC)
+
+
+def _iso_ago(**delta):
+    return (DIGEST_NOW - datetime.timedelta(**delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _digest_state():
+    asking = Session(
+        pid=1,
+        session_id="sess-a1",
+        project="project-A",
+        status="waiting",
+        alive=True,
+        last_activity=_iso_ago(minutes=25),
+        handoff=Handoff(age_h=26.0),
+        alerts=[
+            Alert(kind="stuck", severity="warn", detail="AskUserQuestion unanswered")
+        ],
+        extra={"pending_ask": {"since": _iso_ago(minutes=25), "line": 9}},
+    )
+    quiet = Session(
+        pid=2,
+        session_id="sess-b1",
+        project="project-B",
+        status="busy",
+        alive=True,
+        last_activity=_iso_ago(minutes=3),
+        handoff=Handoff(age_h=2.5),
+        alerts=[Alert(kind="context", severity="info", detail="ctx 70%")],
+    )
+    broken = Session(
+        pid=3,
+        session_id="sess-d1",
+        project="project-D",
+        status="idle",
+        alive=True,
+        last_activity=_iso_ago(hours=5),
+        alerts=[
+            Alert(
+                kind="collision",
+                severity="error",
+                detail=f"2 sessions wrote {DRIVE}/Users/alice/work/x.py",
+            )
+        ],
+    )
+    dead = Session(pid=4, session_id="sess-c1", project="project-C", alive=False)
+    return FleetState(
+        generated_at=_iso_ago(minutes=2),
+        harness=Harness(
+            drift=[DriftEntry(installed_path="hooks/a.mjs", status="modified")],
+            extra={"in_sync": False, "behind_files": 3},
+        ),
+        sessions=[quiet, broken, dead, asking],
+        inbox_count=2,
+        machine=Machine(mem_total_gb=15.7, mem_free_gb=2.1),
+        machine_alerts=[
+            Alert(kind="memory", severity="warn", detail="free memory 2.1 GB")
+        ],
+    )
+
+
+class DigestTests(CliHome):
+    """fleet.py digest: markdown/JSON summary, --write, private-term masking."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {"CCV_PRIVACY_TERMS": "zebracorp"})
+        env.start()
+        self.addCleanup(env.stop)
+        # The clone's own .git/info/privacy-terms is real data; keep fixtures isolated.
+        for target, name, kw in (
+            (lessons.privacy_guard, "default_terms_file", {"return_value": None}),
+            (lessons, "HARNESS_DIR", {"new": None}),
+            (digest, "_now", {"return_value": DIGEST_NOW}),
+        ):
+            patcher = mock.patch.object(target, name, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        audit = [
+            {"ts": _iso_ago(hours=1), "category": "force-push", "command": "git"},
+            {"ts": _iso_ago(hours=23), "category": "hard-reset", "command": "git"},
+            {"ts": _iso_ago(hours=30), "category": "rm-rf", "command": "rm"},
+        ]
+        model.audit_path().parent.mkdir(parents=True, exist_ok=True)
+        model.audit_path().write_text(
+            "".join(json.dumps(e) + "\n" for e in audit), encoding="utf-8"
+        )
+
+    def text(self, state=None):
+        model.save_state(state or _digest_state())
+        code, out, err = self.run_main("digest")
+        self.assertEqual(code, 0, err)
+        return out
+
+    def test_header_lines(self):
+        out = self.text()
+        self.assertIn("# Fleet digest 2026-10-14", out)
+        self.assertIn("2 min ago", out)
+        self.assertIn("Machine: 2.1 GB free of 15.7 GB", out)
+        self.assertIn("[warn] memory: free memory 2.1 GB", out)
+        self.assertIn("Harness: differs from repo (3 files)", out)
+        self.assertIn("1 drifted file", out)
+        self.assertIn("Inbox: 2 pending", out)
+        self.assertIn("Audit: 2 risky commands in the last 24 h", out)
+
+    def test_sync_wording_matches_report(self):
+        cases = [
+            ({"in_sync": True, "behind_files": 0}, "Harness: in sync"),
+            (
+                {"in_sync": False, "behind_files": 1},
+                "Harness: differs from repo (1 file)",
+            ),
+            ({}, "Harness: unknown"),
+        ]
+        for extra, needle in cases:
+            with self.subTest(extra=extra):
+                out = self.text(FleetState(harness=Harness(extra=extra)))
+                self.assertIn(needle, out)
+
+    def test_session_table_sorted_by_attention(self):
+        out = self.text()
+        self.assertIn(
+            "| project | status | last activity | handoff | waiting question | alerts |",
+            out,
+        )
+        rows = [ln for ln in out.splitlines() if ln.startswith("| project-")]
+        self.assertEqual(
+            [r.split("|")[1].strip() for r in rows],
+            ["project-A", "project-D", "project-B"],
+        )
+        a, d, b = rows
+        self.assertIn("25 min ago", a)
+        self.assertIn("26.0 h ago", a)
+        self.assertIn("25 min", a.split("|")[5])
+        self.assertIn("stuck (warn)", a)
+        self.assertIn("collision (error)", d)
+        self.assertIn("5.0 h ago", d)
+        self.assertIn("3 min ago", b)
+        self.assertIn("2.5 h ago", b)
+        self.assertIn("context (info)", b)
+        self.assertNotIn("project-C", out)
+        self.assertIn("1 session not running", out)
+
+    def test_needs_you_list(self):
+        out = self.text()
+        needs = out.split("## Needs you", 1)[1]
+        self.assertIn("project-A: question waiting 25 min", needs)
+        self.assertIn("project-A: [warn] stuck", needs)
+        self.assertIn("project-D: [error] collision", needs)
+        self.assertIn("machine: [warn] memory", needs)
+        self.assertNotIn("project-B", needs)
+        self.assertLess(needs.index("question waiting"), needs.index("[error]"))
+        self.assertLess(needs.index("[error]"), needs.index("[warn]"))
+        empty = self.text(FleetState()).split("## Needs you", 1)[1]
+        self.assertIn("nothing", empty.lower())
+
+    def test_private_terms_and_home_paths_masked(self):
+        state = _digest_state()
+        state.sessions[0].project = "zebracorp-app"
+        out = self.text(state)
+        self.assertNotIn("zebracorp", out.lower())
+        self.assertNotIn("alice", out)
+        self.assertIn(lessons.MASK, out)
+        code, js, err = self.run_main("digest", "--json")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("zebracorp", js.lower())
+        self.assertNotIn("alice", js)
+        json.loads(js)
+
+    def test_json_same_data(self):
+        model.save_state(_digest_state())
+        code, out, err = self.run_main("digest", "--json")
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        self.assertEqual(data["date"], "2026-10-14")
+        self.assertEqual(data["machine"]["mem_free_gb"], 2.1)
+        self.assertEqual(data["machine"]["alerts"][0]["kind"], "memory")
+        self.assertEqual(data["harness"]["sync"], "differs from repo (3 files)")
+        self.assertEqual(data["harness"]["behind_files"], 3)
+        self.assertEqual(data["harness"]["drift"], 1)
+        self.assertEqual(data["inbox_count"], 2)
+        self.assertEqual(data["audit_24h"], 2)
+        self.assertEqual(data["not_running"], 1)
+        projects = [s["project"] for s in data["sessions"]]
+        self.assertEqual(projects, ["project-A", "project-D", "project-B"])
+        first = data["sessions"][0]
+        self.assertEqual(first["waiting_age_s"], 25 * 60)
+        self.assertEqual(first["last_activity_age_s"], 25 * 60)
+        self.assertEqual(first["handoff_age_s"], 26 * 3600)
+        self.assertTrue(first["needs_attention"])
+        self.assertFalse(data["sessions"][2]["needs_attention"])
+        kinds = [(n["who"], n["kind"]) for n in data["needs_you"]]
+        self.assertEqual(
+            kinds,
+            [
+                ("project-A", "question"),
+                ("project-D", "alert"),
+                ("machine", "alert"),
+                ("project-A", "alert"),
+            ],
+        )
+
+    def test_write_saves_dated_file_atomically(self):
+        model.save_state(_digest_state())
+        code, out, err = self.run_main("digest", "--write")
+        self.assertEqual(code, 0, err)
+        path = model.fleet_dir() / "digests" / "2026-10-14.md"
+        self.assertEqual(out.strip(), str(path))
+        self.assertTrue(path.is_file())
+        self.assertEqual(
+            path.read_text(encoding="utf-8").rstrip("\n"), self.text().rstrip("\n")
+        )
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), [path.name])
+        with mock.patch.object(model, "write_atomic", wraps=model.write_atomic) as wa:
+            self.run_main("digest", "--write")
+        wa.assert_called_once()
+
+    def test_fresh_collects_first(self):
+        with mock.patch.object(
+            fleet.collect,
+            "collect_and_save",
+            side_effect=lambda: model.save_state(_digest_state()),
+        ) as collected:
+            code, out, err = self.run_main("digest", "--fresh")
+        self.assertEqual(code, 0, err)
+        collected.assert_called_once()
+        self.assertIn("project-A", out)
+
+    def test_json_and_write_are_exclusive(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            fleet._parser().parse_args(["digest", "--json", "--write"])
+
+    def test_age_wording(self):
+        cases = [
+            (None, "-"),
+            (-5, "<1 min"),
+            (30, "<1 min"),
+            (25 * 60, "25 min"),
+            (2.5 * 3600, "2.5 h"),
+            (72 * 3600, "3.0 d"),
+        ]
+        for seconds, text in cases:
+            with self.subTest(seconds=seconds):
+                self.assertEqual(digest.age_text(seconds), text)
+
+    def test_digest_as_script(self):
+        model.save_state(_digest_state())
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        out = subprocess.run(
+            [sys.executable, str(FLEET_PY), "digest"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            timeout=60,
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("# Fleet digest", out.stdout)
 
 
 if __name__ == "__main__":
