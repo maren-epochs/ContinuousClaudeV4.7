@@ -1,6 +1,6 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary"
 user-invocable: true
 allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
@@ -25,11 +25,28 @@ missing. Do not pipe output through `tail`/`head` (pipes mask the exit code).
 Run `report --fresh` (collects first). It prints one row per live session (project, status,
 model, context %, running agents, handoff age, alert count, last activity), then alerts
 (error first, each with `file:line` evidence), collisions, harness drift, pending inbox and
-recent audit events. Summarize for the user in this order: error alerts and path collisions,
-stuck sessions, compliance warnings, drift (a `stale` manifest or `modified` installed files
+recent audit events, plus a machine line (free/total memory; a `memory` warn alert when free
+memory is below 15% of total, or below `FLEET_MEM_WARN_GB` GB when set). Summarize for the
+user in this order: error alerts and path collisions, stuck sessions, the memory alert (close
+idle sessions or apps), compliance warnings, harness sync (`differs from repo (N files)` =
+installed copies differ from what a sync of the repo working tree would write), drift (a `stale` manifest or `modified` installed files
 means `py -3.13 install/sync_global.py --apply` is due; sessions started before the last sync
 need a restart), inbox count, notable audit events (force-push, hard-reset, history rewrite).
 Quote evidence paths; do not open transcripts unless the user asks.
+
+The statusline shows the same counts as `fleet N live | M inbox | Q ask | K alert`: `ask` =
+other live sessions waiting on a question box, alerts include the memory alert; a zero count
+is omitted.
+
+## /fleet digest
+
+`digest [--fresh]` prints a plain-language markdown summary: machine memory and alert,
+harness sync, drift, inbox, risky commands in the last 24 h, live sessions needing attention
+first (waiting question, then warn/error alerts), and a "needs you" list. `--json` prints the
+same data; `--write` saves `~/.claude/fleet/digests/YYYY-MM-DD.md` (local date) and prints
+the path. `collect` (also the Stop hook's background run) writes that day's file when it is
+absent. Private terms, home paths and session ids are masked. Relay the "needs you" list
+first.
 
 ## /fleet inbox
 

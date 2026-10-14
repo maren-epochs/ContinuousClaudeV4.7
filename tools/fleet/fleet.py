@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Fleet CLI: ``py -3.13 tools/fleet/fleet.py <command>``.
 
-collect          build state.json from ~/.claude and print a one-line summary
+collect          build state.json from ~/.claude and print a one-line summary; also
+                 writes today's digest file when absent (failures ignored)
 report           live sessions, alerts, collisions, drift, inbox and recent audit
 json             state.json as JSON on stdout (report/json collect first when
                  state.json is missing or with --fresh)
@@ -134,7 +135,17 @@ def _collect_cmd() -> int:
         print(f"collect failed: {reason}", file=sys.stderr)
         return COLLECT_FAILED
     print(summary(state))
+    _daily_digest(state)
     return 0
+
+
+def _daily_digest(state: FleetState) -> None:
+    """Write today's (local date) digest when its file is absent; any failure is
+    swallowed so it never changes collect's exit code or output."""
+    with contextlib.suppress(Exception):
+        now = digest._now()
+        if not digest.digest_path(now.astimezone().date().isoformat()).exists():
+            digest.write(digest.build(state, now))
 
 
 def summary(state: FleetState) -> str:

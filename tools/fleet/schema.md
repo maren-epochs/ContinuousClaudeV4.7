@@ -18,7 +18,7 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/away` | flag file (UTC timestamp line) | `fleet.py away on` / removed by `away off` | `questions.away_path()`, `is_away`, `set_away` |
 | `~/.claude/fleet/questions/<session_id>.json` | `QuestionQueue` (section below) | ask-queue hook while away (append, atomic replace); `fleet.py answer` | `questions.load`, `questions.answer` |
 | `~/.claude/fleet/collect.err` | text, one line per failed collect | `fleet.py collect`, append, capped 256 KB | `fleet._append_err` |
-| `~/.claude/fleet/digests/YYYY-MM-DD.md` | markdown digest (section below), local date | `fleet.py digest --write`, atomic replace | `digest.digest_path`, `digest.write` |
+| `~/.claude/fleet/digests/YYYY-MM-DD.md` | markdown digest (section below), local date | `fleet.py digest --write` (replaces); `fleet.py collect` when today's file is absent; atomic | `digest.digest_path`, `digest.write` |
 | `~/.claude/.ccv47-manifest.json` | install manifest (section below) | `install/sync_global.py --apply`, atomic replace | `manifest_path()` |
 
 Home resolution (`home_dir()`): on win32 `USERPROFILE`, then `HOME`; elsewhere `HOME`,
@@ -203,7 +203,9 @@ status, last activity, handoff, waiting question, alerts as `kind (severity)`); 
 string, in the markdown and JSON, is masked by `lessons.mask` with
 `lessons.default_guard(home)` (private terms, home paths, usernames, session ids become
 `<redacted>`). `--write` saves the masked markdown to `digests/<date>.md` via
-`model.write_atomic` and prints only the path.
+`model.write_atomic` and prints only the path. `fleet.py collect` (also the Stop hook's
+detached run) writes the same file after a successful collect when the local date's file
+is absent; any digest failure is ignored (collect's exit code and output are unchanged).
 
 ## Proposal (`harness-inbox/<id>.json`)
 

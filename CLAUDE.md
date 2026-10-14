@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-shim helper).
+Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-shim helper, privacy-redact.mjs shared library).
 
 ## Skills
 
@@ -17,7 +17,7 @@ Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-
 | `/resume-handoff` | Session start | Resume from handoff document |
 | `/upgrade-harness` | Extend Ouros | Add new external functions to Ouros sandbox |
 | `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
-| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
+| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), `digest` (plain-language daily summary), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
 
 ## Agents
 
@@ -33,7 +33,7 @@ Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-
 | `status.mjs` | statusLine | Context % (Claude Code's `used_percentage`, no added overhead), git info, goal from handoffs |
 | `tldr-read.mjs` | PreToolUse:Read | Injects structural nav map for large code files, truncates (mtime cache; `tldr-shim.mjs` serves cold reads, autostart via `TLDR_READ_SHIM_AUTOSTART=1`) |
 | `post-edit-diagnostics.mjs` | PostToolUse:Edit\|Write\|MultiEdit\|Update | Lint after edits; Python via ruff direct (E9/F63/F7/F82/syntax = error), others via tldr |
-| `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction |
+| `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction; redacted before writing (home -> `~`, private terms -> reversible `<private:XXXXXXXX>` placeholders keyed by `~/.claude/privacy-key`) via the shared library `privacy-redact.mjs` (port of `privacy_guard.redact`) |
 | `auto-handoff-stop.mjs` | Stop | Blocks at 85% context to force handoff; falls back to transcript usage when no statusline ran (headless) |
 | `worker-report-check.mjs` | PostToolUse (settings, unfiltered - the hook self-filters on `reports/*.json` paths, ~80ms otherwise) + SubagentStop (worker frontmatter) | Validates report JSON with `tools/validate_report.py`; PostToolUse feedback reaches a running worker on Edit and Write (verified live; a settings `if: Edit(...)` filter matched Edit only, so it was removed), SubagentStop is a late second check. VALIDATE's schema gate stays binding |
 | `session-start.mjs` | SessionStart (registered for `compact`) | After compaction: injects the newest handoff from the handoff root. startup/clear bloks injection available but not registered (~2K tokens/session) |
@@ -70,7 +70,7 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `exa_search.py` — web search (requires EXA_API_KEY in .env)
 - `nia_docs.py` — documentation search (requires NIA_API_KEY in .env)
 - `api_common.py` — shared aiohttp HTTP layer (request, SSE lines, .env key, headers) for exa_search/nia_docs
-- `privacy_guard.py` — pre-commit hook: rejects user-home paths, the OS username, UUID-shaped ids and every term in the untracked `.git/info/privacy-terms`; reviewed false positives in `.privacy-allow`
+- `privacy_guard.py` — pre-commit hook: rejects user-home paths, the OS username, UUID-shaped ids and every term in the untracked `.git/info/privacy-terms`; reviewed false positives in `.privacy-allow`; `--redact FILE...` rewrites in place with reversible placeholders, `--restore FILE` prints the original (key `~/.claude/privacy-key`)
 - `lock_requirements.py` — regenerates root `requirements.lock` (pyproject closure pinned to the installed env, no network); `--check` exits 1 when stale
 - `_testing.py` — shared unittest helpers (module loader, async runner, fake aiohttp); not collected
 
@@ -95,15 +95,18 @@ Consumers import `from ccv_viz import ...` after the one-line PRELUDE in `/visua
 
 ## Fleet (tools/fleet)
 
-Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|handoffs|away|questions|answer|open|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
+Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|handoffs|away|questions|answer|open|digest|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
 
 | Path | What |
 |------|------|
 | `~/.claude/fleet/state.json` | Collected FleetState (sessions, alerts, collisions, drift); refreshed by the existing Stop hook (`auto-handoff-stop.mjs` spawns a detached `fleet.py collect` at most every 2 min; `FLEET_COLLECT=0` disables) and read by the statusline `fleet N live \| M inbox \| Q ask \| K alert` segment (ask = other alive sessions with a `pending_ask`) |
 | `~/.claude/fleet/audit.jsonl` | fleet-audit events |
+| `~/.claude/fleet/digests/YYYY-MM-DD.md` | Masked daily digest (sessions needing attention, machine, sync, inbox, 24 h audit count); `fleet.py digest --write`, and `collect` writes it once per local day when absent (failures ignored) |
 | `~/.claude/fleet/away`, `~/.claude/fleet/questions/<session_id>.json` | Away flag; per-session question queue written by ask-queue while away |
 | `~/.claude/harness-inbox/<id>.json` | Proposals: edits harness-guard redirected, plus lessons; `apply` writes into the repo file, never `~/.claude` |
 | `~/.claude/.ccv47-manifest.json` | Install manifest written by `sync_global.py --apply`; no manifest = guard allows everything |
+
+Machine `memory` alert (warn): free memory below 15% of total, or below `FLEET_MEM_WARN_GB` (GB) when set. Harness sync is file-level: `differs from repo (N files)` = installed copies vs what `sync_global.py` would write from the repo working tree, not commits. `open --stagger SECONDS` (default 3) opens one tab per `wt` call, that many seconds apart; `0` = one chained `wt` command.
 
 Setup (user-run, both write `~/.claude`): `py -3.13 install/sync_global.py --apply`, then `py -3.13 install/register_hooks.py` (`--dry-run` first), then restart sessions. Shapes: `tools/fleet/schema.md`. Never open `~/.claude/sessions/*.key`.
 

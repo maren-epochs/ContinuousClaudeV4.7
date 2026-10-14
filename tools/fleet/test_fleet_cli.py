@@ -1402,5 +1402,66 @@ class DigestTests(CliHome):
         self.assertIn("# Fleet digest", out.stdout)
 
 
+class CollectDigestTests(CliHome):
+    """fleet.py collect writes today's digest once per local day; never fails collect."""
+
+    def setUp(self):
+        super().setUp()
+        for target, name, kw in (
+            (lessons.privacy_guard, "default_terms_file", {"return_value": None}),
+            (lessons, "HARNESS_DIR", {"new": None}),
+            (digest, "_now", {"return_value": DIGEST_NOW}),
+        ):
+            patcher = mock.patch.object(target, name, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.today = DIGEST_NOW.astimezone().date().isoformat()
+        self.path = model.fleet_dir() / "digests" / f"{self.today}.md"
+
+    def collect(self, **patches):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                mock.patch.object(
+                    fleet.collect, "collect", return_value=_digest_state()
+                )
+            )
+            for name, kw in patches.items():
+                stack.enter_context(mock.patch.object(digest, name, **kw))
+            return self.run_main("collect")
+
+    def test_writes_todays_digest_when_absent(self):
+        code, out, err = self.collect()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, fleet.summary(_digest_state()) + "\n")
+        text = self.path.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith(f"# Fleet digest {self.today}"), text[:60])
+        self.assertIn("project-A", text)
+
+    def test_existing_digest_is_kept(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("earlier digest\n", encoding="utf-8")
+        with mock.patch.object(digest, "write") as write:
+            code, _, _ = self.collect()
+        self.assertEqual(code, 0)
+        write.assert_not_called()
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "earlier digest\n")
+
+    def test_digest_failure_never_fails_collect(self):
+        expected = fleet.summary(_digest_state()) + "\n"
+        for name in ("build", "write", "digest_path", "_now"):
+            with self.subTest(failing=name):
+                code, out, err = self.collect(**{name: {"side_effect": OSError("ro")}})
+                self.assertEqual((code, out, err), (0, expected, ""))
+                self.assertTrue(model.state_path().exists())
+                self.assertFalse(self.path.exists())
+                self.assertFalse((model.fleet_dir() / "collect.err").exists())
+
+    def test_failed_collect_writes_no_digest(self):
+        with mock.patch.object(fleet.collect, "collect", side_effect=OSError("boom")):
+            code, _, _ = self.run_main("collect")
+        self.assertEqual(code, fleet.COLLECT_FAILED)
+        self.assertFalse(self.path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
