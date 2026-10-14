@@ -143,28 +143,34 @@ function getContinuityInfo(dir) {
 // `fleet.py collect` (refreshed from auto-handoff-stop.mjs). Read only, never collects.
 // Live = alive sessions; alerts counted on alive sessions plus machine_alerts (e.g.
 // low memory), severity warn/error only (info = post-sync drift, question turns);
+// Ask = alive sessions with a pending_ask object (checks.record_pending_ask), the current
+// session (status input session_id vs sessions[].session_id) excluded.
 // '?' = older than 15 min or unknown age. Empty string when the file is absent/unreadable or all counts are 0.
 const FLEET_STALE_MS = 15 * 60 * 1000;
 const COUNTED = new Set(['warn', 'error']);
 function countAlerts(list) {
   return Array.isArray(list) ? list.filter(a => a && typeof a === 'object' && COUNTED.has(a.severity)).length : 0;
 }
-function getFleetInfo() {
+function getFleetInfo(selfId) {
   let s;
   try { s = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'state.json'), 'utf-8')); } catch { return ''; }
   if (!s || typeof s !== 'object' || Array.isArray(s)) return '';
   const sessions = Array.isArray(s.sessions) ? s.sessions : [];
-  let live = 0, alerts = 0;
+  const me = typeof selfId === 'string' && selfId ? selfId : null;
+  let live = 0, alerts = 0, asks = 0;
   for (const x of sessions) {
     if (!x || typeof x !== 'object' || x.alive !== true) continue;
     live++;
     alerts += countAlerts(x.alerts);
+    const pa = x.pending_ask;
+    if (pa && typeof pa === 'object' && !Array.isArray(pa) && !(me && x.session_id === me)) asks++;
   }
   alerts += countAlerts(s.machine_alerts);
   const inbox = Number.isInteger(s.inbox_count) && s.inbox_count > 0 ? s.inbox_count : 0;
   const counts = [];
   if (live) counts.push(`${live} live`);
   if (inbox) counts.push(`${inbox} inbox`);
+  if (asks) counts.push(`${asks} ask`);
   if (alerts) counts.push(`${alerts} alert`);
   if (!counts.length) return '';
   const t = typeof s.generated_at === 'string' ? Date.parse(s.generated_at) : NaN;
@@ -210,7 +216,7 @@ function main() {
   if (git) parts.push(git);
   if (pct >= 80 && now) parts.push(now);
   else if (continuity) parts.push(continuity);
-  const fleet = getFleetInfo();
+  const fleet = getFleetInfo(data.session_id);
   if (fleet) parts.push(fleet);
 
   process.stdout.write(parts.join(' | '));

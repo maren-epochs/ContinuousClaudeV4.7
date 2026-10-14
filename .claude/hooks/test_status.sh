@@ -208,7 +208,7 @@ mkstate() { # <generated_at json value> <alive count> <dead count> <inbox> <aler
       harness: {}, sessions, inbox_count: Number(inbox), audit_recent: [], collisions: [], machine: {} }));
   ' "$1" "$2" "$3" "$4" "$5" "${6:-0}" "$STATE"
 }
-strip_fleet() { printf '%s' "$1" | sed -E 's/ \| fleet\??( [0-9]+ (live|inbox|alert)( \|)?)*$//'; }
+strip_fleet() { printf '%s' "$1" | sed -E 's/ \| fleet\??( [0-9]+ (live|inbox|ask|alert)( \|)?)*$//'; }
 PROJF="$ROOT/sttstprojf"
 mkproj "$PROJF"
 fpay() { payload sttstH7x '{"used_percentage":12,"context_window_size":200000}' "$PROJF"; }
@@ -305,6 +305,49 @@ for ma in '"x"' 'null' '[null,1,"warn",{"severity":"WARN"}]'; do
   case "$OUT" in *' | fleet 1 live') r=0;; *) r=1;; esac
   [ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
   check "h18 junk machine_alerts $ma ignored (got: ${OUT:0:160})" $r
+done
+
+# VAL-823: 'Q ask' = alive sessions with a pending_ask (checks.record_pending_ask), current session excluded
+ME="sttstH7x-0000-4000-8000-tail"
+PA='"pending_ask":{"since":"2026-10-14T10:00:00Z","line":42}'
+printf '{"sessions":[{"alive":true,"session_id":"sess-1",%s,"alerts":[{"severity":"warn"}]},{"alive":true,"session_id":"sess-2",%s},{"alive":true,"session_id":"sess-3"},{"alive":false,"session_id":"sess-4",%s},{"alive":true,"session_id":"%s",%s}],"inbox_count":1,"generated_at":"%s"}' "$PA" "$PA" "$PA" "$ME" "$PA" "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 4 live | 1 inbox | 2 ask | 1 alert') r=0;; *) r=1;; esac
+check "h19 'Q ask' counts alive sessions with pending_ask, dead and current excluded, order live|inbox|ask|alert (got: ${OUT:0:200})" $r
+[ "$(strip_fleet "$OUT")" = "$BASE" ]; check "h19b rest of the statusline unchanged with an ask part" $?
+printf '{"sessions":[{"alive":true,"session_id":"%s",%s},{"alive":true,"session_id":"sess-2"}],"generated_at":"%s"}' "$ME" "$PA" "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 2 live') r=0;; *) r=1;; esac
+check "h20 only the current session asking -> ask part omitted (got: ${OUT:0:160})" $r
+printf '{"sessions":[{"alive":true,"session_id":"sess-1",%s}],"generated_at":"%s"}' "$PA" "$(iso_ago 20)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet? 1 live | 1 ask') r=0;; *) r=1;; esac
+check "h21 stale state keeps 'fleet?' with the ask part (got: ${OUT:0:160})" $r
+# no session_id in the status input: nothing is excluded, a null/absent stored id never matches it
+printf '{"sessions":[{"alive":true,"session_id":null,%s},{"alive":true,%s}],"generated_at":"%s"}' "$PA" "$PA" "$(iso_ago 1)" > "$STATE"
+run_hook '{"workspace":{"current_dir":"'"$PROJF"'"}}'
+case "$OUT" in *' | fleet 2 live | 2 ask') r=0;; *) r=1;; esac
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+check "h22 status input without session_id -> no exclusion (got: ${OUT:0:160})" $r
+for junk in '"pending_ask":null' '"pending_ask":"x"' '"pending_ask":[1]' '"pending_ask":7' '"pending_ask":true' ''; do
+  sep=','; [ -z "$junk" ] && sep=''
+  printf '{"sessions":[{"alive":true,"session_id":"sess-1"%s%s}],"generated_at":"%s"}' "$sep" "$junk" "$(iso_ago 1)" > "$STATE"
+  run_hook "$(fpay)"
+  case "$OUT" in *' | fleet 1 live') r=0;; *) r=1;; esac
+  [ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+  check "h23 malformed/absent pending_ask [${junk:-absent}] not counted, no throw (got: ${OUT:0:160})" $r
+done
+printf '{"sessions":[{"alive":true,"session_id":7,%s},{"alive":true,"session_id":{"x":1},%s}],"generated_at":"%s"}' "$PA" "$PA" "$(iso_ago 1)" > "$STATE"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 2 live | 2 ask') r=0;; *) r=1;; esac
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+check "h24 wrong-typed stored session_id tolerated (counted, never matches) (got: ${OUT:0:160})" $r
+printf '{"sessions":[{"alive":true,"session_id":"sess-1",%s}],"generated_at":"%s"}' "$PA" "$(iso_ago 1)" > "$STATE"
+for sid in 'null' '42' '{"a":1}' '""'; do
+  run_hook '{"session_id":'"$sid"',"workspace":{"current_dir":"'"$PROJF"'"}}'
+  case "$OUT" in *' | fleet 1 live | 1 ask') r=0;; *) r=1;; esac
+  [ "$RC" -eq 0 ] && [ -z "$ERR" ] || r=1
+  check "h25 wrong-typed input session_id $sid -> no exclusion, no throw (got: ${OUT:0:160})" $r
 done
 
 rm -f "$STATE"; mkdir -p "$STATE"

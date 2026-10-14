@@ -99,7 +99,7 @@ Cross-session view and harness inbox for every Claude Code session on this machi
 
 | Path | What |
 |------|------|
-| `~/.claude/fleet/state.json` | Collected FleetState (sessions, alerts, collisions, drift); refreshed by the existing Stop hook (`auto-handoff-stop.mjs` spawns a detached `fleet.py collect` at most every 2 min; `FLEET_COLLECT=0` disables) and read by the statusline `fleet N live \| M inbox \| K alert` segment |
+| `~/.claude/fleet/state.json` | Collected FleetState (sessions, alerts, collisions, drift); refreshed by the existing Stop hook (`auto-handoff-stop.mjs` spawns a detached `fleet.py collect` at most every 2 min; `FLEET_COLLECT=0` disables) and read by the statusline `fleet N live \| M inbox \| Q ask \| K alert` segment (ask = other alive sessions with a `pending_ask`) |
 | `~/.claude/fleet/audit.jsonl` | fleet-audit events |
 | `~/.claude/fleet/away`, `~/.claude/fleet/questions/<session_id>.json` | Away flag; per-session question queue written by ask-queue while away |
 | `~/.claude/harness-inbox/<id>.json` | Proposals: edits harness-guard redirected, plus lessons; `apply` writes into the repo file, never `~/.claude` |
