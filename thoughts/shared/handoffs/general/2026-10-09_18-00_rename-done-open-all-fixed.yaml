@@ -1,0 +1,95 @@
+---
+session: general
+date: 2026-10-09
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: "Repo folder renamed to epoch_harness, every live reference updated; fleet open --all keeps explicit picks (7bc555f), installed"
+now: "Push 5e757a2 after CI for 2f8a2b4 is green; user runs sync_global --apply to install it."
+test: "py -3.13 -m pytest -q tools/fleet; py -3.13 ~/.claude/tools/fleet/fleet.py open --all ~/Documents/epoch_harness --dry-run"
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  The checkout lives at ~/Documents/epoch_harness (was ccv47-readme-fix). Claude Code's projects slug is the
+  path with every non-alnum char -> '-', so the transcript folder is now ...-Documents-epoch-harness; its
+  transcripts were not rewritten and still record the old cwd, so launch.candidates() skips them (cwd folder
+  missing) unless launch.renamed_cwd finds a sibling of the missing cwd whose slug equals the transcript folder name (5e757a2).
+  open_sessions (tools/fleet/fleet.py): picks resolve via launch.select; with --all the targets are every
+  candidate plus picks not already listed (dedupe by launch.path_key, formerly the private _key).
+  Installed copy (~/.claude/tools/fleet) only changes after the user runs `sync_global.py --apply`.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "tools/fleet 287 passed 1 skipped; make test shell suites all 0 failed"
+  test_command: "make test"
+  pre_existing_failures: []
+  uncommitted_changes: true
+  branch: "main == origin/main 2f8a2b4 (pushed); CI for 2f8a2b4 was starting at handoff time"
+  dirty_files: []
+  warnings: "untracked: install/settings.template.json.bak-* (user's backups, keep); 2026-10-09_17-31 handoff and this one stay untracked (privacy guard rejects their absolute home paths / contain home-relative paths)"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: "fleet open --all <path> ignored the path; fixed to union, regression test, launch._key -> path_key (7bc555f)"
+    files: [tools/fleet/fleet.py, tools/fleet/launch.py, tools/fleet/test_launch.py]
+  - task: "Old-path rewrite with backups in ~/.claude/backups/20261009-rename/: projects slug folder renamed, ~/.claude.json (projects + skillUsage keys, githubRepoPaths), history.jsonl project fields (124; prompt text untouched), 2 inbox proposals, 3 druckenmiller handoffs, 12 repo handoffs (2f8a2b4), continuum/** (untracked); caches cleared"
+    files: [thoughts/shared/handoffs/general/*.yaml, continuum/autonomous/**]
+  - task: "launch.renamed_cwd: renamed projects list without an explicit path (5e757a2, local); superseded 17-31 handoff deleted"
+    files: [tools/fleet/launch.py, tools/fleet/test_launch.py]
+  - task: "User ran sync_global --apply: manifest repo path updated, fleet fix installed; fleet state/dashboard regenerated clean"
+    files: ["~/.claude/.ccv47-manifest.json", "~/.claude/tools/fleet/*"]
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: keep_ccv47_identifiers
+    chose: "keep .ccv47-manifest.json, .ccv47-keep, ccv_viz, repo name"
+    over: ["rename product identifiers"]
+    because: "user answer A: product names, not the folder path"
+  - name: open_all_semantics
+    chose: "--all plus picks = every listed project plus the picks"
+    over: ["refuse the combination", "picks only"]
+    because: "the user's natural command was --all with a path; listed titles (live session names) must be kept, so select() is not used for listed ones"
+  - name: history_scope
+    chose: "rewrite only the project field of history.jsonl"
+    over: ["plain text replace"]
+    because: "prompt text is the user's own words; project is the key Claude Code uses"
+  - name: rename_handoff_untouched
+    chose: "leave 2026-10-09_17-31 handoff text as is"
+    over: ["rewrite it too"]
+    because: "it documents the rename; replacing would make 'Rename-Item ccv47-readme-fix epoch_harness' nonsense"
+
+# ── FINDINGS ─────────────────────────────────────────────────────
+findings:
+  critical:
+    - "`!` commands run in Bash: Windows backslash paths lose their backslashes. Give the user forward-slash or ~ paths with && chaining."
+  useful:
+    - "Running a write script twice re-copies its backups over the originals; Claude Code's own ~/.claude/backups/.claude.json.backup.<ms> rotation saved the pre-change .claude.json."
+    - "Stale __pycache__ bytecode keeps the old absolute path in pytest skip/trace output; clear caches after a folder rename."
+    - "Privacy guard rejects handoffs with absolute home paths; write handoffs with ~ paths if they are to be committed."
+  fyi:
+    - "Remaining old-name occurrences are intentional: history.jsonl prompt text, the 17-31 handoff, ~/.claude/file-history and backups, temp scratchpad slug folder."
+
+worked: ["dry-run of the rewrite before --apply", "json.loads of every rewritten JSON", "verifying the installed copy by grepping for path_key"]
+failed:
+  - attempted: "second --apply run of rename_refs.py only to count writes"
+    root_cause: "script always rewrote .claude.json and its backup"
+    avoid: "re-running apply scripts for reporting"
+    use_instead: "count from the first run's output"
+
+user_intent: |
+  Reopen all parallel project sessions as named Windows Terminal tabs with one command, including the harness
+  checkout under its new name epoch_harness.
+
+blockers: []
+questions: []
+
+next:
+  - "Confirm CI green for 2f8a2b4 (gh run list --commit 2f8a2b4)"
+  - "Push 5e757a2 (renamed-project fallback: launch.renamed_cwd matches a missing cwd's siblings by slug against the transcript folder name); user runs sync_global --apply"
+
+files:
+  created: [thoughts/shared/handoffs/general/2026-10-09_18-00_rename-done-open-all-fixed.yaml]
+  modified: [tools/fleet/fleet.py, tools/fleet/launch.py, tools/fleet/test_launch.py, thoughts/shared/handoffs/general/*.yaml]
