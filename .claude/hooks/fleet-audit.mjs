@@ -26,25 +26,20 @@
  * stdout; any failure is a note on stderr. Imported as `fleet-audit.mjs?lib` it only
  * exports (auditCommand, categorize, redact) for tests.
  */
-import { readFileSync, appendFileSync, mkdirSync, statSync } from 'fs';
-import { homedir, tmpdir, userInfo } from 'os';
-import { join, dirname, resolve, posix } from 'path';
+import { readFileSync, appendFileSync, mkdirSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import { join, posix } from 'path';
+import {
+  PLACEHOLDER_NAMES, HOME_PATTERNS, UUID_RE, escapeRe, loadTerms, usernames,
+} from './privacy-redact.mjs';
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const MAX_COMMAND = 4000;
 const REDACT_MARGIN = 600;
 const REDACTED = '<redacted>';
 
-// --- redaction (ported from tools/privacy_guard.py) ---
+// --- redaction (privacy rules shared via privacy-redact.mjs, ported from tools/privacy_guard.py) ---
 
-const PLACEHOLDER_NAMES = new Set(['x', 'user', 'name', 'you']);
-const SERVICE_ACCOUNTS = new Set(['runner', 'runneradmin', 'root']);
-const HOME_PATTERNS = [
-  /(?<![A-Za-z])(?<pre>[A-Za-z]:(?:\/|\\+)Users(?:\/|\\+))(?<name><[^>\s]*>|[^/\\\s"'`<>:;,|*?()[\]{}]+)/gi,
-  /(?<![\w.])(?<pre>\/[A-Za-z]\/Users\/)(?<name><[^>\s]*>|[^/\\\s"'`<>:;,|*?()[\]{}]+)/gi,
-  /(?<![A-Za-z])(?<pre>[A-Za-z]--Users-)(?<name><[^>\s]*>|[A-Za-z0-9_.]+)/gi,
-];
-const UUID_RE = /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi;
 // Credential shapes; group `s` (when present) is the secret, else the whole match.
 // Linear by construction: every quantifier is bounded and none is nested.
 const VAL = String.raw`(?<s>\\"[^"]{0,512}"|"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&]{1,512})`;
@@ -117,59 +112,6 @@ function pipedValue(text, at) {
   let k = j;
   while (k >= 0 && end - k <= 512 && !/[\s|;&]/.test(text[k])) k--;
   return [k + 1, end];
-}
-
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-function fileLines(p) {
-  try {
-    return readFileSync(p, 'utf-8').replace(/^\uFEFF/, '').split(/\r?\n/)
-      .map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-  } catch { return []; }
-}
-
-// .git/info/privacy-terms of the repo containing cwd (worktrees: the common dir).
-function cloneTermsFile(cwd) {
-  let dir = cwd;
-  for (let i = 0; dir && i < 40; i++) {
-    const dotgit = join(dir, '.git');
-    let st = null;
-    try { st = statSync(dotgit); } catch {}
-    if (st && st.isDirectory()) return join(dotgit, 'info', 'privacy-terms');
-    if (st && st.isFile()) {
-      let body = '';
-      try { body = readFileSync(dotgit, 'utf-8'); } catch { return null; }
-      const m = body.match(/^gitdir:\s*(.+)$/m);
-      if (!m) return null;
-      const gitdir = resolve(dir, m[1].trim());
-      let common = gitdir;
-      try { common = resolve(gitdir, readFileSync(join(gitdir, 'commondir'), 'utf-8').trim()); } catch {}
-      return join(common, 'info', 'privacy-terms');
-    }
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  return null;
-}
-
-function loadTerms(cwd) {
-  const env = (process.env.CCV_PRIVACY_TERMS || '').split(/[,\r\n]/)
-    .map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
-  const clone = cwd ? cloneTermsFile(cwd) : null;
-  const all = [...env, ...fileLines(join(homedir(), '.claude', 'privacy-terms')), ...(clone ? fileLines(clone) : [])];
-  return [...new Map(all.map((t) => [t.toLowerCase(), t])).values()];
-}
-
-function usernames() {
-  const names = [];
-  try { names.push(userInfo().username); } catch {}
-  names.push(process.env.USERNAME || '', process.env.USER || '');
-  const seen = new Map();
-  for (const n of names) {
-    if (n && n.length >= 3 && !SERVICE_ACCOUNTS.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
-  }
-  return [...seen.values()];
 }
 
 // Redacted text[0, limit); spans are found over all of text so a secret crossing the

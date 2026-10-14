@@ -19,12 +19,48 @@
  * the convention) get the handoff there; any other project gets it under
  * ~/.claude/handoffs/<project>/<session>/ so user repos stay clean.
  *
+ * Privacy: the handoff is redacted before it is written, with the same rules and
+ * token format as tools/privacy_guard.py redact() (shared module privacy-redact.mjs):
+ * home prefix -> ~, OS username -> <user>, private terms (CCV_PRIVACY_TERMS,
+ * ~/.claude/privacy-terms, the project's .git/info/privacy-terms) -> <private:XXXXXXXX>
+ * keyed by CCV_PRIVACY_KEY_FILE or ~/.claude/privacy-key (created on the first term
+ * match). Fail open: on any redaction error the handoff is written with home paths
+ * replaced only, and the systemMessage says so.
+ *
  * Input: JSON on stdin with trigger, session_id, transcript_path
  * Output: JSON with continue: true, systemMessage
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, basename, resolve } from 'path';
 import { homedir } from 'os';
+
+// Loaded lazily so a missing module (partial install) cannot stop the hook.
+async function loadRedactor() {
+  try { return await import(new URL('./privacy-redact.mjs', import.meta.url).href); } catch { return null; }
+}
+
+// Last resort when privacy-redact.mjs is unavailable: the literal home dir -> ~.
+function homeOnlyFallback(text) {
+  const home = homedir();
+  if (!home) return text;
+  for (const h of new Set([home, home.replace(/\\/g, '/'), home.replace(/\//g, '\\')])) {
+    text = text.split(h).join('~');
+  }
+  return text;
+}
+
+// [redacted text, null], or [home-only text, reason] when full redaction failed.
+async function redactHandoff(content, projectDir) {
+  const mod = await loadRedactor();
+  try {
+    if (!mod) throw new Error('privacy-redact.mjs not loadable');
+    return [mod.redact(content, { cwd: projectDir }), null];
+  } catch (err) {
+    const reason = err && err.message ? String(err.message).slice(0, 120) : 'unknown error';
+    try { return [mod ? mod.redactHome(content) : homeOnlyFallback(content), reason]; }
+    catch { return [homeOnlyFallback(content), reason]; }
+  }
+}
 
 const MAX_ENTRIES = 400;
 
@@ -230,7 +266,7 @@ function generateHandoff(summary, sessionName) {
   return lines.join('\n');
 }
 
-function main() {
+async function main() {
   let input = {};
   try { input = JSON.parse(readFileSync(0, 'utf-8')); } catch { input = {}; }
   if (!input || typeof input !== 'object') input = {};
@@ -248,7 +284,7 @@ function main() {
   if (trigger === 'auto' && transcriptExists) {
     try {
       const summary = parseTranscript(transcriptPath);
-      const content = generateHandoff(summary, sessionName);
+      const [content, redactError] = await redactHandoff(generateHandoff(summary, sessionName), projectDir);
 
       const projectHandoffs = join(projectDir, 'thoughts', 'shared', 'handoffs');
       const handoffDir = existsSync(projectHandoffs)
@@ -261,6 +297,7 @@ function main() {
       writeFileSync(join(handoffDir, filename), content);
 
       message = `[PreCompact:auto] Created ${join(handoffDir, filename).replace(/\\/g, '/')}`;
+      if (redactError) message += ` (privacy redaction failed: ${redactError}; home paths only)`;
     } catch (err) {
       message = `[PreCompact:auto] Handoff generation failed (${err && err.message ? String(err.message).slice(0, 120) : 'unknown error'}). Consider running /create-handoff manually.`;
     }
@@ -273,4 +310,4 @@ function main() {
   console.log(JSON.stringify({ continue: true, systemMessage: message }));
 }
 
-try { main(); } catch { console.log(JSON.stringify({ continue: true })); }
+try { await main(); } catch { console.log(JSON.stringify({ continue: true })); }

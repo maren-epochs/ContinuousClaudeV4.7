@@ -158,6 +158,7 @@ class DriftChecks(unittest.TestCase):
 
     def test_non_event_hooks_never_warned(self) -> None:
         self.assertIn("tldr-shim.mjs", NOT_EVENT_HOOKS)
+        self.assertIn("privacy-redact.mjs", NOT_EVENT_HOOKS)
         with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
             target = Path(td)
             self.assertEqual(run_sync(target, "--apply").returncode, 0)
@@ -189,6 +190,10 @@ class DriftChecks(unittest.TestCase):
             self.assertTrue(
                 (target / "hooks" / "tldr-shim.mjs").is_file(),
                 "non-event hooks must still be installed",
+            )
+            self.assertTrue(
+                (target / "hooks" / "privacy-redact.mjs").is_file(),
+                "the shared privacy module must be installed next to its hooks",
             )
             self.assertEqual(
                 warn_lines(dry.stdout),

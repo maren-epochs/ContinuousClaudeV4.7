@@ -139,6 +139,179 @@ check "VAL-101l handoff written under ~/.claude/handoffs/<project>/" $?
 printf '%s' "$OUT" | grep -q "handoffs/userrepo/"
 check "VAL-101l systemMessage names the real location (got: ${OUT:0:120})" $?
 
+# =====================================================================
+# VAL-803: auto-handoffs are redacted like tools/privacy_guard.py redact()
+#   home prefix -> ~, OS username -> <user>, private terms -> <private:XXXXXXXX>
+#   (keyed HMAC); shared JS module privacy-redact.mjs; byte parity with Python.
+# Fixtures never hold a literal home path or UUID (pre-commit privacy guard):
+# @U@ -> Users and @UUID@ -> a uuid are substituted at run time.
+# =====================================================================
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+REPO="$(cygpath -m "$REPO" 2>/dev/null || echo "$REPO")"
+LIB="$HERE/privacy-redact.mjs"
+if py -3.13 -c "" > /dev/null 2>&1; then PY=(py -3.13); else PY=(python3); fi
+UUIDV="0123abcd-$(printf '89ab')-cdef-0123-456789abcdef"
+subst() { sed -e "s/@U@/Users/g" -e "s/@UUID@/$UUIDV/g" "$1" > "$2"; }
+
+node --check "$LIB" 2>/dev/null
+check "VAL-803a privacy-redact.mjs exists and passes node --check" $?
+grep -q "from './privacy-redact.mjs'" "$HERE/fleet-audit.mjs"
+check "VAL-803a fleet-audit.mjs takes its privacy rules from privacy-redact.mjs" $?
+grep -q '"privacy-redact.mjs"' "$REPO/install/sync_global.py"
+check "VAL-803a sync_global lists privacy-redact.mjs as an installed non-event hook" $?
+
+# --- parity: one fixture, fixed key, Python redact() vs JS redact() byte for byte ---
+cat > "$WORK/parity.in" <<'EOF'
+Home: C:/@U@/alice/Documents/acmeproj/src/main.py
+Win: C:\@U@\alice\AppData\Local\Temp\x.txt
+Escaped: "C:\\@U@\\alice\\repo" and c:\\\\@U@\\\\alice\\\\deep
+Bash: cd /c/@U@/alice/work && ls; also x/c/@U@/alice stays
+Transcript: C--@U@-alice-Documents-acmeproj
+Placeholders: C:/@U@/<you>/repo and C:/@U@/x/repo and /c/@U@/USER/y stay
+User: zedtester ran it; ZEDTESTER too; zedtesters and my_zedtester and zedtesterß stay
+Terms: AcmeProj, ACMEPROJ, Zeta Widget and zeta widgetry, ſſh-box and SSH-BOX
+Term with user: zedtester-labs owns it
+Turkish: KİT and kıt and Kit and kit
+Kept: <private:0123abcd> <PRIVATE:0123ABCD> and <user> stay
+UUID: @UUID@ stays
+Unicode: café naïve — résumé ﬅ
+EOF
+printf 'CRLF line zedtester\r\nlast acmeproj line without newline' >> "$WORK/parity.in"
+subst "$WORK/parity.in" "$WORK/parity.txt"
+"${PY[@]}" -c "import sys; open(sys.argv[1],'wb').write(bytes(range(32)))" "$WORK/parity.key"
+TERMS_JSON='["acmeproj","Zeta Widget","zedtester-labs","ssh-box","kit"]'
+"${PY[@]}" - "$REPO" "$WORK/parity.txt" "$WORK/parity.key" "$WORK/parity.py.out" "$TERMS_JSON" <<'EOF'
+import importlib.util, json, sys
+repo, src, keyf, out, terms = sys.argv[1:6]
+spec = importlib.util.spec_from_file_location("pg", repo + "/tools/privacy_guard.py")
+pg = importlib.util.module_from_spec(spec); sys.modules["pg"] = pg; spec.loader.exec_module(pg)
+text = open(src, "rb").read().decode("utf-8")
+g = pg.Guard(["zedtester"], [(t, "t") for t in json.loads(terms)], [])
+open(out, "wb").write(pg.redact(text, g, open(keyf, "rb").read()).encode("utf-8"))
+EOF
+check "VAL-803b python redact ran on the parity fixture" $?
+node --input-type=module - "$LIB" "$WORK/parity.txt" "$WORK/parity.key" "$WORK/parity.js.out" "$TERMS_JSON" <<'EOF' 2>/dev/null
+import { readFileSync, writeFileSync } from 'fs';
+import { pathToFileURL } from 'url';
+const [lib, src, keyf, out, terms] = process.argv.slice(2);
+const { redact } = await import(pathToFileURL(lib).href);
+const text = readFileSync(src, 'utf-8');
+writeFileSync(out, redact(text, { users: ['zedtester'], terms: JSON.parse(terms), key: readFileSync(keyf) }), 'utf-8');
+EOF
+check "VAL-803b JS redact ran on the parity fixture" $?
+cmp -s "$WORK/parity.py.out" "$WORK/parity.js.out"
+check "VAL-803b Python and JS redaction give identical bytes" $?
+grep -q '^Home: ~/Documents/<private:[0-9a-f]\{8\}>/src' "$WORK/parity.js.out" \
+  && grep -q '^User: <user> ran it; <user> too' "$WORK/parity.js.out" \
+  && grep -q '^Win: ~\\AppData' "$WORK/parity.js.out" && ! grep -qi "acmeproj" "$WORK/parity.js.out"
+check "VAL-803b parity output is actually redacted (home, user, terms)" $?
+# lazily created key: no term match -> no key file; JS token == Python placeholder_token
+node --input-type=module - "$LIB" "$WORK/lazy/never-key" <<'EOF' 2>/dev/null
+import { pathToFileURL } from 'url';
+const [lib, keyf] = process.argv.slice(2);
+process.env.CCV_PRIVACY_KEY_FILE = keyf;
+const { redact } = await import(pathToFileURL(lib).href);
+if (redact('nothing private here', { users: ['zedtester'], terms: ['acmeproj'] }) !== 'nothing private here') process.exit(1);
+EOF
+[ $? -eq 0 ] && [ ! -e "$WORK/lazy/never-key" ]
+check "VAL-803b key file not created when no term matches" $?
+
+# --- end to end: the hook writes a redacted handoff ---
+TR="$WORK/private.in.jsonl"
+cat > "$TR" <<'EOF'
+{"type":"user","isSidechain":false,"uuid":"p01","message":{"role":"user","content":"Fix acmeproj under C:/@U@/alice/work/acmeproj for zedtester and the Zeta Widget"}}
+{"type":"assistant","isSidechain":false,"uuid":"p02","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_p1","name":"Edit","input":{"file_path":"C:\\@U@\\alice\\work\\acmeproj\\main.py","old_string":"a","new_string":"b"}}]}}
+{"type":"assistant","isSidechain":false,"uuid":"p03","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_p2","name":"Bash","input":{"command":"cd /c/@U@/alice/work && zedtester-run acmeproj"}}]}}
+{"type":"assistant","isSidechain":false,"uuid":"p04","message":{"role":"assistant","content":[{"type":"text","text":"Done with Zeta Widget for ZEDTESTER in C--@U@-alice-work."}]}}
+EOF
+subst "$TR" "$WORK/private.jsonl"
+mkdir -p "$FAKEHOME/.claude"
+printf '# user-level terms\nZeta Widget\n' > "$FAKEHOME/.claude/privacy-terms"
+KEYF="$WORK/keys/nested/privacy-key"
+run_private() { # <project> <key file> [CCV_PRIVACY_TERMS] -> OUT, RC
+  OUT=$(printf '{"trigger":"auto","session_id":"redact-session-01","transcript_path":"%s"}' "$WORK/private.jsonl" \
+        | CLAUDE_PROJECT_DIR="$1" CCV_PRIVACY_KEY_FILE="$2" CCV_PRIVACY_TERMS="${3-acmeproj}" \
+          USERNAME=zedtester USER=zedtester node "$HOOK")
+  RC=$?
+}
+PROJ6="$WORK/proj6"; mkdir -p "$PROJ6/thoughts/shared/handoffs"
+run_private "$PROJ6" "$KEYF"
+check "VAL-803c redacting hook exit 0" $RC
+H6=$(find "$PROJ6/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ -n "$H6" ] && [ -f "$H6" ]
+check "VAL-803c redacted handoff written" $?
+H6="${H6:-$WORK/missing}"
+! grep -qi "alice" "$H6" 2>/dev/null && grep -q "~/work/acmeproj\|~/work" "$H6" 2>/dev/null
+check "VAL-803c home paths replaced by ~" $?
+! grep -qi "zedtester " "$H6" 2>/dev/null && grep -q "<user>" "$H6" 2>/dev/null
+check "VAL-803c OS username replaced by <user>" $?
+! grep -qi "acmeproj\|zeta widget" "$H6" 2>/dev/null
+check "VAL-803c env and ~/.claude/privacy-terms terms removed" $?
+[ -f "$KEYF" ] && [ "$(wc -c < "$KEYF" | tr -d ' ')" = "32" ]
+check "VAL-803c key created (parents too) with 32 bytes" $?
+TOKS=$("${PY[@]}" - "$REPO" "$KEYF" <<'EOF' 2>/dev/null
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pg", sys.argv[1] + "/tools/privacy_guard.py")
+pg = importlib.util.module_from_spec(spec); sys.modules["pg"] = pg; spec.loader.exec_module(pg)
+key = open(sys.argv[2], "rb").read()
+print(pg.placeholder_token("acmeproj", key), pg.placeholder_token("Zeta Widget", key))
+EOF
+)
+T1="${TOKS%% *}"; T2="${TOKS##* }"
+[ -n "$TOKS" ] && grep -qF "$T1" "$H6" && grep -qF "$T2" "$H6"
+check "VAL-803c tokens equal Python placeholder_token under the same key ($TOKS)" $?
+# Python redact over the JS output changes nothing (same rules, idempotent)
+cp "$H6" "$WORK/h6.copy"
+printf 'acmeproj\n' > "$WORK/clone-terms"
+HOME="$FAKEHOME" USERPROFILE="$FAKEHOME" CCV_PRIVACY_KEY_FILE="$KEYF" CCV_PRIVACY_TERMS= \
+  "${PY[@]}" "$REPO/tools/privacy_guard.py" --redact --username zedtester \
+  --terms-file "$WORK/clone-terms" --allow-file "$WORK/no-allow" "$WORK/h6.copy" 2>/dev/null
+[ $? -eq 0 ] && cmp -s "$H6" "$WORK/h6.copy"
+check "VAL-803c Python --redact leaves the hook's handoff byte-identical" $?
+# clone terms: the project's .git/info/privacy-terms
+PROJ7="$WORK/proj7"; mkdir -p "$PROJ7/.git/info" "$PROJ7/thoughts/shared/handoffs"
+printf 'acmeproj\n' > "$PROJ7/.git/info/privacy-terms"
+run_private "$PROJ7" "$KEYF" ""
+H7=$(find "$PROJ7/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ -n "$H7" ] && ! grep -qi "acmeproj" "$H7" && grep -qF "$T1" "$H7"
+check "VAL-803c project .git/info/privacy-terms is a term source" $?
+# no term matches -> key never created
+PROJ8="$WORK/proj8"; mkdir -p "$PROJ8/thoughts/shared/handoffs"
+mv "$FAKEHOME/.claude/privacy-terms" "$WORK/user-terms.off"
+run_private "$PROJ8" "$WORK/keys/unused-key" "nomatchterm"
+H8=$(find "$PROJ8/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ "$RC" -eq 0 ] && [ -n "$H8" ] && [ ! -e "$WORK/keys/unused-key" ]
+check "VAL-803d no matching term: handoff written, no key file created" $?
+mv "$WORK/user-terms.off" "$FAKEHOME/.claude/privacy-terms"
+
+# --- fail open: key unusable -> home paths only, hook never crashes ---
+mkdir -p "$WORK/keydir"
+PROJ9="$WORK/proj9"; mkdir -p "$PROJ9/thoughts/shared/handoffs"
+run_private "$PROJ9" "$WORK/keydir"
+check "VAL-803e key error: exit 0" $RC
+printf '%s' "$OUT" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8')); if(d.continue!==true)process.exit(1)"
+check "VAL-803e key error: stdout valid hook JSON" $?
+H9=$(find "$PROJ9/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ -n "$H9" ] && ! grep -qi "alice" "$H9" && grep -q "~/work" "$H9"
+check "VAL-803e key error: handoff still written with home paths replaced" $?
+printf '%s' "$OUT" | grep -qi "home paths only"
+check "VAL-803e key error: systemMessage says redaction fell back (got: ${OUT:0:160})" $?
+grep -qi "acmeproj" "$H9"
+check "VAL-803e key error: only home paths were replaced (terms left, as specified)" $?
+# module missing (partial install): the hook still runs and replaces the home dir
+mkdir -p "$WORK/lonehook"; cp "$HOOK" "$WORK/lonehook/pre-compact.mjs"
+printf '{"type":"user","isSidechain":false,"uuid":"q01","message":{"role":"user","content":"Look in %s/lone-dir please"}}\n' "$FAKEHOME" > "$WORK/lone.jsonl"
+PROJ10="$WORK/proj10"; mkdir -p "$PROJ10/thoughts/shared/handoffs"
+OUT=$(printf '{"trigger":"auto","session_id":"lone-session-01","transcript_path":"%s"}' "$WORK/lone.jsonl" \
+      | CLAUDE_PROJECT_DIR="$PROJ10" node "$WORK/lonehook/pre-compact.mjs")
+RC=$?
+H10=$(find "$PROJ10/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ "$RC" -eq 0 ] && [ -n "$H10" ] && grep -q "Look in ~/lone-dir" "$H10" && ! grep -qF "$FAKEHOME" "$H10"
+check "VAL-803e module missing: exit 0, handoff written with the home dir replaced" $?
+printf '%s' "$OUT" | grep -qi "home paths only"
+check "VAL-803e module missing: systemMessage says redaction fell back" $?
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

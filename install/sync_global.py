@@ -54,8 +54,9 @@ MAPPINGS = [
 # no other .json exists in the mapped trees; settings.json lives outside them.
 INCLUDE_SUFFIXES = {".md", ".mjs", ".js", ".sh", ".py", ".txt", ".json"}
 # installed .mjs not registered in settings.json: skip registration check
-# (tldr-shim is spawned by tldr-read; worker-report-check is a worker.md frontmatter hook)
-NOT_EVENT_HOOKS = {"tldr-shim.mjs", "worker-report-check.mjs"}
+# (tldr-shim is spawned by tldr-read; worker-report-check is a worker.md frontmatter hook;
+# privacy-redact is a library imported by pre-compact and fleet-audit)
+NOT_EVENT_HOOKS = {"tldr-shim.mjs", "worker-report-check.mjs", "privacy-redact.mjs"}
 # --python / --eol defaults; EOLS maps the --eol name (recorded as manifest "eol") to bytes
 DEFAULT_PYTHON = "py -3.13" if sys.platform == "win32" else "python3"
 DEFAULT_EOL = "crlf" if sys.platform == "win32" else "lf"
