@@ -134,7 +134,8 @@ NO_TERMS_WARNING = (
 ENV_KEY_FILE = "CCV_PRIVACY_KEY_FILE"
 KEY_BYTES = 32
 TOKEN_HEX = 8
-KEY_STALE_S = 3.0  # a 0-byte key older than this is an abandoned create
+KEY_STALE_S = 3.0  # a 0-byte key (or its lock) older than this, or dated this far
+# in the future (clock moved back), is an abandoned create
 KEY_WAIT_S = 10.0  # overall bound on waiting for / repairing the key file
 TOKEN_RE = re.compile(r"<private:(?P<hex>[0-9a-f]{8})>")
 USER_TOKEN = "<user>"
@@ -403,13 +404,14 @@ def _publish_key(path: Path) -> None:
 def _replace_empty_key(path: Path) -> None:
     """Replace an abandoned 0-byte key in one step (os.replace, so the path never
     goes missing), under an exclusive `<key>.lock`; the emptiness is re-checked
-    under the lock. A lock older than KEY_STALE_S (holder killed) is removed."""
+    under the lock. A lock older than KEY_STALE_S (holder killed), or dated that
+    far in the future, is removed."""
     lock = path.with_name(path.name + ".lock")
     try:
         os.close(os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
     except (FileExistsError, PermissionError):  # held (Windows: being deleted)
         try:
-            if time.time() - lock.stat().st_mtime >= KEY_STALE_S:
+            if abs(time.time() - lock.stat().st_mtime) >= KEY_STALE_S:
                 lock.unlink()
         except OSError:
             pass
@@ -452,7 +454,8 @@ def load_or_create_key(path: Path | None = None) -> bytes:
     Creation is atomic (temp file + link, never replacing), so concurrent creators
     converge on one key. A 0-byte file never produced a token: it is waited on while
     younger than KEY_STALE_S (its creator may be writing), then replaced under a
-    lock. A 1-31 byte file may have, so it raises ValueError and is left alone.
+    lock; one dated KEY_STALE_S or more in the future (clock moved back) is
+    replaced at once. A 1-31 byte file may have, so it raises ValueError and is left alone.
     """
     path = default_key_file() if path is None else Path(path)
     deadline = time.monotonic() + KEY_WAIT_S
@@ -470,7 +473,7 @@ def load_or_create_key(path: Path | None = None) -> bytes:
             raise ValueError(f"privacy key {path} could not be created")
         if data is None:
             _publish_key(path)
-        elif age >= KEY_STALE_S:
+        elif abs(age) >= KEY_STALE_S:  # negative: mtime in the future
             _replace_empty_key(path)
         else:
             time.sleep(0.05)

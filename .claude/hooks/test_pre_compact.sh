@@ -299,6 +299,19 @@ node "$WORK/key_js.mjs" "$LIB" "$WORK/young-key" "$WORK/young.out" 2>/dev/null
 wait
 [ "$(cat "$WORK/young.out")" = "$(printf '0123456789abcdef0123456789abcdef' | od -An -tx1 -v | tr -d ' \n')" ]
 check "F1 JS: fresh 0-byte key is waited on while its writer finishes" $?
+# N1: an empty key (and its lock) dated 1 h in the future counts as stale (clock moved back)
+for lang in js py; do
+  d="$WORK/future-$lang"; mkdir -p "$d"
+  : > "$d/privacy-key"; touch -d '1 hour' "$d/privacy-key"
+  : > "$d/privacy-key.lock"; touch -d '1 hour' "$d/privacy-key.lock"
+  t0=$(date +%s%N)
+  if [ "$lang" = js ]; then node "$WORK/key_js.mjs" "$LIB" "$d/privacy-key" "$d.out" 2>/dev/null
+  else "${PY[@]}" "$WORK/key_py.py" "$REPO" "$d/privacy-key" "$d.out" 2>/dev/null; fi
+  ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+  [ "$ms" -lt 3000 ] && [ "$(wc -c < "$d/privacy-key")" -eq 32 ] && [ ! -e "$d/privacy-key.lock" ] \
+    && [ "$(cat "$d.out")" = "$(od -An -tx1 -v "$d/privacy-key" | tr -d ' \n')" ]
+  r=$?; check "N1 $lang: future-mtime 0-byte key + lock repaired in ${ms} ms (<3000), 32-byte key (got: $(head -c 80 "$d.out" 2>/dev/null))" $r
+done
 
 # --- end to end: the hook writes a redacted handoff ---
 TR="$WORK/private.in.jsonl"

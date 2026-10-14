@@ -577,6 +577,28 @@ class TestKeyAndToken(RedactCase):
         self.assertEqual(len(key), 32)
         self.assertEqual(path.read_bytes(), key)
 
+    def test_future_mtime_empty_key_is_replaced_at_once(self):
+        """N1: a negative age (clock moved back) counts as stale, not as fresh."""
+        path = self._empty_key("future-key", -3600)
+        start = time.monotonic()
+        key = self.mod.load_or_create_key(path)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(len(key), 32)
+        self.assertEqual(path.read_bytes(), key)
+
+    def test_future_mtime_lock_is_removed(self):
+        """N1: a lock dated in the future does not block repair of a stale key."""
+        path = self._empty_key("locked-key", 60)
+        lock = path.with_name(path.name + ".lock")
+        lock.write_bytes(b"")
+        t = time.time() + 3600
+        os.utime(lock, (t, t))
+        start = time.monotonic()
+        key = self.mod.load_or_create_key(path)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(len(key), 32)
+        self.assertFalse(lock.exists())
+
     def test_concurrent_repair_of_empty_key_converges(self):
         for round_no in range(5):
             path = self._empty_key(f"stale-race-{round_no}", 60)

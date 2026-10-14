@@ -106,7 +106,9 @@ export function usernames() {
 // --- reversible redaction: port of privacy_guard.redact() ---
 
 const KEY_BYTES = 32;
-const KEY_STALE_S = 3; // a 0-byte key older than this is an abandoned create
+// a 0-byte key (or its lock) older than this, or dated this far in the future
+// (clock moved back), is an abandoned create
+const KEY_STALE_S = 3;
 const KEY_WAIT_S = 10; // overall bound on waiting for / repairing the key file
 const TOKEN_HEX = 8;
 const USER_TOKEN = '<user>';
@@ -246,7 +248,7 @@ function replaceEmptyKey(path) {
   const lock = `${path}.lock`;
   try { closeSync(openSync(lock, 'wx', 0o600)); } catch (e) {
     if (!e || (e.code !== 'EEXIST' && !isBusy(e))) throw e;
-    try { if (Date.now() - statSync(lock).mtimeMs >= KEY_STALE_S * 1000) unlinkSync(lock); } catch {}
+    try { if (Math.abs(Date.now() - statSync(lock).mtimeMs) >= KEY_STALE_S * 1000) unlinkSync(lock); } catch {}
     sleepMs(20);
     return;
   }
@@ -289,7 +291,7 @@ export function loadOrCreateKey(path = defaultKeyFile()) {
     }
     if (Date.now() > deadline) throw new Error(`privacy key ${path} could not be created`);
     if (data === null) publishKey(path);
-    else if (age >= KEY_STALE_S) replaceEmptyKey(path);
+    else if (Math.abs(age) >= KEY_STALE_S) replaceEmptyKey(path); // negative: mtime in the future
     else sleepMs(50);
   }
 }
