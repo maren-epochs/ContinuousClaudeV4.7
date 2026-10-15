@@ -41,6 +41,7 @@ if str(SCRIPT.parent.parent) not in sys.path:
 # importlib (not a late `import`) keeps ruff quiet under both default (E402) and RUF100 configs
 _sync = importlib.import_module("sync_global")
 _model = importlib.import_module("tools.fleet.model")
+home_path = importlib.import_module("tools._testing").home_path
 NOT_EVENT_HOOKS, render, rewrites = _sync.NOT_EVENT_HOOKS, _sync.render, _sync.rewrites
 
 TIMEOUT = 120
@@ -288,7 +289,7 @@ class ToolsInstall(unittest.TestCase):
             self.assertIn(f"{target.as_posix()}/tools/viz/recommend.py", skill)
 
     def test_viz_command_rewritten_like_other_tools(self) -> None:
-        dest, python = "C:/Users/x/.claude", "py -3.13"
+        dest, python = home_path("x", "posix") + "/.claude", "py -3.13"
         rules = rewrites(dest, python)
         with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
             md = Path(td) / "SKILL.md"
@@ -310,7 +311,7 @@ class ToolsInstall(unittest.TestCase):
 
     def test_fleet_paths_rewritten_like_viz(self) -> None:
         """VAL-811: installed skill docs reference the installed tools/fleet/fleet.py."""
-        dest, python = "C:/Users/x/.claude", "py -3.13"
+        dest, python = home_path("x", "posix") + "/.claude", "py -3.13"
         rules = rewrites(dest, python)
         with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
             md = Path(td) / "SKILL.md"
