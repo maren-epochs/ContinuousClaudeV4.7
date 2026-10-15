@@ -103,8 +103,10 @@ def candidates() -> list[Target]:
         transcripts = list(folder.glob("*.jsonl")) if folder.is_dir() else []
         if not transcripts:
             continue
-        newest = max(transcripts, key=_mtime)
-        cwd = transcript_cwd(newest)
+        transcripts.sort(key=_mtime, reverse=True)
+        newest = transcripts[0]
+        # A metadata-only stub (title/name lines, no cwd) can be the newest file.
+        cwd = next(filter(None, map(transcript_cwd, transcripts)), None)
         if cwd and not Path(cwd).is_dir():
             cwd = renamed_cwd(folder.name, cwd)
         if not cwd or _excluded(cwd):

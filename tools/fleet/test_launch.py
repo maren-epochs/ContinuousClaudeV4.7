@@ -115,6 +115,15 @@ class CandidateTests(LaunchHome):
         (folder / "a.jsonl").write_text('{"type":"user"}\n', encoding="utf-8")
         self.assertEqual(launch.candidates(), [])
 
+    def test_newest_stub_transcript_without_cwd_falls_back_to_older(self):
+        cwd = self.project("amber", mtime=1_000)
+        folder = self.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+        stub = folder / "stub.jsonl"
+        stub.write_text('{"type":"ai-title","aiTitle":"t"}\n', encoding="utf-8")
+        os.utime(stub, (2_000, 2_000))
+        (found,) = launch.candidates()
+        self.assertEqual((found.title, found.last), ("amber", 2_000))
+
 
 class SelectTests(LaunchHome):
     def setUp(self):
