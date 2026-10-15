@@ -1402,8 +1402,8 @@ class DigestTests(CliHome):
         self.assertIn("# Fleet digest", out.stdout)
 
 
-class CollectDigestTests(CliHome):
-    """fleet.py collect writes today's digest once per local day; never fails collect."""
+class CollectDigestCase(CliHome):
+    """Fixed digest clock, isolated privacy terms, collect() with patched digest parts."""
 
     def setUp(self):
         super().setUp()
@@ -1428,6 +1428,10 @@ class CollectDigestTests(CliHome):
             for name, kw in patches.items():
                 stack.enter_context(mock.patch.object(digest, name, **kw))
             return self.run_main("collect")
+
+
+class CollectDigestTests(CollectDigestCase):
+    """fleet.py collect writes today's digest once per local day; never fails collect."""
 
     def test_writes_todays_digest_when_absent(self):
         code, out, err = self.collect()
@@ -1461,6 +1465,133 @@ class CollectDigestTests(CliHome):
             code, _, _ = self.run_main("collect")
         self.assertEqual(code, fleet.COLLECT_FAILED)
         self.assertFalse(self.path.exists())
+
+
+class DigestErrTests(CollectDigestCase):
+    """A failed daily digest write leaves a masked reason in fleet/digest.err."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {"CCV_PRIVACY_TERMS": "zebracorp"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.err = model.fleet_dir() / "digest.err"
+        self.expected = fleet.summary(_digest_state()) + "\n"
+
+    def fail_write(self, exc=None):
+        exc = exc or OSError(
+            13,
+            "Permission denied for zebracorp",
+            str(self.path),
+        )
+        code, out, err = self.collect(write={"side_effect": exc})
+        self.assertEqual((code, out, err), (0, self.expected, ""))
+        return exc
+
+    def test_failure_records_short_masked_reason_without_paths(self):
+        other = home_path("alice", "posix") + "/notes and /var/tmp/z"
+        self.fail_write(OSError(f"cannot write {self.path} for ZebraCorp near {other}"))
+        text = self.err.read_text(encoding="utf-8")
+        self.assertEqual(text.count("\n"), 1, text)
+        self.assertTrue(text.startswith("OSError: cannot write "), text)
+        self.assertLessEqual(len(text.strip()), fleet.DIGEST_ERR_MAX)
+        for leak in (str(self.home), "alice", "zebracorp", "/var/tmp", ".md"):
+            self.assertNotIn(leak.lower(), text.lower())
+        self.assertIn("<path>", text)
+        self.assertIn(lessons.MASK, text)
+
+    def test_errno_repr_path_and_private_term_hidden(self):
+        self.fail_write()
+        text = self.err.read_text(encoding="utf-8")
+        self.assertIn("Permission denied", text)
+        self.assertNotIn("zebracorp", text.lower())
+        self.assertNotIn(self.home.name, text)
+        self.assertNotIn("digests", text)
+
+    def test_unc_and_spaced_home_paths_hidden(self):
+        unc = "\\\\" + "fileserver\\share\\f.md"
+        for exc in (OSError(13, "denied", unc), OSError(f"cannot open {unc}")):
+            self.fail_write(exc)
+            text = self.err.read_text(encoding="utf-8")
+            self.assertNotIn("fileserver", text)
+            self.assertNotIn("share", text)
+        spaced = self.home.parent / "Quentin Smythe"
+        spaced.mkdir()
+        env = {"HOME": str(spaced), "USERPROFILE": str(spaced)}
+        with mock.patch.dict(os.environ, env):
+            self.fail_write(OSError(13, "denied", str(spaced / ".claude" / "x.md")))
+            text = (model.fleet_dir() / "digest.err").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("PermissionError: [Errno 13] denied"), text)
+        self.assertNotIn("Smythe", text)
+        self.assertNotIn("Quentin", text)
+
+    def test_reason_is_clipped(self):
+        self.fail_write(RuntimeError("x" * 1000))
+        text = self.err.read_text(encoding="utf-8").strip()
+        self.assertEqual(len(text), fleet.DIGEST_ERR_MAX)
+
+    def test_overwritten_by_the_next_failure(self):
+        self.fail_write(OSError("first"))
+        self.fail_write(ValueError("second"))
+        self.assertEqual(self.err.read_text(encoding="utf-8"), "ValueError: second\n")
+
+    def test_removed_on_the_next_success(self):
+        self.fail_write()
+        self.assertTrue(self.err.exists())
+        code, out, err = self.collect()
+        self.assertEqual((code, out, err), (0, self.expected, ""))
+        self.assertTrue(self.path.exists())
+        self.assertFalse(self.err.exists())
+
+    def test_removed_when_todays_digest_already_exists(self):
+        self.fail_write()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("earlier digest\n", encoding="utf-8")
+        self.assertEqual(self.collect()[0], 0)
+        self.assertFalse(self.err.exists())
+
+    def test_masking_failure_falls_back_to_the_class_name(self):
+        with mock.patch.object(
+            lessons, "default_guard", side_effect=RuntimeError("no guard")
+        ):
+            self.fail_write(OSError("zebracorp"))
+        self.assertEqual(self.err.read_text(encoding="utf-8"), "OSError\n")
+
+    def test_unwritable_err_file_never_fails_collect(self):
+        self.err.mkdir(parents=True)  # a directory where the file should go
+        self.fail_write()
+        self.assertTrue(self.err.is_dir())
+
+    def test_report_and_digest_print_one_notice_line(self):
+        self.fail_write(OSError("disk full"))
+        notice = "digest: last daily write failed (OSError: disk full)"
+        code, out, err = self.run_main("report")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines().count(notice), 1, out)
+        code, out, err = self.run_main("digest")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines().count(notice), 1, out)
+        for flag in ("--json", "--write"):
+            with self.subTest(flag=flag):
+                code, out, err = self.run_main("digest", flag)
+                self.assertEqual(code, 0)
+                self.assertNotIn("digest:", out)
+                self.assertEqual(err, notice + "\n")
+        json.loads(self.run_main("digest", "--json")[1])
+
+    def test_no_notice_without_err_file(self):
+        model.save_state(_digest_state())
+        for args in (("report",), ("digest",), ("digest", "--json")):
+            with self.subTest(args=args):
+                code, out, err = self.run_main(*args)
+                self.assertEqual((code, err), (0, ""))
+                self.assertNotIn("last daily write failed", out)
+
+    def test_unreadable_err_file_still_noticed(self):
+        model.save_state(_digest_state())
+        self.err.mkdir(parents=True)
+        _, out, _ = self.run_main("report")
+        self.assertIn("digest: last daily write failed (reason unknown)", out)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,9 @@
 """Fleet CLI: ``py -3.13 tools/fleet/fleet.py <command>``.
 
 collect          build state.json from ~/.claude and print a one-line summary; also
-                 writes today's digest file when absent (failures ignored)
+                 writes today's digest file when absent (a failure never changes exit
+                 code or output: its masked reason goes to ~/.claude/fleet/digest.err,
+                 removed again by the next successful daily digest step)
 report           live sessions, alerts, collisions, drift, inbox and recent audit
 json             state.json as JSON on stdout (report/json collect first when
                  state.json is missing or with --fresh)
@@ -25,6 +27,8 @@ digest           plain-language markdown summary: machine, harness sync, inbox, 
                  in the last 24 h, sessions needing attention first, a "needs you" list
                  (--fresh collects first; --json the same data; --write saves
                  ~/.claude/fleet/digests/YYYY-MM-DD.md and prints the path)
+                 report and digest add "digest: last daily write failed (<reason>)" while
+                 digest.err exists (digest --json/--write: on stderr)
 dashboard [out]  HTML dashboard via dashboard.py (default ~/.claude/fleet/dashboard.html)
 
 Exit codes: 0 done, 1 refused (reason on stderr), 2 usage or dashboard missing,
@@ -70,6 +74,8 @@ SYNC_HINT = "py -3.13 install/sync_global.py --apply"
 COLLECT_FAILED = 3
 COLLECT_ERR_MAX = 256 * 1024
 COLLECT_ERR_MSG_MAX = 500
+DIGEST_ERR_MAX = 200
+_HOME_REL_PATH = re.compile(r"~[\\/][^\s'\",;]*")
 _ABS_PATH = re.compile(
     r"\\\\[^\s'\",;]+"  # UNC and device paths
     r"|[A-Za-z]:[\\/][^\s'\",;]*"  # drive paths
@@ -140,12 +146,70 @@ def _collect_cmd() -> int:
 
 
 def _daily_digest(state: FleetState) -> None:
-    """Write today's (local date) digest when its file is absent; any failure is
-    swallowed so it never changes collect's exit code or output."""
-    with contextlib.suppress(Exception):
+    """Write today's (local date) digest when its file is absent. A failure never
+    changes collect's exit code or output: its reason goes to digest.err, which the
+    next successful run (written, or today's file already there) removes."""
+    try:
         now = digest._now()
         if not digest.digest_path(now.astimezone().date().isoformat()).exists():
             digest.write(digest.build(state, now))
+    except Exception as exc:  # noqa: BLE001 - detached run: record, never raise
+        with contextlib.suppress(Exception):
+            model.write_atomic(digest_err_path(), _digest_reason(exc) + "\n")
+        return
+    with contextlib.suppress(OSError):
+        digest_err_path().unlink(missing_ok=True)
+
+
+def digest_err_path() -> Path:
+    """``~/.claude/fleet/digest.err``: reason of the last failed daily digest write."""
+    return model.fleet_dir() / "digest.err"
+
+
+def _digest_reason(exc: BaseException) -> str:
+    """``Class: message`` on one line, at most DIGEST_ERR_MAX chars: every path is
+    ``<path>`` and privacy-guard hits are masked; just ``Class`` if masking fails."""
+    name = type(exc).__name__
+    text = str(exc)
+    home = str(model.home_dir()).rstrip("\\/")
+    if "\\" in home:  # repr'd paths double each backslash; _redact knows single ones
+        text = re.sub(
+            re.escape(home.replace("\\", "\\\\")), "~", text, flags=re.IGNORECASE
+        )
+    text = _HOME_REL_PATH.sub("<path>", _redact(text))
+    if not text:
+        return name[:DIGEST_ERR_MAX]
+    try:
+        text = lessons.mask(text, lessons.default_guard(model.home_dir()))
+    except Exception:  # noqa: BLE001 - no guard, no message
+        return name[:DIGEST_ERR_MAX]
+    return f"{name}: {text}"[:DIGEST_ERR_MAX]
+
+
+def digest_notice() -> str | None:
+    """``digest: last daily write failed (<reason>)`` while digest.err exists."""
+    path = digest_err_path()
+    if not os.path.lexists(path):
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    reason = " ".join(text.split())[:DIGEST_ERR_MAX] or "reason unknown"
+    return f"digest: last daily write failed ({reason})"
+
+
+def _digest_cmd(args: argparse.Namespace) -> str:
+    """``digest``: the rendered digest; a failed daily write adds one notice line
+    (after markdown, on stderr for --json/--write so stdout stays parseable)."""
+    text = digest.render(_state(args.fresh), args.json, args.write)
+    notice = digest_notice()
+    if notice is None:
+        return text
+    if args.json or args.write:
+        print(notice, file=sys.stderr)
+        return text
+    return f"{text}\n\n{notice}"
 
 
 def summary(state: FleetState) -> str:
@@ -325,6 +389,9 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
             f" | inbox: {state.inbox_count} | audit: {len(state.audit_recent)} recent"
         ),
     ]
+    notice = digest_notice()
+    if notice:
+        lines.append(notice)
     for section in (
         _session_lines(state),
         _alert_lines(state),
@@ -1211,7 +1278,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "questions": lambda a: list_questions(a.all, a.json),
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
-    "digest": lambda a: digest.render(_state(a.fresh), a.json, a.write),
+    "digest": _digest_cmd,
     "open": lambda a: open_sessions(
         a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
     ),
