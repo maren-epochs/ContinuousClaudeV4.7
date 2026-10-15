@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
@@ -264,6 +265,15 @@ class StructureTests(unittest.TestCase):
         )
         page = dashboard.build_page(state)
         self.assertIn('id="sessions"', page)
+
+    def test_digest_notice_shown_only_while_digest_err_exists(self):
+        text = "digest: last daily write failed (OSError: <b>disk</b>)"
+        with mock.patch.object(dashboard.digest, "notice", return_value=text):
+            page = dashboard.build_page(FleetState())
+        self.assertIn('id="digest"', page)
+        self.assertIn("(OSError: &lt;b&gt;disk&lt;/b&gt;)", page)
+        with mock.patch.object(dashboard.digest, "notice", return_value=None):
+            self.assertNotIn('id="digest"', dashboard.build_page(FleetState()))
 
 
 class MachineAlertTests(unittest.TestCase):

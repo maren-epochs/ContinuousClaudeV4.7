@@ -1,7 +1,7 @@
 """Fleet dashboard (VAL-810): one self-contained HTML page from a FleetState.
 
 ``build_page(state)`` returns the page; ``write_page(state, path)`` writes it.
-Sections: pending questions (only when any), summary, alerts (collisions + machine and
+Sections: pending questions and the failed-digest notice (only when any), summary, alerts (collisions + machine and
 per-session alerts, worst first), sessions, inbox, recent audit, harness drift (with
 ``behind_files`` as Files differing), collector warnings.
 
@@ -19,7 +19,7 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import model, questions
+from . import digest, model, questions
 from .model import Alert, AuditEvent, Collision, DriftEntry, FleetState, Session
 
 try:  # tools.fleet: tools.viz is the sibling package
@@ -380,6 +380,17 @@ def _questions_section(state: FleetState) -> str:
     )
 
 
+def _digest_section() -> str:
+    """Notice of a failed daily digest write (digest.err); empty string when none."""
+    text = digest.notice()
+    if not text:
+        return ""
+    return (
+        '<section id="digest" class="card"><h2>Daily digest</h2>'
+        f'<p class="meta">{_e(text)}</p></section>'
+    )
+
+
 def _inbox_section(state: FleetState) -> str:
     n = state.inbox_count
     noun = "proposal" if n == 1 else "proposals"
@@ -465,6 +476,7 @@ def build_page(state: FleetState) -> str:
     body = "".join(
         (
             _questions_section(state),
+            _digest_section(),
             _summary(state),
             _alerts_section(state),
             _sessions_section(state),

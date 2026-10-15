@@ -74,7 +74,7 @@ SYNC_HINT = "py -3.13 install/sync_global.py --apply"
 COLLECT_FAILED = 3
 COLLECT_ERR_MAX = 256 * 1024
 COLLECT_ERR_MSG_MAX = 500
-DIGEST_ERR_MAX = 200
+DIGEST_ERR_MAX = digest.ERR_MAX
 _HOME_REL_PATH = re.compile(r"~[\\/][^\s'\",;]*")
 _ABS_PATH = re.compile(
     r"\\\\[^\s'\",;]+"  # UNC and device paths
@@ -155,15 +155,10 @@ def _daily_digest(state: FleetState) -> None:
             digest.write(digest.build(state, now))
     except Exception as exc:  # noqa: BLE001 - detached run: record, never raise
         with contextlib.suppress(Exception):
-            model.write_atomic(digest_err_path(), _digest_reason(exc) + "\n")
+            model.write_atomic(digest.err_path(), _digest_reason(exc) + "\n")
         return
     with contextlib.suppress(OSError):
-        digest_err_path().unlink(missing_ok=True)
-
-
-def digest_err_path() -> Path:
-    """``~/.claude/fleet/digest.err``: reason of the last failed daily digest write."""
-    return model.fleet_dir() / "digest.err"
+        digest.err_path().unlink(missing_ok=True)
 
 
 def _digest_reason(exc: BaseException) -> str:
@@ -186,24 +181,11 @@ def _digest_reason(exc: BaseException) -> str:
     return f"{name}: {text}"[:DIGEST_ERR_MAX]
 
 
-def digest_notice() -> str | None:
-    """``digest: last daily write failed (<reason>)`` while digest.err exists."""
-    path = digest_err_path()
-    if not os.path.lexists(path):
-        return None
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        text = ""
-    reason = " ".join(text.split())[:DIGEST_ERR_MAX] or "reason unknown"
-    return f"digest: last daily write failed ({reason})"
-
-
 def _digest_cmd(args: argparse.Namespace) -> str:
     """``digest``: the rendered digest; a failed daily write adds one notice line
     (after markdown, on stderr for --json/--write so stdout stays parseable)."""
     text = digest.render(_state(args.fresh), args.json, args.write)
-    notice = digest_notice()
+    notice = digest.notice()
     if notice is None:
         return text
     if args.json or args.write:
@@ -389,7 +371,7 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
             f" | inbox: {state.inbox_count} | audit: {len(state.audit_recent)} recent"
         ),
     ]
-    notice = digest_notice()
+    notice = digest.notice()
     if notice:
         lines.append(notice)
     for section in (

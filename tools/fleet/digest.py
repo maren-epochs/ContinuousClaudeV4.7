@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from .model import Alert, FleetState, Harness, Session
 AUDIT_WINDOW_S = 24 * 3600
 ATTENTION = ("error", "warn")
 SEVERITY_ORDER = {"error": 0, "warn": 1, "info": 2}
+ERR_MAX = 200  # chars of a digest.err reason
 
 
 def _now() -> _dt.datetime:
@@ -288,6 +290,24 @@ def masked(data: dict[str, Any]) -> dict[str, Any]:
 def digest_path(date: str) -> Path:
     """``~/.claude/fleet/digests/<date>.md``."""
     return model.fleet_dir() / "digests" / f"{date}.md"
+
+
+def err_path() -> Path:
+    """``~/.claude/fleet/digest.err``: reason of the last failed daily digest write."""
+    return model.fleet_dir() / "digest.err"
+
+
+def notice() -> str | None:
+    """``digest: last daily write failed (<reason>)`` while digest.err exists."""
+    path = err_path()
+    if not os.path.lexists(path):
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    reason = " ".join(text.split())[:ERR_MAX] or "reason unknown"
+    return f"digest: last daily write failed ({reason})"
 
 
 def write(data: dict[str, Any]) -> Path:

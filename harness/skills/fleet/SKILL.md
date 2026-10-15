@@ -47,7 +47,7 @@ same data; `--write` saves `~/.claude/fleet/digests/YYYY-MM-DD.md` (local date) 
 the path. `collect` (also the Stop hook's background run) writes that day's file when it is
 absent. A failed daily write never changes `collect`'s exit code or output: its masked
 reason goes to `~/.claude/fleet/digest.err`, which the next successful run (file written, or
-that day's file already there) deletes. While it exists, `report` and `digest` add one line
+that day's file already there) deletes. While it exists, `report`, `digest` and the dashboard add one line
 `digest: last daily write failed (<reason>)` (`digest --json`/`--write`: on stderr); relay
 it. Private terms, home paths and session ids are masked. Relay the "needs you" list first.
 
