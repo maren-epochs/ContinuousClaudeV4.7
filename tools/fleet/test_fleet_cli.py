@@ -24,6 +24,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from tools._testing import home_path
 from tools.fleet import digest, fleet, lessons, model
 from tools.fleet.model import (
     Alert,
@@ -1140,7 +1141,6 @@ class OpenStaggerParseTests(unittest.TestCase):
         self.assertEqual(opened.call_args.kwargs["stagger"], 2.0)
 
 
-DRIVE = "C:"  # split from the path so the privacy guard does not flag the fixture
 DIGEST_NOW = datetime.datetime(2026, 10, 14, 12, 0, tzinfo=datetime.UTC)
 
 
@@ -1183,7 +1183,7 @@ def _digest_state():
             Alert(
                 kind="collision",
                 severity="error",
-                detail=f"2 sessions wrote {DRIVE}/Users/alice/work/x.py",
+                detail=f"2 sessions wrote {home_path('alice', 'posix')}/work/x.py",
             )
         ],
     )

@@ -31,6 +31,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from _testing import home_path
+
 PROJECT = Path(__file__).resolve().parent.parent
 GUARD = PROJECT / "tools" / "privacy_guard.py"
 
@@ -58,9 +60,9 @@ def _guard_module():
     return mod
 
 
-def home(drive_sep: str, name: str) -> str:
-    """C:<sep>Users<sep><name> assembled at runtime."""
-    return "C:" + drive_sep + "Users" + drive_sep + name
+def escaped(path: str) -> str:
+    """path with each backslash doubled (the JSON / shell-escaped spelling)."""
+    return path.replace("\\", "\\\\")
 
 
 class GuardCase(unittest.TestCase):
@@ -114,20 +116,22 @@ class GuardCase(unittest.TestCase):
 
 class TestHomePaths(GuardCase):
     def test_forward_slash_real_name(self):
-        p = self.write("a.md", "see " + home("/", "alice") + "/proj\n")
+        p = self.write("a.md", "see " + home_path("alice", "posix") + "/proj\n")
         r = self.run_guard(p)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn(f"{p.name}:1:", r.stdout)
         self.assertIn("user-home path", r.stdout)
 
     def test_backslash_real_name(self):
-        p = self.write("a.txt", "ok\npath " + home("\\", "alice") + "\\x\n")
+        p = self.write("a.txt", "ok\npath " + home_path("alice", "win") + "\\x\n")
         r = self.run_guard(p)
         self.assertEqual(r.returncode, 1)
         self.assertIn(f"{p.name}:2:", r.stdout)
 
     def test_escaped_backslash_real_name(self):
-        p = self.write("a.json", '{"p": "' + home("\\\\", "alice") + '\\\\x"}\n')
+        p = self.write(
+            "a.json", '{"p": "' + escaped(home_path("alice", "win")) + '\\\\x"}\n'
+        )
         self.assertEqual(self.run_guard(p).returncode, 1)
 
     def test_lowercase_drive_and_users(self):
@@ -135,29 +139,32 @@ class TestHomePaths(GuardCase):
         self.assertEqual(self.run_guard(p).returncode, 1)
 
     def test_git_bash_form(self):
-        p = self.write("a.sh", "cd /c" + "/Users/" + "alice/x\n")
+        p = self.write("a.sh", "cd " + home_path("alice", "gitbash") + "/x\n")
         self.assertEqual(self.run_guard(p).returncode, 1)
 
     def test_transcript_dir_form(self):
-        p = self.write("a.txt", "projects/C" + "--Users-" + "alice-Documents-proj\n")
+        p = self.write(
+            "a.txt",
+            "projects/" + home_path("alice", "transcript") + "-Documents-proj\n",
+        )
         r = self.run_guard(p)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("user-home path", r.stdout)
 
     def test_placeholders_pass(self):
         lines = [
-            home("/", n) + "/.claude"
+            home_path(n, "posix") + "/.claude"
             for n in ("<name>", "<you>", "x", "user", "name", "you")
         ]
-        lines.append(home("\\", "X") + "\\proj")
-        lines.append("C" + "--Users-" + "<name>-Documents")
-        lines.append("C" + "--Users-" + "x-proj")
+        lines.append(home_path("X", "win") + "\\proj")
+        lines.append(home_path("<name>", "transcript") + "-Documents")
+        lines.append(home_path("x", "transcript") + "-proj")
         p = self.write("ok.md", "\n".join(lines) + "\n")
         r = self.run_guard(p)
         self.assertEqual(r.returncode, 0, r.stdout)
 
     def test_redacts_real_name(self):
-        p = self.write("a.md", home("/", "alice") + "\n")
+        p = self.write("a.md", home_path("alice", "posix") + "\n")
         r = self.run_guard(p)
         self.assertNotIn("alice", r.stdout)
 
@@ -295,7 +302,7 @@ class TestAllowAndBinary(GuardCase):
 
     def test_multiple_hits_all_reported(self):
         a = self.write("a.txt", SYNTH_UUID + "\n" + SYNTH_TERM + "\n")
-        b = self.write("b.txt", home("/", "alice") + "\n")
+        b = self.write("b.txt", home_path("alice", "posix") + "\n")
         r = self.run_guard(a, b)
         self.assertEqual(r.returncode, 1)
         self.assertEqual(len(r.stdout.strip().splitlines()), 3, r.stdout)
@@ -611,21 +618,25 @@ class TestKeyAndToken(RedactCase):
 class TestRedact(RedactCase):
     def test_home_prefix_every_spelling_keeps_separators(self):
         cases = {
-            home("/", "alice") + "/proj/a.py": "~/proj/a.py",
-            home("\\", "alice") + "\\proj\\a.py": "~\\proj\\a.py",
-            home("\\\\", "alice") + "\\\\proj\\\\a.py": "~\\\\proj\\\\a.py",
+            home_path("alice", "posix") + "/proj/a.py": "~/proj/a.py",
+            home_path("alice", "win") + "\\proj\\a.py": "~\\proj\\a.py",
+            escaped(home_path("alice", "win"))
+            + "\\\\proj\\\\a.py": "~\\\\proj\\\\a.py",
             "c:" + "/users/" + "alice/x": "~/x",
-            "cd /c" + "/Users/" + "alice/x/y": "cd ~/x/y",
-            "projects/C"
-            + "--Users-"
-            + "alice-Documents-proj": "projects/~-Documents-proj",
-            "end " + home("/", "alice"): "end ~",
+            "cd " + home_path("alice", "gitbash") + "/x/y": "cd ~/x/y",
+            "projects/"
+            + home_path("alice", "transcript")
+            + "-Documents-proj": "projects/~-Documents-proj",
+            "end " + home_path("alice", "posix"): "end ~",
         }
         for src, want in cases.items():
             self.assertEqual(self.redact(src), want, src)
 
     def test_placeholder_home_names_untouched(self):
-        for src in (home("/", "<you>") + "/.claude", home("\\", "x") + "\\p"):
+        for src in (
+            home_path("<you>", "posix") + "/.claude",
+            home_path("x", "win") + "\\p",
+        ):
             self.assertEqual(self.redact(src), src)
 
     def test_username_elsewhere_whole_word_case_insensitive(self):
@@ -635,35 +646,52 @@ class TestRedact(RedactCase):
     def test_home_name_with_space_consumed_whole(self):
         """F2: a profile folder with a space or hyphen leaves no part of the name."""
         guard = self.mod.Guard(["Alice Smith"], [], [])
-        src = home("\\", "Alice Smith") + "\\Docs and C" + "--Users-Alice-Smith-Docs"
+        src = (
+            home_path("Alice Smith", "win")
+            + "\\Docs and "
+            + home_path("Alice-Smith", "transcript")
+            + "-Docs"
+        )
         self.assertEqual(self.redact(src, guard), "~\\Docs and ~-Docs")
         src = (
-            "cd /c"
-            + "/Users/"
-            + "alice smith/x and "
-            + home("\\\\", "ALICE SMITH")
+            "cd "
+            + home_path("alice smith", "gitbash")
+            + "/x and "
+            + escaped(home_path("ALICE SMITH", "win"))
             + "\\\\y"
         )
         self.assertEqual(self.redact(src, guard), "cd ~/x and ~\\\\y")
 
     def test_home_name_from_homes_with_hyphen_and_dot(self):
         guard = self.mod.Guard([SYNTH_NAME], [], [], homes=["a-b.c"])
-        src = home("/", "a-b.c") + "/x C" + "--Users-a-b-c-Docs C" + "--Users-a-b.c-z"
+        src = (
+            home_path("a-b.c", "posix")
+            + "/x "
+            + home_path("a-b-c", "transcript")
+            + "-Docs "
+            + home_path("a-b.c", "transcript")
+            + "-z"
+        )
         self.assertEqual(self.redact(src, guard), "~/x ~-Docs ~-z")
 
     def test_known_home_name_needs_a_boundary(self):
         guard = self.mod.Guard(["Alice Smith"], [], [], homes=["bob"])
-        src = home("/", "bobby") + "/x " + home("/", "Alice Smithers") + "/y"
+        src = (
+            home_path("bobby", "posix")
+            + "/x "
+            + home_path("Alice Smithers", "posix")
+            + "/y"
+        )
         self.assertEqual(self.redact(src, guard), "~/x ~ Smithers/y")
 
     def test_home_names_from_environment(self):
-        profile = "D:\\" + "Users\\Alice Smith\\"
+        profile = home_path("Alice Smith", "win", drive="D") + "\\"
         env = {"HOME": "/home/a-b.c", "USERPROFILE": profile}
         with mock.patch.object(self.mod.Path, "home", return_value=Path("/x/qq")):
             self.assertEqual(self.mod.home_names(env), ["qq", "a-b.c", "Alice Smith"])
 
     def test_home_dir_name_is_not_left_as_user_token(self):
-        src = home("/", SYNTH_NAME) + "/proj"
+        src = home_path(SYNTH_NAME, "posix") + "/proj"
         self.assertEqual(self.redact(src), "~/proj")
 
     def test_terms_case_insensitive_longest_first(self):
@@ -690,9 +718,9 @@ class TestRedact(RedactCase):
     def test_output_passes_scan_except_uuids(self):
         src = "\n".join(
             [
-                "cd " + home("\\\\", "alice") + "\\\\proj",
+                "cd " + escaped(home_path("alice", "win")) + "\\\\proj",
                 "by " + SYNTH_NAME + " for " + SYNTH_TERM.upper(),
-                "/c" + "/Users/" + SYNTH_NAME + "/" + SHORT_T,
+                home_path(SYNTH_NAME, "gitbash") + "/" + SHORT_T,
                 "session " + SYNTH_UUID,
             ]
         )
@@ -702,7 +730,7 @@ class TestRedact(RedactCase):
         self.assertIn("session-UUID", reasons[0])
 
     def test_idempotent(self):
-        src = SYNTH_TERM + " " + SYNTH_NAME + " " + home("/", "alice") + "/p"
+        src = SYNTH_TERM + " " + SYNTH_NAME + " " + home_path("alice", "posix") + "/p"
         once = self.redact(src)
         self.assertEqual(self.redact(once), once)
 
@@ -759,7 +787,13 @@ class TestRedactCli(RedactCase):
 
     def test_redact_in_place_preserves_eol_and_utf8(self):
         crlf = self.tmp / "crlf.md"
-        body = "caf\u00e9 " + SYNTH_TERM + "\r\nhome " + home("/", "alice") + "/p\r\n"
+        body = (
+            "caf\u00e9 "
+            + SYNTH_TERM
+            + "\r\nhome "
+            + home_path("alice", "posix")
+            + "/p\r\n"
+        )
         crlf.write_bytes(body.encode("utf-8"))
         lf = self.tmp / "lf.md"
         lf.write_bytes(("by " + SYNTH_NAME + "\n").encode("utf-8"))
@@ -795,7 +829,11 @@ class TestRedactCli(RedactCase):
         spaced.mkdir()
         self.env.update(HOME=str(spaced), USERPROFILE=str(spaced))
         f = self.write(
-            "h.md", home("\\", "Alice Smith") + "\\p C" + "--Users-Alice-Smith-q\n"
+            "h.md",
+            home_path("Alice Smith", "win")
+            + "\\p "
+            + home_path("Alice-Smith", "transcript")
+            + "-q\n",
         )
         r = self.cli("--redact", f.name)
         self.assertEqual(r.returncode, 0, r.stderr)

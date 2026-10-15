@@ -18,6 +18,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from tools._testing import home_path
 from tools.fleet import lessons, model
 
 GENERIC_FEEDBACK = (
@@ -310,14 +311,13 @@ class Dedupe(LessonsTestCase):
 
 class Masking(LessonsTestCase):
     def test_private_terms_paths_and_ids_are_masked(self):
-        drive = "C:"
-        user_path = f"{drive}/Users/fakeperson/notes"
+        user_path = home_path("fakeperson", "posix") + "/notes"
         uuid = "11111111-aaaa-bbbb-cccc-222222222222"
         body = (
             f"Keep zebracorp exports out of {user_path} and never paste "
             f"session {uuid} into issues filed for the vendor."
         )
-        slug = f"{drive[0]}--Users-fakeperson-work"
+        slug = home_path("fakeperson", "transcript") + "-work"
         pdir = self.project(slug=slug)
         text = memory_text("m", "feedback", body, description="Mask ZebraCorp data")
         self.memory(pdir, "m.md", text)

@@ -2,7 +2,9 @@
 
 load_module imports a tool by file path under a private name; run_async runs a
 coroutine function off the main thread; fake_aiohttp builds a stand-in
-`aiohttp` module that records every request instead of touching the network.
+`aiohttp` module that records every request instead of touching the network;
+home_path assembles user-home path fixtures at runtime, so tracked test files never
+hold a literal home path (the pre-commit privacy guard flags those).
 """
 
 import asyncio
@@ -10,6 +12,33 @@ import concurrent.futures
 import importlib.util
 import types
 from pathlib import Path
+
+HOME_STYLES = ("win", "posix", "gitbash", "transcript")
+
+
+def home_path(user: str = "alice", style: str = "win", drive: str = "C") -> str:
+    """A Windows user-home path for user, built from parts at runtime.
+
+    style: ``win`` -> drive:\\Users\\user, ``posix`` -> drive:/Users/user,
+    ``gitbash`` -> /<drive lowercased>/Users/user, ``transcript`` (Claude Code
+    project dir) -> drive--Users-user. user is inserted as given (no slugging), so
+    pass the transcript form's name already hyphenated. ValueError on an unknown
+    style, an empty user or a drive that is not one ASCII letter.
+    """
+    if style not in HOME_STYLES:
+        raise ValueError(f"style must be one of {HOME_STYLES}, got {style!r}")
+    if not user:
+        raise ValueError("user must be non-empty")
+    if len(drive) != 1 or not ("a" <= drive.lower() <= "z"):
+        raise ValueError(f"drive must be one ASCII letter, got {drive!r}")
+    users = "Us" + "ers"
+    if style == "win":
+        return drive + ":\\" + users + "\\" + user
+    if style == "posix":
+        return drive + ":/" + users + "/" + user
+    if style == "gitbash":
+        return "/" + drive.lower() + "/" + users + "/" + user
+    return drive + "--" + users + "-" + user
 
 
 def load_module(name: str, path: Path) -> types.ModuleType:
