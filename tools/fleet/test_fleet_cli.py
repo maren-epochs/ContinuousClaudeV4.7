@@ -948,6 +948,11 @@ class HandoffsTests(CliHome):
         tool = {"type": "tool_use", "name": "Write", "input": {"file_path": file_path}}
         return {"type": "assistant", "message": {"content": [tool]}}
 
+    @staticmethod
+    def shell_record(command, tool="Bash"):
+        use = {"type": "tool_use", "name": tool, "input": {"command": command}}
+        return {"type": "assistant", "message": {"content": [use]}}
+
     def handoff(self, root, name, mtime):
         root.mkdir(parents=True, exist_ok=True)
         path = root / name
@@ -1020,6 +1025,41 @@ class HandoffsTests(CliHome):
         rows = self.rows(out)
         self.assertTrue(rows["proj-1"].endswith("landed"), out)
         self.assertTrue(rows["proj-4"].endswith("waiting"), out)
+
+    def test_handoff_written_by_shell_heredoc_counts_reads_do_not(self):
+        self.handoff(self.root, "a.yaml", 3000)
+        heredoc = (
+            "f=thoughts/shared/handoffs/general/a.yaml && cat > $f <<'EOF'\n"
+            'goal: "x"\nEOF'
+        )
+        self.transcript(self.proj, "sess-old", self.shell_record(heredoc))
+        read = "cat thoughts/shared/handoffs/general/a.yaml 2>/dev/null; ls 2>&1"
+        self.transcript(self.proj, "sess-p1", self.shell_record(read))
+        self.transcript(self.proj, "sess-p4", {"type": "assistant", "message": {}})
+        _, out, _ = self.run_main("handoffs", "--since", "2000")
+        rows = self.rows(out)
+        self.assertTrue(rows["proj-1"].endswith("prior"), out)
+        self.assertIn("0/3 landed, 2 by an ended earlier session", out)
+
+    def test_handoff_written_by_powershell_cmdlet_is_landed(self):
+        self.handoff(self.root, "b.md", 3000)
+        write = "Set-Content -Path thoughts\\shared\\handoffs\\general\\b.md -Value $t"
+        self.transcript(
+            self.proj, "sess-p1", self.shell_record(write, tool="PowerShell")
+        )
+        self.transcript(self.proj, "sess-p4", {"type": "assistant", "message": {}})
+        _, out, _ = self.run_main("handoffs", "--since", "2000")
+        rows = self.rows(out)
+        self.assertTrue(rows["proj-1"].endswith("landed"), out)
+        self.assertTrue(rows["proj-4"].endswith("waiting"), out)
+
+    def test_shell_write_markers(self):
+        writes = ["cat > f <<'EOF'", "echo x >> f", "tee f", "Out-File f", "x > f"]
+        reads = ["cat f", "cat f 2>/dev/null", "ls 2>&1", "grep -c x f"]
+        for command in writes:
+            self.assertTrue(fleet._SHELL_WRITE.search(command), command)
+        for command in reads:
+            self.assertFalse(fleet._SHELL_WRITE.search(command), command)
 
     def test_since_accepts_iso_and_rejects_garbage(self):
         code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")

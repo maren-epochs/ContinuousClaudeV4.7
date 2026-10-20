@@ -916,13 +916,41 @@ def _mtime(path: Path) -> float | None:
         return None
 
 
+_COMMAND = re.compile(r'"command":\s*"((?:[^"\\]|\\.)*)"')
+# stdout redirect (not 2> or >&), heredoc, or a writing cmdlet: a shell write
+_SHELL_WRITE = re.compile(
+    r"(?<![0-9&>])>>?(?!&)|<<|\btee\b|\b(?:Set|Add)-Content\b|\bOut-File\b",
+    re.IGNORECASE,
+)
+
+
+def _shell_writes(tail: str) -> list[str]:
+    """Bash/PowerShell ``command`` inputs in the tail that write a file."""
+    found = []
+    for raw in _COMMAND.findall(tail):
+        try:
+            command = json.loads(f'"{raw}"')
+        except json.JSONDecodeError:
+            continue
+        if _SHELL_WRITE.search(command):
+            found.append(command)
+    return found
+
+
 def _written_by(transcript: Path, new: list[tuple[float, str]]) -> list[float]:
-    """mtimes of the new handoffs named in a ``file_path`` tool input in the tail."""
+    """mtimes of the new handoffs this transcript's tail wrote.
+
+    A write is a ``file_path`` tool input naming the file, or a shell command
+    naming it with a write marker (a heredoc ``cat > f <<EOF``); a command that
+    only reads it (``cat f``) does not count.
+    """
     tail = collect.read_tail(transcript, collect.TAIL_BYTES)
+    commands = _shell_writes(tail)
     return [
         m
         for m, name in new
         if re.search(r'"file_path":\s*"[^"]*' + re.escape(name) + '"', tail)
+        or any(name in command for command in commands)
     ]
 
 
@@ -931,11 +959,11 @@ def _own_handoff(
 ) -> tuple[str, float | None]:
     """(state, mtime) of the newest new handoff this session, or an ended one, wrote.
 
-    A file counts as the session's own when its name appears in a ``file_path``
-    tool input in the transcript tail (``landed``). Otherwise, when a transcript in
-    the same project folder that belongs to no live session wrote one (the session
-    before a restart under a new id), ``prior``. Without a transcript the writer is
-    unknown (``shared``); a handoff written through a shell command is not seen.
+    A file counts as the session's own when the transcript tail wrote it (a
+    ``file_path`` tool input or a writing shell command, see ``_written_by``):
+    ``landed``. Otherwise, when a transcript in the same project folder that
+    belongs to no live session wrote one (the session before a restart under a
+    new id), ``prior``. Without a transcript the writer is unknown (``shared``).
     """
     if not new:
         return "waiting", None
