@@ -88,8 +88,8 @@ or `--repo <root>`), never the installed copy. `apply` never commits.
    uncommitted for review; C revert - `git -C <repo> restore -- <repo_path>` (delete it if
    `apply` created it), then `reject <id>`; D show `git -C <repo> diff -- <repo_path>`. When
    tests fail, recommend B or C instead of A.
-8. After a commit tell the user to run, from the repo: `! py -3.13 install/sync_global.py --apply`
-   (it writes `~/.claude`; the user runs it), then restart sessions that should load it.
+8. After a commit run `git -C <repo> push` and `py -3.13 install/sync_global.py --apply` yourself;
+   hand the user a `!` line only if your own run is denied. Then restart sessions that should load it.
 
 ## /fleet reject <id>
 

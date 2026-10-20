@@ -38,7 +38,7 @@ registered in `settings.json` once, by hand, using absolute `node "<home>/.claud
 commands. The FastEdit PreToolUse hook is left out because FastEdit targets Apple-Silicon MLX.
 
 The fleet hooks (harness-guard PreToolUse, fleet-audit PostToolUse) are registered by
-`py -3.13 install/register_hooks.py` (user-run; `--dry-run` prints the diff, `--settings PATH`
+`py -3.13 install/register_hooks.py` (Claude runs it; the user only if Claude is denied; `--dry-run` prints the diff, `--settings PATH`
 targets another file). It backs up the file, never duplicates an entry, and registers both
 hooks without `if` filters: a live check against Claude Code 2.1.293 showed `Write(~/...)`
 does not fire for an 8.3 short-name spelling of the same path, while the CLI itself normalized

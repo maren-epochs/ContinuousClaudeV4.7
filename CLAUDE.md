@@ -60,7 +60,7 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `scripts/readiness.sh` — assess project health (27 criteria, 5 levels); a failed tldr sub-analysis is SKIP with a reason, never a fabricated pass. Run it in the FOREGROUND: background shells get reaped under memory pressure (its tldr jobs peak ~0.1 GB, ~30-50 s). tech_debt scans a copy of tracked source minus test files (user decision; other tldr checks still scan tests); `file_grep` passes grep flags before the file arg; `harness/skills/*/SKILL.md` counts as skills. Tests: `scripts/test_readiness.sh`
 - `scripts/readiness-fix.sh` — auto-remediate readiness gaps
 - `install/sync_global.py` — repo -> `~/.claude` install (dry run default, `--apply` writes with backups); `<target>/.ccv47-keep` (untracked, one install-relative path per line, `#` comments) pins paths it never writes, shown as `keep    <path>`; `--apply` also writes `<target>/.ccv47-manifest.json` (installed path -> repo path + sha256), which harness-guard and fleet drift read
-- `install/register_hooks.py` — user-run, idempotent: adds harness-guard (PreToolUse) and fleet-audit (PostToolUse) to `~/.claude/settings.json` (`--settings PATH`) as absolute `node "<home>/.claude/hooks/<x>.mjs"` commands, backup `settings.json.bak-<ts>-register-hooks` first, `--dry-run` prints the diff; never duplicates, keeps all other keys, order, indent and EOL; refuses without Node 18+ or the installed hook files. Exit 0 done / 1 refused
+- `install/register_hooks.py` — Claude runs it (hand over only if denied), idempotent: adds harness-guard (PreToolUse) and fleet-audit (PostToolUse) to `~/.claude/settings.json` (`--settings PATH`) as absolute `node "<home>/.claude/hooks/<x>.mjs"` commands, backup `settings.json.bak-<ts>-register-hooks` first, `--dry-run` prints the diff; never duplicates, keeps all other keys, order, indent and EOL; refuses without Node 18+ or the installed hook files. Exit 0 done / 1 refused
 
 ## Tool Bridges (in tools/)
 
@@ -108,7 +108,7 @@ Cross-session view and harness inbox for every Claude Code session on this machi
 
 Machine `memory` alert (warn): free memory below 15% of total, or below `FLEET_MEM_WARN_GB` (GB) when set. Harness sync is file-level: `differs from repo (N files)` = installed copies vs what `sync_global.py` would write from the repo working tree, not commits. `open --stagger SECONDS` (default 3) opens one tab per `wt` call, that many seconds apart; `0` = one chained `wt` command.
 
-Setup (user-run, both write `~/.claude`): `py -3.13 install/sync_global.py --apply`, then `py -3.13 install/register_hooks.py` (`--dry-run` first), then restart sessions. Shapes: `tools/fleet/schema.md`. Never open `~/.claude/sessions/*.key`.
+Setup (Claude runs these; both write `~/.claude`): `py -3.13 install/sync_global.py --apply`, then `py -3.13 install/register_hooks.py` (`--dry-run` first), then restart sessions. Shapes: `tools/fleet/schema.md`. Never open `~/.claude/sessions/*.key`.
 
 ## Ouros Sandbox
 
@@ -141,6 +141,10 @@ Registries: `npm`, `py_pi`, `crates_io`, `go_modules`.
 **Token efficiency:** the sandbox processes data internally — only `print()` output enters the agent's context. Always filter, truncate, and structure results inside the script.
 
 **Security:** deny-by-default — `read_file`/`glob_files` only read project (cwd; ignored when cwd is home or a drive root) + `/tmp/ouros` + any dirs in `OUROS_DATA_ROOTS` (os.pathsep-separated absolute paths, read-only), after resolving symlinks/`..`; credentials are never readable even under an allowed root (`.env`/`.env.*` except `.example/.sample/.template`, `*.pem`/`*.key`, `id_*` keys, `~/.claude.json`, `~/.claude/.credentials*`, `~/.ssh`, `~/.aws`, ...). `write_file` only writes to `/tmp/ouros-sandbox-output` (drive-relative on Windows: `C:\tmp\ouros-sandbox-output`). `run_command` parses the command and runs it WITHOUT a shell — no pipes, chaining, redirection or substitution — and only argv prefixes in the allowlist (`tldr`, `grep`, `rg`, `wc`, `echo`, `git log/diff/show/blame`, `cargo build/test/clippy`, `npm test/run`, `python -m pytest`, `uv run python`); `rg --pre` and `git --output/--ext-diff/--textconv` are denied; spawn agents via `agent_call` (default `--max-turns 25`), not `run_command`. `llm_call` POSTs only to its endpoint allowlist: https to `api.anthropic.com`/`api.openai.com`/`openrouter.ai` (port 443), plain http only to `localhost`/`127.0.0.1:1234`; any other URL returns an error before a request is built. Exception: `run_python` executes arbitrary code on host CPython by design (not an escalation — the agent already has Bash); cwd pinned to a per-session work dir, one concurrent run, timeout kills the process tree. New files under the output root are printed as `artifacts:` lines (absolute host paths) after each run.
+
+## Who runs commands
+
+Claude runs every command, push, sync and install itself (git push, `install/sync_global.py --apply`, `install/register_hooks.py`, tests, fleet commands). Never tell the user to run something Claude can run. Only when Claude's own attempt is denied (permission or auto-mode classifier) or needs the user's credentials or interactive input, hand over one `! ...` line naming the denial. Next-step lists name what Claude will do, not chores for the user.
 
 ## Architecture
 
