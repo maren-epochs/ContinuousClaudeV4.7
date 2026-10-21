@@ -284,7 +284,7 @@ the hook off.
 
 Writers serialize on `<session_id>.json.lock` (exclusive create, holds pid and timestamp;
 a lock older than 10 s is broken). The hook waits up to 2 s, then opens the box and writes
-nothing; `answer` waits 5 s, then fails with "queue busy ...; try again" (exit 1). The
+nothing; `answer` waits 5 s, then fails with "queue busy ...; try again" (exit 4, nothing written). The
 hook starts a new queue only when the file is missing: an unreadable or malformed file
 also opens the box and writes nothing. `load()` reads without the lock.
 

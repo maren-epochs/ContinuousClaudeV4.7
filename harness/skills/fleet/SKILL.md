@@ -152,7 +152,7 @@ with `/fleet questions`.
    question with more than 4 options: show the first 4; the user can still pick Other).
 3. For each answer: `answer <id> "<answer>" --via fleet`. Exit 1 "already answered via
    session" means the user answered it in the asking session first; report that answer,
-   relay nothing. Otherwise the output ends `relay to: <session name>`: SendMessage that
+   relay nothing. Exit 4 "busy" = queue locked, nothing written: run it again. Otherwise the output ends `relay to: <session name>`: SendMessage that
    session, first line `Answer to your queued question <id>: <answer>`, then the question
    text. `not live: kept in queue` -> no message; the project's next session reads it with
    `questions --all`.

@@ -169,6 +169,18 @@ class LockTests(QueueHome):
         self.assertEqual((self.qdir / "sessA.json").read_bytes(), before)
         self.assertTrue(self.lock("sessA").exists())  # not ours to remove
 
+    def test_held_lock_is_cli_exit_4_not_1(self):
+        self.lock("sessA").write_text("1 now\n", encoding="utf-8")
+        err = io.StringIO()
+        with (
+            mock.patch.object(questions, "LOCK_WAIT_S", 0.1),
+            contextlib.redirect_stderr(err),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            code = fleet.main(["answer", "q-aaaaaaa1", "A"])
+        self.assertEqual(code, fleet.QUEUE_BUSY)
+        self.assertIn("busy: queue busy", err.getvalue())
+
     def test_stale_lock_is_broken(self):
         lock = self.lock("sessA")
         lock.write_text("1 old\n", encoding="utf-8")

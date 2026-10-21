@@ -72,6 +72,7 @@ DRIFT_SHOWN = 20
 SEVERITY_ORDER = {"error": 0, "warn": 1, "info": 2}
 SYNC_HINT = "py -3.13 install/sync_global.py --apply"
 COLLECT_FAILED = 3
+QUEUE_BUSY = 4  # answer: queue locked or unreadable, nothing written; retry
 COLLECT_ERR_MAX = 256 * 1024
 COLLECT_ERR_MSG_MAX = 500
 DIGEST_ERR_MAX = digest.ERR_MAX
@@ -85,6 +86,10 @@ _ABS_PATH = re.compile(
 
 class Refused(Exception):
     """The command refuses to act; the message says why."""
+
+
+class Busy(Refused):
+    """Transient refusal (exit QUEUE_BUSY): nothing written, try again."""
 
 
 def _state(fresh: bool) -> FleetState:
@@ -1115,6 +1120,8 @@ def answer_question(qid: str, text: str, via: str) -> str:
     """Record an answer; prints the session to relay it to when via is fleet."""
     try:
         q = questions.answer(qid, text, via)
+    except questions.QueueBusy as exc:
+        raise Busy(str(exc)) from None
     except questions.QuestionError as exc:
         raise Refused(str(exc)) from None
     who = _names().get(q.session_id)
@@ -1331,6 +1338,9 @@ def main(argv: list[str] | None = None) -> int:
         if command is None:
             return dashboard(args.out, args.fresh)
         print(command(args))
+    except Busy as exc:
+        print(f"busy: {exc}", file=sys.stderr)
+        return QUEUE_BUSY
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1

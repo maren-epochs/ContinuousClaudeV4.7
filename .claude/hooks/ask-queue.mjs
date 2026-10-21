@@ -167,7 +167,7 @@ function reason(added) {
     `Queued as ${ids}.`,
     `1) End your reply by listing these questions for the user in the same format: each question with its id, lettered A-D options, recommended option first with a one-line reason.`,
     `2) Continue with any work that does not depend on the answers; stop only if nothing is left.`,
-    `3) When the user answers in this session, record each one: py -3.13 ${FLEET_PY} answer <id> "<answer>" (exit 1 = already answered elsewhere; use that answer).`,
+    `3) When the user answers in this session, record each one: py -3.13 ${FLEET_PY} answer <id> "<answer>" (exit 1 = already answered elsewhere, use that answer; exit 4 = queue busy, run it again).`,
     `Answers given from /fleet questions arrive as a message. Put questions still open into your handoff.`,
   ].join(' ');
 }

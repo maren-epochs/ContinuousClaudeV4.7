@@ -37,6 +37,10 @@ class QuestionError(Exception):
     """The queue refuses the request; the message says why."""
 
 
+class QueueBusy(QuestionError):
+    """Transient: the lock stayed held or the file was unreadable; retry."""
+
+
 @dataclass
 class Question:
     """One queued question with the session it came from."""
@@ -120,7 +124,7 @@ def _locked(path: Path, wait: float | None = None) -> Iterator[None]:
         except PermissionError:
             pass
         if time.monotonic() >= deadline:
-            raise QuestionError(f"queue busy (another writer holds {lock}); try again")
+            raise QueueBusy(f"queue busy (another writer holds {lock}); try again")
         time.sleep(_POLL_S)
     try:
         yield
@@ -208,7 +212,7 @@ def _answer_locked(path: Path, qid: str, text: str, via: str) -> Question:
     """Re-read under the lock so a concurrent ask-queue append is kept, then write."""
     queue = _read(path)
     if queue is None:
-        raise QuestionError(f"could not read {path}; nothing written, try again")
+        raise QueueBusy(f"could not read {path}; nothing written, try again")
     for raw in queue["questions"]:
         if not isinstance(raw, dict) or raw.get("id") != qid:
             continue
