@@ -848,11 +848,15 @@ def _check_command_allowed(cmd):
 
 def _path_candidates(arg):
     """Path-like readings of an argv token: the token itself (non-options), an
-    option's '=value', and 'rev:path' / 'path:stream' segments (not drive letters)."""
+    option's '=value', a value glued to a short option or cluster ('-f.env',
+    '-rf.env': every tail after the first letter), and 'rev:path' /
+    'path:stream' segments (not drive letters)."""
     out = []
     if arg.startswith("-"):
         if "=" in arg:
             out.append(arg.split("=", 1)[1])
+        if not arg.startswith("--"):
+            out.extend(arg[i:] for i in range(2, len(arg)))
     else:
         out.append(arg)
     for c in list(out):

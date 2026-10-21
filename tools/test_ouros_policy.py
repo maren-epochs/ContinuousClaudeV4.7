@@ -77,6 +77,18 @@ class RunCommandBypassTests(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertTrue(_denied(oh._call_run_command(cmd)), cmd)
 
+    def test_secret_glued_to_short_option_denied(self):
+        for cmd in (
+            "grep -f.env x",
+            "grep -rf.env x",
+            "grep -f.ENV x",
+            "grep -fid_rsa x",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(_denied(oh._call_run_command(cmd)), cmd)
+        self.assertEqual(oh._arg_refusal("-rn"), "")
+        self.assertEqual(oh._arg_refusal("-i"), "")
+
     def test_never_uses_shell(self):
         with mock.patch.object(oh, "_run_bounded") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "", "")
