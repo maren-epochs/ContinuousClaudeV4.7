@@ -5,13 +5,20 @@ every AskUserQuestion is queued instead of opening a box, so the asking session 
 reading messages. Without the flag boxes open as usual. Read and answered here. A question
 is answered once, in the asking session or from /fleet questions, whichever comes first.
 Shape: tools/fleet/schema.md.
+
+Writers (this module and ask-queue.mjs) serialize on one lock: exclusive create of
+``<queue>.json.lock``, broken when older than LOCK_STALE_S (same value in the hook).
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
+import os
 import re
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +28,9 @@ from . import model
 QUESTION_ID = re.compile(r"q-[0-9a-f]{8}")
 RELAY_MARK = "[fleet {id}]"
 VIA = ("session", "fleet")
+LOCK_WAIT_S = 5.0
+LOCK_STALE_S = 10.0  # must match LOCK_STALE_MS in .claude/hooks/ask-queue.mjs
+_POLL_S = 0.025
 
 
 class QuestionError(Exception):
@@ -79,6 +89,44 @@ def _read(path: Path) -> dict[str, Any] | None:
     if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
         return None
     return data
+
+
+def lock_path(path: Path) -> Path:
+    """``<queue>.json.lock``: the writer lock shared with ask-queue.mjs."""
+    return path.with_name(path.name + ".lock")
+
+
+@contextlib.contextmanager
+def _locked(path: Path, wait: float | None = None) -> Iterator[None]:
+    """Hold the queue's writer lock; QuestionError when another writer keeps it past wait."""
+    lock = lock_path(path)
+    deadline = time.monotonic() + (LOCK_WAIT_S if wait is None else wait)
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except (FileExistsError, PermissionError):
+            pass  # PermissionError: Windows reports a lock file being deleted this way
+        else:
+            stamp = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(f"{os.getpid()} {stamp}\n")
+            break
+        try:
+            if time.time() - lock.stat().st_mtime > LOCK_STALE_S:
+                lock.unlink(missing_ok=True)  # holder died; a hold lasts milliseconds
+                continue
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            pass
+        if time.monotonic() >= deadline:
+            raise QuestionError(f"queue busy (another writer holds {lock}); try again")
+        time.sleep(_POLL_S)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            lock.unlink()
 
 
 def _text(value: Any) -> str:
@@ -146,27 +194,37 @@ def answer(qid: str, text: str, via: str) -> Question:
         raise QuestionError("empty answer")
     folder = questions_dir()
     for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
-        queue = _read(path)
-        if queue is None:
+        found = _read(path)
+        if found is None or not any(
+            isinstance(raw, dict) and raw.get("id") == qid for raw in found["questions"]
+        ):
             continue
-        for raw in queue["questions"]:
-            if not isinstance(raw, dict) or raw.get("id") != qid:
-                continue
-            if raw.get("status") == "answered":
-                raise QuestionError(
-                    f"{qid} already answered via {raw.get('answered_via')}: {raw.get('answer')}"
-                )
-            raw["status"] = "answered"
-            raw["answer"] = text.strip()
-            raw["answered_at"] = _dt.datetime.now(_dt.UTC).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
-            raw["answered_via"] = via
-            model.write_atomic(path, json.dumps(queue, indent=2))
-            q = _question(raw, queue)
-            assert q is not None
-            return q
+        with _locked(path):
+            return _answer_locked(path, qid, text, via)
     raise QuestionError(f"no question {qid} in {folder}")
+
+
+def _answer_locked(path: Path, qid: str, text: str, via: str) -> Question:
+    """Re-read under the lock so a concurrent ask-queue append is kept, then write."""
+    queue = _read(path)
+    if queue is None:
+        raise QuestionError(f"could not read {path}; nothing written, try again")
+    for raw in queue["questions"]:
+        if not isinstance(raw, dict) or raw.get("id") != qid:
+            continue
+        if raw.get("status") == "answered":
+            raise QuestionError(
+                f"{qid} already answered via {raw.get('answered_via')}: {raw.get('answer')}"
+            )
+        raw["status"] = "answered"
+        raw["answer"] = text.strip()
+        raw["answered_at"] = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        raw["answered_via"] = via
+        model.write_atomic(path, json.dumps(queue, indent=2))
+        q = _question(raw, queue)
+        assert q is not None
+        return q
+    raise QuestionError(f"no question {qid} in {path}")
 
 
 def relay_text(q: Question) -> str:

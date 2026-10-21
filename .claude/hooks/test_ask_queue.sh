@@ -2,7 +2,8 @@
 # Tests for .claude/hooks/ask-queue.mjs
 #   VAL-1001: with ~/.claude/fleet/away present, every AskUserQuestion is denied and queued per session in
 #             ~/.claude/fleet/questions/<session_id>.json; relay-marked and
-#             FLEET_QUESTIONS=0 calls open the box; bad input fails open.
+#             FLEET_QUESTIONS=0 calls open the box; bad input fails open; an unreadable
+#             queue or a held <queue>.json.lock writes nothing and opens the box.
 # Self-contained; run from anywhere: bash .claude/hooks/test_ask_queue.sh
 set -u
 
@@ -90,6 +91,52 @@ check "VAL-1001e malformed stdin -> allow, exit 0" $?
 OUT=$(printf '{"tool_name":"Bash","session_id":"sessE","tool_input":{"command":"ls"}}' | node "$HOOK")
 [ -z "$OUT" ]
 check "VAL-1001e other tools ignored" $?
+
+# --- VAL-1001f: only a missing queue starts a new one; anything unreadable is left untouched ---
+LOG="$HOME/.claude/fleet/guard-errors.log"
+F="$QDIR/sessF.json"
+printf '{"schema_version":1,"session_id":"sessF","questions":[{"id":"q-aaaaaaa1","status":"answered","answer":"A"}' > "$F"
+cp "$F" "$WORK/sessF.before"
+OUT=$(payload sessF "[$Q1]" | node "$HOOK")
+[ -z "$OUT" ] && cmp -s "$F" "$WORK/sessF.before" && grep -q 'ask-queue enqueue failed' "$LOG"
+check "VAL-1001f partial/corrupt queue -> box allowed, file unchanged, logged" $?
+printf '{"schema_version":1}' > "$F"; cp "$F" "$WORK/sessF.before"
+OUT=$(payload sessF "[$Q1]" | node "$HOOK")
+[ -z "$OUT" ] && cmp -s "$F" "$WORK/sessF.before" && grep -q 'not a question queue' "$LOG"
+check "VAL-1001f JSON that is not a queue -> box allowed, file unchanged" $?
+if command -v py >/dev/null 2>&1; then
+  printf '{"schema_version":1,"session_id":"sessF","questions":[{"id":"q-aaaaaaa1","status":"answered","answer":"A"}]}' > "$F"
+  cp "$F" "$WORK/sessF.before"
+  # Windows byte-range lock = sharing violation on read (EBUSY/EPERM), as a concurrent writer causes
+  OUT=$(py -3.13 - "$F" "$HOOK" "$(payload sessF "[$Q1]")" <<'PYEOF2'
+import msvcrt, subprocess, sys
+f = open(sys.argv[1], "r+b")
+msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 10)
+p = subprocess.run(["node", sys.argv[2]], input=sys.argv[3].encode(), capture_output=True)
+f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 10); f.close()
+sys.stdout.write(p.stdout.decode())
+PYEOF2
+)
+  [ -z "$OUT" ] && cmp -s "$F" "$WORK/sessF.before" && [ ! -e "$F.lock" ]
+  check "VAL-1001f sharing violation on read -> box allowed, queue and answer kept, lock released" $?
+fi
+
+# --- VAL-1001g: writer lock <queue>.json.lock shared with tools/fleet/questions.py ---
+F="$QDIR/sessG.json"
+payload sessG "[$Q1]" | node "$HOOK" > /dev/null
+[ -f "$F" ] && [ ! -e "$F.lock" ]
+check "VAL-1001g lock released after a normal enqueue" $?
+printf '1 held\n' > "$F.lock"; cp "$F" "$WORK/sessG.before"
+START=$(date +%s)
+OUT=$(payload sessG "[$Q2]" | node "$HOOK")
+ELAPSED=$(( $(date +%s) - START ))
+[ -z "$OUT" ] && cmp -s "$F" "$WORK/sessG.before" && [ -e "$F.lock" ] && grep -q 'queue busy' "$LOG" \
+  && [ "$ELAPSED" -ge 1 ] && [ "$ELAPSED" -le 5 ]
+check "VAL-1001g held lock -> waits ~2 s, then box allowed, nothing written, lock left (${ELAPSED}s)" $?
+touch -d '1 minute ago' "$F.lock"
+OUT=$(payload sessG "[$Q2]" | node "$HOOK")
+printf '%s' "$OUT" | grep -q '"deny"' && [ "$(jget "$F" 'd.questions.length')" = 2 ] && [ ! -e "$F.lock" ]
+check "VAL-1001g stale lock (older than 10 s) broken, question queued" $?
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

@@ -17,10 +17,20 @@
  * `[fleet q-...]` (the /fleet questions box, where the user is present by definition),
  * and any call while FLEET_QUESTIONS=0.
  *
- * Fails open: malformed stdin, missing session_id or an IO error allows the box and
- * appends a line to ~/.claude/fleet/guard-errors.log. Only a deny prints output.
+ * Writers are serialized with tools/fleet/questions.py (`fleet.py answer`) by one lock:
+ * exclusive create of <queue>.json.lock, waited for up to LOCK_WAIT_MS, broken when older
+ * than LOCK_STALE_MS (same constants in questions.py). A new queue is created only when
+ * the file does not exist (ENOENT); any other read or parse failure writes nothing, so
+ * earlier questions and recorded answers are never replaced.
+ *
+ * Fails open: malformed stdin, missing session_id, a busy lock, an unreadable or corrupt
+ * queue or an IO error allows the box and appends a line to ~/.claude/fleet/guard-errors.log.
+ * Only a deny prints output.
  */
-import { readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync, existsSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync, existsSync,
+  openSync, writeSync, closeSync, statSync, unlinkSync,
+} from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -31,6 +41,10 @@ const AWAY = join(FLEET, 'away');
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const RELAY = /\[fleet q-[0-9a-f]{8}\]/;
 const FLEET_PY = '~/.claude/tools/fleet/fleet.py';
+const LOCK_WAIT_MS = 2000; // hook budget; questions.py waits longer (it is not on the tool path)
+const LOCK_STALE_MS = 10000; // must match questions.LOCK_STALE_S
+const POLL_MS = 25;
+const TRANSIENT = new Set(['EBUSY', 'EPERM', 'EACCES']); // Windows sharing violations
 
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
@@ -61,31 +75,89 @@ function normalize(q) {
   };
 }
 
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+function acquireLock(lock) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const fd = openSync(lock, 'wx');
+      try { writeSync(fd, `${process.pid} ${nowIso()}\n`); } finally { closeSync(fd); }
+      return;
+    } catch (err) {
+      // EPERM/EACCES: Windows reports a lock file that is being deleted this way.
+      if (err.code !== 'EEXIST' && !TRANSIENT.has(err.code)) throw err;
+    }
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        unlinkSync(lock); // holder died mid-write; holds last milliseconds
+        continue;
+      }
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      if (!TRANSIENT.has(err.code)) throw err;
+    }
+    if (Date.now() >= deadline) throw new Error(`queue busy (lock held): ${lock}`);
+    sleep(POLL_MS);
+  }
+}
+
+function retrying(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (attempt >= 4 || !TRANSIENT.has(err.code)) throw err;
+      sleep(50);
+    }
+  }
+}
+
+// The queue as stored; a fresh one only when the file does not exist. Anything else
+// (sharing violation that persists, partial or foreign content) throws, so nothing is written.
+function readQueue(path, sid) {
+  let text;
+  try {
+    text = retrying(() => readFileSync(path, 'utf-8'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return { schema_version: 1, session_id: sid, questions: [] };
+    throw err;
+  }
+  const queue = JSON.parse(text);
+  if (!queue || typeof queue !== 'object' || !Array.isArray(queue.questions)) {
+    throw new Error(`not a question queue, left untouched: ${path}`);
+  }
+  return queue;
+}
+
 function enqueue(input, questions) {
   const sid = input.session_id;
   const path = join(QDIR, `${sid}.json`);
-  let queue;
-  try {
-    queue = JSON.parse(readFileSync(path, 'utf-8'));
-  } catch {
-    queue = null;
-  }
-  if (!queue || typeof queue !== 'object' || !Array.isArray(queue.questions)) {
-    queue = { schema_version: 1, session_id: sid, questions: [] };
-  }
-  const cwd = typeof input.cwd === 'string' ? input.cwd : null;
-  if (cwd) {
-    queue.cwd = cwd;
-    queue.project = basename(cwd);
-  }
-  const added = questions.map(normalize);
-  queue.questions.push(...added);
-  queue.updated_at = nowIso();
+  const lock = `${path}.lock`;
   mkdirSync(QDIR, { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(queue, null, 2));
-  renameSync(tmp, path);
-  return added;
+  acquireLock(lock);
+  try {
+    const queue = readQueue(path, sid);
+    const cwd = typeof input.cwd === 'string' ? input.cwd : null;
+    if (cwd) {
+      queue.cwd = cwd;
+      queue.project = basename(cwd);
+    }
+    const added = questions.map(normalize);
+    queue.questions.push(...added);
+    queue.updated_at = nowIso();
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(queue, null, 2));
+    try {
+      retrying(() => renameSync(tmp, path)); // a reader holding the file blocks the rename briefly
+    } catch (err) {
+      try { unlinkSync(tmp); } catch {}
+      throw err;
+    }
+    return added;
+  } finally {
+    try { unlinkSync(lock); } catch {}
+  }
 }
 
 function reason(added) {

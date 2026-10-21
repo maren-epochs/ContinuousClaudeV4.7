@@ -7,8 +7,11 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -137,6 +140,95 @@ class LoadAnswerTests(QueueHome):
         self.assertTrue(
             questions.relay_text(q).startswith("[fleet q-aaaaaaa1] alpha: ")
         )
+
+
+HOOK = os.path.join(REPO_ROOT, ".claude", "hooks", "ask-queue.mjs")
+
+
+class LockTests(QueueHome):
+    """Writers serialize on <queue>.json.lock, shared with ask-queue.mjs."""
+
+    def lock(self, sid):
+        return questions.lock_path(self.qdir / f"{sid}.json")
+
+    def test_answer_releases_the_lock_after_success_and_refusal(self):
+        questions.answer("q-aaaaaaa1", "A", "session")
+        self.assertFalse(self.lock("sessA").exists())
+        with self.assertRaises(questions.QuestionError):
+            questions.answer("q-aaaaaaa1", "B", "session")
+        self.assertFalse(self.lock("sessA").exists())
+
+    def test_held_lock_refuses_and_writes_nothing(self):
+        self.lock("sessA").write_text("1 now\n", encoding="utf-8")
+        before = (self.qdir / "sessA.json").read_bytes()
+        with (
+            mock.patch.object(questions, "LOCK_WAIT_S", 0.1),
+            self.assertRaisesRegex(questions.QuestionError, "queue busy"),
+        ):
+            questions.answer("q-aaaaaaa1", "A", "session")
+        self.assertEqual((self.qdir / "sessA.json").read_bytes(), before)
+        self.assertTrue(self.lock("sessA").exists())  # not ours to remove
+
+    def test_stale_lock_is_broken(self):
+        lock = self.lock("sessA")
+        lock.write_text("1 old\n", encoding="utf-8")
+        old = time.time() - questions.LOCK_STALE_S - 5
+        os.utime(lock, (old, old))
+        self.assertEqual(questions.answer("q-aaaaaaa1", "A", "session").answer, "A")
+        self.assertFalse(lock.exists())
+
+    def test_question_appended_before_the_lock_is_kept(self):
+        # ask-queue appends between answer()'s scan and its lock: the re-read keeps it.
+        real = questions._locked
+
+        @contextlib.contextmanager
+        def racing(path, wait=None):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["questions"].append(_q("q-aaaaaaa3", "Late?"))
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with real(path, wait):
+                yield
+
+        with mock.patch.object(questions, "_locked", racing):
+            questions.answer("q-aaaaaaa1", "B", "fleet")
+        stored = {q["id"]: q for q in self.stored("sessA")["questions"]}
+        self.assertEqual(set(stored), {"q-aaaaaaa1", "q-aaaaaaa2", "q-aaaaaaa3"})
+        self.assertEqual(stored["q-aaaaaaa1"]["answer"], "B")
+        self.assertEqual(stored["q-aaaaaaa2"]["status"], "answered")
+
+    @unittest.skipUnless(shutil.which("node"), "node not on PATH")
+    def test_hook_waits_for_the_python_lock_and_keeps_the_answer(self):
+        questions.set_away(True)
+        stdin = json.dumps(
+            {
+                "session_id": "sessA",
+                "cwd": "C:/work/alpha",
+                "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": [{"question": "New?", "options": []}]},
+            }
+        )
+        path = self.qdir / "sessA.json"
+        with questions._locked(path):
+            proc = subprocess.Popen(
+                ["node", HOOK],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=dict(os.environ),
+            )
+            assert proc.stdin is not None
+            proc.stdin.write(stdin.encode())
+            proc.stdin.close()
+            time.sleep(0.4)
+            self.assertIsNone(proc.poll(), "hook must wait while the lock is held")
+            questions._answer_locked(path, "q-aaaaaaa1", "C", "session")
+        out, _ = proc.communicate(timeout=10)
+        self.assertIn(b'"permissionDecision":"deny"', out)
+        stored = self.stored("sessA")["questions"]
+        self.assertEqual(len(stored), 3)
+        self.assertEqual(stored[0]["answer"], "C")
+        self.assertEqual(stored[2]["question"], "New?")
+        self.assertFalse(self.lock("sessA").exists())
 
 
 class CliTests(QueueHome):

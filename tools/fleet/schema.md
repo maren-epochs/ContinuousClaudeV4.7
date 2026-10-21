@@ -282,6 +282,12 @@ The `/fleet questions` box carries `[fleet q-<8 hex>]` at the start of each ques
 hook lets a call through when every question has that marker. `FLEET_QUESTIONS=0` turns
 the hook off.
 
+Writers serialize on `<session_id>.json.lock` (exclusive create, holds pid and timestamp;
+a lock older than 10 s is broken). The hook waits up to 2 s, then opens the box and writes
+nothing; `answer` waits 5 s, then fails with "queue busy ...; try again" (exit 1). The
+hook starts a new queue only when the file is missing: an unreadable or malformed file
+also opens the box and writes nothing. `load()` reads without the lock.
+
 ## AuditEvent (`audit.jsonl`)
 
 One compact JSON object per line, appended. Readers skip blank or invalid lines.
