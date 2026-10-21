@@ -6,6 +6,8 @@
  * A Write/Edit/MultiEdit/NotebookEdit whose target, or a Bash/PowerShell command whose
  * write target (>, >>, N>, &>, >&file, tee, cp, mv, install, ln, rsync, dd of=, sed -i,
  * perl -i, truncate, curl -o/-O/-D/-c, wget -O/-o/-P/URL name, tar -x [-C] / -c -f, unzip [-d],
+ * 7z x|e [-o], Expand-Archive, [IO.StreamWriter]/FileStream ::new / New-Object, cmd /c|/k and
+ * env -S bodies,
  * Copy-Item, Move-Item, Set-Content, Add-Content, Out-File, Tee-Object, New-Item,
  * [IO.File]::WriteAll.. / AppendAll.. / Copy / Move; bodies of bash/sh -c, eval, pwsh -Command /
  * -EncodedCommand and Invoke-Expression re-parsed, depth 3; wrapper options of sudo, env,
@@ -302,6 +304,8 @@ const PS_CLI_VALUED = new Set(['executionpolicy', 'ex', 'ep', 'windowstyle', 'w'
   'configurationname', 'config', 'custompipename', 'inputformat', 'inp', 'if', 'outputformat', 'o', 'of', 'version', 'v',
   'psconsolefile', 'settingsfile', 'settings', 'configurationfile', 'encodedarguments', 'ea']);
 const IO_FILE = /^\[(?:system\.)?io\.file\]::(\w+)\((.*)$/is;
+const IO_STREAM = /^\[(?:system\.)?io\.(?:streamwriter|filestream)\]::new\((.*)$/is;
+const NEW_STREAM = /(?:system\.)?io\.(?:streamwriter|filestream)['"]?(?:\s*\(\s*|\s+-argumentlist\s+|\s*,?\s+)['"]?([^'",()\s]+)/i;
 const PS_COPY = new Set(['copy-item', 'cpi', 'copy', 'cp', 'move-item', 'mi', 'move', 'mv']);
 const PS_CONTENT = new Set(['set-content', 'sc', 'add-content', 'ac']);
 const PS_OUTFILE = new Set(['out-file']);
@@ -334,6 +338,7 @@ const PS_SPECS = {
   location: spec(['path', 'literalpath', 'stackname'], ['passthru']),
   newitem: spec(['path', 'name', 'itemtype', 'value', 'credential'], ['force'], { type: 'itemtype', target: 'value' }),
   iex: spec(['command'], []),
+  expand: spec(['path', 'literalpath', 'destinationpath'], ['force', 'passthru']),
 };
 
 function psParamName(name, sp) {
@@ -455,7 +460,30 @@ function ioFileTargets(words) {
     const p = arg === undefined ? '' : arg.trim().replace(/\)+$/, '').trim();
     if (p) out.push({ p });
   }
+  for (let i = 0; i < words.length; i++) { // [IO.StreamWriter]::new(path, ...) / FileStream
+    const m = IO_STREAM.exec(words[i]);
+    if (!m) continue;
+    const p = [m[1], ...words.slice(i + 1)].join(' ').split(',')[0].trim().replace(/\)+$/, '').trim();
+    if (p) out.push({ p });
+  }
+  const n = words.findIndex((w) => /^new-object$/i.test(w)); // $w = New-Object IO.StreamWriter(path)
+  const m = n < 0 ? null : NEW_STREAM.exec(words.slice(n + 1).join(' '));
+  if (m) out.push({ p: m[1] });
   return out;
+}
+
+// env -S / --split-string 'CMD ARGS' [MORE]: the string is the command line
+function envSplit(words, i) {
+  for (; i < words.length; i++) {
+    const a = words[i];
+    if (a === '--' || a.length < 2 || a[0] !== '-') return null;
+    if (a === '--split-string' || a === '-S') return words.slice(i + 1).join(' ') || null;
+    if (a.startsWith('--split-string=')) return [a.slice(15), ...words.slice(i + 1)].join(' ');
+    const s = /^-[^-]*?S(.+)$/.exec(a);
+    if (s && !/[uC]/.test(a.slice(1, a.indexOf('S')))) return [s[1], ...words.slice(i + 1)].join(' ');
+    if (/^-[uC]$/.test(a)) i++;
+  }
+  return null;
 }
 
 // file name curl -O / wget give a download: last path segment, no query or fragment
@@ -489,6 +517,10 @@ function segmentInfo(words, ps) {
     if (w === '&' || w === '.' || /^[A-Za-z_]\w*=/.test(w)) { k++; continue; }
     const wn = cmdName(w);
     if (!Object.hasOwn(WRAPPERS, wn)) break;
+    if (wn === 'env') {
+      const s = envSplit(words, k + 1);
+      if (s !== null) return { targets: ps ? ioFileTargets(words) : [], nested: [{ cmd: s, ps: false }] };
+    }
     k = skipWrapper(words, k + 1, WRAPPERS[wn], wn);
   }
   const io = ps ? ioFileTargets(words) : [];
@@ -502,6 +534,17 @@ function segmentInfo(words, ps) {
   if (PWSH.has(name)) {
     const b = pwshBody(args);
     return { targets: io, nested: b ? [{ cmd: b, ps: true }] : [] };
+  }
+  if (name === 'cmd') { // cmd /c|/k BODY: PowerShell tokenizing keeps `\` paths; copy/move/type are its aliases
+    const i = args.findIndex((a) => /^\/[ck]/i.test(a));
+    if (i < 0) return { targets: io };
+    const first = args[i].slice(2);
+    const b = [first, ...args.slice(i + 1)].filter(Boolean).join(' ');
+    return { targets: io, nested: b ? [{ cmd: b, ps: true }] : [] };
+  }
+  if (/^7z[ar]?$/.test(name) && /^[ex]$/i.test(args[0] ?? '')) { // 7z x|e ARCHIVE [-oDIR]
+    const o = args.find((a) => /^-o./i.test(a));
+    return { targets: [...io, { p: o !== undefined ? o.slice(2) : '.', tree: true }] };
   }
   if (ps) {
     if (name === 'pop-location' || name === 'popd') return { targets: io, cd: { kind: 'pop' } };
@@ -534,6 +577,10 @@ function segmentInfo(words, ps) {
       const base = named.path ?? pos[0];
       const t = typeof named.name === 'string' ? (base !== undefined ? `${base}/${named.name}` : named.name) : base;
       return { targets: t === undefined ? io : [...io, { p: t }] };
+    }
+    if (name === 'expand-archive') {
+      const { named, pos } = psParams(args, PS_SPECS.expand);
+      return { targets: [...io, { p: named.destinationpath ?? pos[1] ?? '.', tree: true }] };
     }
     if (PS_IEX.has(name)) {
       const { named, pos } = psParams(args, PS_SPECS.iex);

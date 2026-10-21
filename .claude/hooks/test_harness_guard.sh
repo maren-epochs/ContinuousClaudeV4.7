@@ -533,6 +533,23 @@ expect_allow "D unzip elsewhere" "$(shell_payload Bash 'unzip pkg.zip -d out')"
 expect_deny "D truncate managed" "$(shell_payload Bash 'truncate -s 0 ~/.claude/hooks/status.mjs')"
 expect_allow "D truncate elsewhere" "$(shell_payload Bash 'truncate -s 0 out.log')"
 
+# --- 7c. cmd /c, env -S, 7z, Expand-Archive, StreamWriter ---
+expect_deny "E cmd /c redirect" "$(shell_payload Bash 'cmd /c "echo x > %USERPROFILE%\.claude\hooks\status.mjs"')"
+expect_deny "E cmd.exe /C copy" "$(shell_payload Bash 'cmd.exe /C copy status.mjs ~/.claude/hooks/status.mjs')"
+expect_allow "E cmd /c read" "$(shell_payload Bash 'cmd /c type ~/.claude/hooks/status.mjs')"
+expect_deny "E env -S" "$(shell_payload Bash "env -S 'cp status.mjs ~/.claude/hooks/status.mjs'")"
+expect_deny "E env --split-string=" "$(shell_payload Bash "env --split-string='tee ~/.claude/hooks/status.mjs'")"
+expect_allow "E env -S read" "$(shell_payload Bash "env -S 'cat ~/.claude/hooks/status.mjs'")"
+expect_deny "E 7z x -o managed dir" "$(shell_payload Bash '7z x pkg.7z -o~/.claude/hooks -y')"
+expect_allow "E 7z l (list)" "$(shell_payload Bash 'cd ~/.claude && 7z l pkg.7z')"
+expect_allow "E 7z x elsewhere" "$(shell_payload Bash '7z x pkg.7z -oout')"
+expect_deny "E Expand-Archive -DestinationPath" "$(shell_payload PowerShell 'Expand-Archive -Path pkg.zip -DestinationPath $env:USERPROFILE\.claude\hooks -Force')"
+expect_deny "E Expand-Archive positional" "$(shell_payload PowerShell 'Expand-Archive pkg.zip ~/.claude')"
+expect_allow "E Expand-Archive elsewhere" "$(shell_payload PowerShell 'Expand-Archive pkg.zip out')"
+expect_deny "E [IO.StreamWriter]::new" "$(shell_payload PowerShell '$w = [IO.StreamWriter]::new("$env:USERPROFILE\.claude\hooks\status.mjs"); $w.Write("x"); $w.Close()')"
+expect_deny "E New-Object System.IO.StreamWriter" "$(shell_payload PowerShell '$w = New-Object System.IO.StreamWriter("$env:USERPROFILE\.claude\hooks\status.mjs")')"
+expect_allow "E StreamWriter elsewhere" "$(shell_payload PowerShell '$w = [IO.StreamWriter]::new("out.txt")')"
+
 # --- 8. latency bench: p50 of 20 runs per payload (printed, not asserted) ---
 env HOME="$HOMEL" USERPROFILE="$UP_DEFAULT" node -e '
 const { spawnSync } = require("child_process");
