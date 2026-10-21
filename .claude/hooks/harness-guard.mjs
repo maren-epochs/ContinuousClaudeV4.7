@@ -5,7 +5,8 @@
  *
  * A Write/Edit/MultiEdit/NotebookEdit whose target, or a Bash/PowerShell command whose
  * write target (>, >>, N>, &>, >&file, tee, cp, mv, install, ln, rsync, dd of=, sed -i,
- * perl -i, Copy-Item, Move-Item, Set-Content, Add-Content, Out-File, Tee-Object, New-Item,
+ * perl -i, truncate, curl -o/-O/-D/-c, wget -O/-o/-P/URL name, tar -x [-C] / -c -f, unzip [-d],
+ * Copy-Item, Move-Item, Set-Content, Add-Content, Out-File, Tee-Object, New-Item,
  * [IO.File]::WriteAll.. / AppendAll.. / Copy / Move; bodies of bash/sh -c, eval, pwsh -Command /
  * -EncodedCommand and Invoke-Expression re-parsed, depth 3; wrapper options of sudo, env,
  * timeout, nice, stdbuf, xargs, ... skipped), resolves to a file listed in the install manifest
@@ -28,7 +29,8 @@
  * points outside still guards the installed path). Glob targets (* ? [] {a,b}) match
  * manifest keys; a directory, glob or recursive copy (cp -r, mv, rsync, Copy-Item -Recurse,
  * dest an ancestor of ~/.claude) hits each manifest entry under the destination whose
- * source file exists (unknown / UNC sources: assumed to exist). At most MAX_PROPOSALS
+ * source file exists (unknown / UNC sources: assumed to exist). An archive extraction
+ * (tar -x, unzip, wget -r) into a directory inside ~/.claude hits every entry under it. At most MAX_PROPOSALS
  * proposals per call; further hits are listed in the deny message.
  *
  * Proposal: change strings share a 256 KiB (UTF-16 units) budget, `change.truncated: true`
@@ -456,6 +458,13 @@ function ioFileTargets(words) {
   return out;
 }
 
+// file name curl -O / wget give a download: last path segment, no query or fragment
+function urlName(u) {
+  if (typeof u !== 'string' || !/^[a-z][\w+.-]*:\/\//i.test(u)) return '';
+  const path = u.replace(/[?#].*$/, '').replace(/^[a-z][\w+.-]*:\/\/[^/]*/i, '');
+  return path.split('/').pop() ?? '';
+}
+
 // cp / mv / ln / install / rsync -> [{ p, src?, into?, noDir?, rec?, contents? }]
 function copyTargets(name, args) {
   const sp = COPY_LIKE[name];
@@ -563,6 +572,56 @@ function segmentInfo(words, ps) {
     if (!('i' in vals) && !flags.has('in-place') && !('in-place' in vals)) return { targets: [] };
     const script = sed ? ['e', 'f', 'expression', 'file'].some((x) => x in vals) : 'e' in vals || 'E' in vals;
     return { targets: (script ? pos : pos.slice(1)).map((p) => ({ p })) };
+  }
+  if (name === 'truncate') return { targets: gnuParse(args, { v: 'sr', l: ['size', 'reference'] }).pos.map((p) => ({ p })) };
+  if (name === 'tar' || name === 'bsdtar') { // old-style first word `xzf` = `-xzf`
+    const a = args.length && /^[A-Za-z]+$/.test(args[0]) ? ['-' + args[0], ...args.slice(1)] : args;
+    const { flags, vals } = gnuParse(a, { v: 'fCbHIKNTVX', l: ['file', 'directory', 'blocking-factor', 'format',
+      'use-compress-program', 'starting-file', 'newer', 'files-from', 'label', 'exclude-from', 'exclude', 'transform',
+      'xform', 'owner', 'group', 'mode', 'mtime'] });
+    const has = (s, l) => [...s].some((c) => flags.has(c)) || l.some((x) => flags.has(x));
+    if (has('x', ['extract', 'get'])) return { targets: [{ p: vals.C ?? vals.directory ?? '.', tree: true }] };
+    const f = vals.f ?? vals.file;
+    const create = has('cruA', ['create', 'append', 'update', 'catenate', 'concatenate']);
+    return { targets: create && f !== undefined && f !== '-' ? [{ p: f }] : [] };
+  }
+  if (name === 'unzip') {
+    if (args.some((a) => /^-[lvtZpcz]$/.test(a))) return { targets: [] }; // list / test / to stdout
+    const i = args.indexOf('-d');
+    const glued = args.find((a) => /^-d./.test(a));
+    const dir = i >= 0 ? args[i + 1] : glued !== undefined ? glued.slice(2) : '.';
+    return { targets: dir === undefined ? [] : [{ p: dir, tree: true }] };
+  }
+  if (name === 'curl') {
+    const { flags, vals, pos } = gnuParse(args, { v: 'oDcdHuXAeFTxbKmwErYyzCUQt', l: ['output', 'dump-header',
+      'cookie-jar', 'data', 'data-raw', 'data-binary', 'data-urlencode', 'header', 'user', 'request', 'user-agent',
+      'referer', 'form', 'upload-file', 'proxy', 'cookie', 'config', 'max-time', 'write-out', 'cert', 'range',
+      'output-dir', 'trace', 'trace-ascii', 'stderr', 'libcurl', 'url', 'connect-timeout', 'retry', 'resolve',
+      'cacert', 'key', 'pass', 'json'] });
+    const dir = vals['output-dir'];
+    const pre = (f) => (dir !== undefined && !/^([A-Za-z]:)?[\/~$%]/.test(f) ? `${dir}/${f}` : f);
+    const targets = [];
+    for (const k of ['o', 'output']) if (vals[k] && vals[k] !== '-') targets.push({ p: pre(vals[k]) });
+    for (const k of ['D', 'dump-header', 'c', 'cookie-jar', 'trace', 'trace-ascii', 'stderr', 'libcurl']) {
+      if (vals[k] && vals[k] !== '-') targets.push({ p: vals[k] });
+    }
+    if (['O', 'remote-name', 'remote-name-all'].some((f) => flags.has(f))) {
+      for (const u of [...pos, vals.url]) { const n = urlName(u); if (n) targets.push({ p: pre(n) }); }
+    }
+    return { targets };
+  }
+  if (name === 'wget') {
+    const { flags, vals, pos } = gnuParse(args, { v: 'OPaoiDeUTtwlAR', l: ['output-document', 'directory-prefix',
+      'append-output', 'output-file', 'input-file', 'domains', 'execute', 'user-agent', 'timeout', 'tries', 'wait',
+      'level', 'accept', 'reject', 'user', 'password', 'header'] });
+    const targets = [];
+    for (const k of ['o', 'output-file', 'a', 'append-output']) if (vals[k]) targets.push({ p: vals[k] });
+    const doc = vals.O ?? vals['output-document'];
+    const dir = vals.P ?? vals['directory-prefix'];
+    if (doc !== undefined) { if (doc !== '-') targets.push({ p: doc }); }
+    else if (['r', 'recursive', 'm', 'mirror'].some((f) => flags.has(f))) targets.push({ p: dir ?? '.', tree: true });
+    else for (const u of pos) { const n = urlName(u); if (n) targets.push({ p: dir !== undefined ? `${dir}/${n}` : n }); }
+    return { targets };
   }
   if (Object.hasOwn(COPY_LIKE, name)) return { targets: copyTargets(name, args) };
   return { targets: [] };
@@ -782,6 +841,13 @@ function srcHas(base, segs) {
 // Manifest keys (not yet filtered for kept) that target t writes.
 function writtenKeys(t, lex, map, ps) {
   const out = [];
+  if (t.tree === true) { // archive extraction: unknown members, every entry under the dir
+    const dests = [...new Set([keyOf(lex), keyOf(real(lex))])];
+    for (const k of map.keys()) {
+      if (claudeRootKeys().some((c) => dests.some((d) => under(`${c}/${k}`, d)))) out.push(k);
+    }
+    return out;
+  }
   if (t.src === undefined) {
     for (const r of relKeys(lex)) {
       if (!r) continue;

@@ -506,6 +506,33 @@ else
   skip "G5 symlink/junction could not be created"
 fi
 
+# --- 7b. downloaders, archives, truncate ---
+U=https://example.com/raw/status.mjs
+expect_deny "D curl -o managed" "$(shell_payload Bash "curl -sSL -o ~/.claude/hooks/status.mjs $U")"
+expect_deny "D curl --output=managed" "$(shell_payload Bash "curl --output=~/.claude/hooks/status.mjs $U")"
+expect_deny "D curl -O into managed dir (cd)" "$(shell_payload Bash "cd ~/.claude/hooks && curl -sSLO $U")"
+expect_deny "D curl --output-dir + -O" "$(shell_payload Bash "curl --output-dir ~/.claude/hooks -O $U")"
+expect_allow "D curl -o elsewhere" "$(shell_payload Bash "curl -o out.mjs $U")"
+expect_allow "D curl -O elsewhere" "$(shell_payload Bash "curl -O $U")"
+expect_allow "D curl to stdout" "$(shell_payload Bash "curl -s $U")"
+expect_deny "D wget -O managed" "$(shell_payload Bash "wget -q -O ~/.claude/hooks/status.mjs $U")"
+expect_deny "D wget -P managed dir, URL name managed" "$(shell_payload Bash "wget -P ~/.claude/hooks $U")"
+expect_allow "D wget -P managed dir, other name" "$(shell_payload Bash "wget -P ~/.claude/hooks https://example.com/notes.txt")"
+expect_allow "D wget -O - (stdout)" "$(shell_payload Bash "wget -O - $U")"
+expect_deny "D tar -x -C managed dir" "$(shell_payload Bash 'tar -xzf pkg.tgz -C ~/.claude/hooks')"
+expect_deny "D tar old-style xzf + --directory=" "$(shell_payload Bash 'tar xzf pkg.tgz --directory=~/.claude')"
+expect_deny "D tar -x in managed cwd" "$(shell_payload Bash 'cd ~/.claude/hooks && tar -xf pkg.tar')"
+expect_deny "D tar -c -f managed" "$(shell_payload Bash 'tar -czf ~/.claude/hooks/status.mjs src')"
+expect_allow "D tar -t (list)" "$(shell_payload Bash 'tar -tzf ~/.claude/hooks/pkg.tgz')"
+expect_allow "D tar -x elsewhere" "$(shell_payload Bash 'tar -xzf pkg.tgz -C out')"
+expect_allow "D tar -c of managed files into an archive elsewhere" "$(shell_payload Bash 'tar -czf backup.tgz ~/.claude/hooks')"
+expect_deny "D unzip -d managed dir" "$(shell_payload Bash 'unzip -o pkg.zip -d ~/.claude/hooks')"
+expect_deny "D unzip in managed cwd" "$(shell_payload Bash 'cd ~/.claude && unzip pkg.zip')"
+expect_allow "D unzip -l (list)" "$(shell_payload Bash 'cd ~/.claude && unzip -l pkg.zip')"
+expect_allow "D unzip elsewhere" "$(shell_payload Bash 'unzip pkg.zip -d out')"
+expect_deny "D truncate managed" "$(shell_payload Bash 'truncate -s 0 ~/.claude/hooks/status.mjs')"
+expect_allow "D truncate elsewhere" "$(shell_payload Bash 'truncate -s 0 out.log')"
+
 # --- 8. latency bench: p50 of 20 runs per payload (printed, not asserted) ---
 env HOME="$HOMEL" USERPROFILE="$UP_DEFAULT" node -e '
 const { spawnSync } = require("child_process");
