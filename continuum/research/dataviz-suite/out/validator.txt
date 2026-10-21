@@ -1,0 +1,23 @@
+$ py -3.13 tools/viz/validate_palette.py "#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4" --mode light
+Palette (light, surface #fcfcfb, categorical): 5 slots
+  [PASS] Lightness band         all 5 inside L 0.43–0.77
+  [PASS] Chroma floor           all 5 >= 0.1
+  [PASS] CVD separation         worst adjacent #eda100↔#1baf7a ΔE 9.1 (protan) · tritan 5.8
+  [PASS] Normal-vision floor    worst adjacent #e87ba4↔#eda100 ΔE 19.6 (normal)
+  [WARN] Contrast vs surface    below 3:1 — relief required (visible labels or table view): [["#1baf7a",2.74],["#eda100",2.11],["#e87ba4",2.62]]
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+exit 0
+
+$ py -3.13 tools/viz/validate_palette.py "#3987e5,#d95926,#199e70,#c98500,#d55181" --mode dark
+Palette (dark, surface #1a1a19, categorical): 5 slots
+  [PASS] Lightness band         all 5 inside L 0.48–0.67
+  [PASS] Chroma floor           all 5 >= 0.1
+  [PASS] CVD separation         worst adjacent #c98500↔#199e70 ΔE 8.4 (protan) · tritan 8.7
+  [PASS] Normal-vision floor    worst adjacent #d55181↔#c98500 ΔE 19.3 (normal)
+  [PASS] Contrast vs surface    all 5 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+exit 0

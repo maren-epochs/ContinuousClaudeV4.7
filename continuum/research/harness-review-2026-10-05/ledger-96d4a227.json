@@ -1,0 +1,148 @@
+{
+  "transcript": "<projects>/home-dir\\96d4a227.jsonl",
+  "version": "2.1.289",
+  "turns": 397,
+  "skipped_lines": 0,
+  "peak_context": 450580,
+  "total_output_tokens": 421647,
+  "compactions": [
+    {
+      "turn": 345,
+      "from": 408127,
+      "to": 0
+    }
+  ],
+  "spans": [
+    {
+      "label": "(none)",
+      "first_turn": 1,
+      "last_turn": 9,
+      "turns": 9,
+      "start_context": 58546,
+      "end_context": 61725,
+      "delta": 61725
+    },
+    {
+      "label": "resume-handoff",
+      "first_turn": 10,
+      "last_turn": 33,
+      "turns": 24,
+      "start_context": 63222,
+      "end_context": 79367,
+      "delta": 17642
+    },
+    {
+      "label": "autonomous",
+      "first_turn": 34,
+      "last_turn": 58,
+      "turns": 25,
+      "start_context": 85789,
+      "end_context": 102125,
+      "delta": 22758
+    },
+    {
+      "label": "(none)",
+      "first_turn": 59,
+      "last_turn": 96,
+      "turns": 38,
+      "start_context": 103199,
+      "end_context": 117082,
+      "delta": 14957
+    },
+    {
+      "label": "schedule",
+      "first_turn": 97,
+      "last_turn": 106,
+      "turns": 10,
+      "start_context": 122069,
+      "end_context": 132708,
+      "delta": 15626
+    },
+    {
+      "label": "(none)",
+      "first_turn": 107,
+      "last_turn": 336,
+      "turns": 230,
+      "start_context": 133597,
+      "end_context": 319466,
+      "delta": 186758
+    },
+    {
+      "label": "update-config",
+      "first_turn": 337,
+      "last_turn": 344,
+      "turns": 8,
+      "start_context": 406979,
+      "end_context": 408127,
+      "delta": 88661
+    },
+    {
+      "label": "(none)",
+      "first_turn": 345,
+      "last_turn": 368,
+      "turns": 24,
+      "start_context": 0,
+      "end_context": 425337,
+      "delta": 425337
+    },
+    {
+      "label": "resume-handoff",
+      "first_turn": 369,
+      "last_turn": 390,
+      "turns": 22,
+      "start_context": 426987,
+      "end_context": 439713,
+      "delta": 14376
+    },
+    {
+      "label": "(none)",
+      "first_turn": 391,
+      "last_turn": 392,
+      "turns": 2,
+      "start_context": 440842,
+      "end_context": 440842,
+      "delta": 1129
+    },
+    {
+      "label": "create-handoff",
+      "first_turn": 393,
+      "last_turn": 397,
+      "turns": 5,
+      "start_context": 443440,
+      "end_context": 450580,
+      "delta": 9738
+    }
+  ],
+  "skills": {
+    "(none)": {
+      "delta": 689906,
+      "spans": 5,
+      "turns": 303
+    },
+    "resume-handoff": {
+      "delta": 32018,
+      "spans": 2,
+      "turns": 46
+    },
+    "autonomous": {
+      "delta": 22758,
+      "spans": 1,
+      "turns": 25
+    },
+    "schedule": {
+      "delta": 15626,
+      "spans": 1,
+      "turns": 10
+    },
+    "update-config": {
+      "delta": 88661,
+      "spans": 1,
+      "turns": 8
+    },
+    "create-handoff": {
+      "delta": 9738,
+      "spans": 1,
+      "turns": 5
+    }
+  }
+}

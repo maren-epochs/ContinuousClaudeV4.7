@@ -1,0 +1,115 @@
+---
+session: 56444984
+date: 2026-10-19
+status: complete
+outcome: SUCCEEDED
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: fleet-followups shipped (amber in open picker, TestCase override guard, home_path, digest.err docs + dashboard notice); pushed + synced a297ab6
+now: Reopen projects with /fleet open, then check first new handoffs for '~' and '<private:...>' (first live test of redaction on the synced harness)
+test: py -3.13 -m pytest -q -m "not integration" && bash .claude/hooks/test_status.sh && bash .claude/hooks/test_pre_compact.sh
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  fleet open candidates (tools/fleet/launch.py candidates()) take a project's cwd from its
+  transcripts in ~/.claude/projects/<slug>/. Claude Code can write a metadata-only stub
+  transcript (ai-title/agent-name lines, no "cwd") that becomes the NEWEST file; candidates
+  now walk transcripts newest-first until one yields a cwd (fix cfbfbaf). That stub is why
+  amber was missing.
+  digest.err helpers live in tools/fleet/digest.py (err_path, notice, ERR_MAX) since a297ab6;
+  fleet.py uses digest.err_path()/digest.notice() and keeps DIGEST_ERR_MAX = digest.ERR_MAX.
+  dashboard.py imports digest (it cannot import fleet: fleet imports dashboard) and renders a
+  "Daily digest" card (id="digest") while digest.err exists.
+  privacy_guard deliberately skips placeholder home names {x, user, name, you, <...>}
+  (tools/privacy_guard.py:89) - C:/Users/x literals are not a leak.
+  install/test_sync_global.py reads the live repo tree: it fails randomly while parallel
+  workers edit/commit; run it on a quiet tree. continuum/autonomous is gitignored.
+  '! cmd' lines the user types mid-turn arrive as message text and do NOT run; only a '!'
+  prompt on its own executes (it did on the second try: push + sync succeeded).
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: 1077/1077 full incl. integration before followups (2 skipped); after: 1068 non-integration + fleet 367 passed
+  test_command: py -3.13 -m pytest -q -m "not integration"
+  pre_existing_failures: []
+  uncommitted_changes: false
+  branch: main
+  dirty_files: []
+  warnings: "untracked install/settings.template.json.bak-* and an old auto-handoff md; leftovers, not deleted without asking"
+  context: "peak 85% (170K) | resume-handoff +85K, fleet +11K, autonomous +10K"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: Resumed fleet-digest-sync handoff; handoff-all round 1 check 6/6 landed; user confirmed staggered open works
+    files: []
+  - task: Fixed fleet open dropping projects whose newest transcript is a cwd-less stub (amber)
+    files: [tools/fleet/launch.py, tools/fleet/test_launch.py]
+  - task: "/autonomous fleet-followups (feature, 3 parallel workers, all passed): VAL-901 digest.err docs, VAL-902 home_path in test_sync_global, VAL-903 tools/test_no_testcase_overrides.py"
+    files: [CLAUDE.md, harness/skills/fleet/SKILL.md, install/test_sync_global.py, tools/test_no_testcase_overrides.py]
+  - task: Dashboard shows failed-digest notice; digest.err helpers moved fleet.py -> digest.py
+    files: [tools/fleet/digest.py, tools/fleet/fleet.py, tools/fleet/dashboard.py, tools/fleet/test_dashboard.py, tools/fleet/schema.md, CLAUDE.md, harness/skills/fleet/SKILL.md]
+  - task: User pushed c711470..a297ab6 and ran sync_global --apply (9 files); report --fresh shows harness in sync
+    files: []
+  - task: "handoff-all round 1 (baseline 1792090434): 6/6 landed. Round 2 sent 2026-10-19 (baseline 1792387370) to ripplemark-cc, druckenmiller-75, bidask-skips-fixed-variants, documents-29, multi-strategy-09, privacy-40; druckenmiller replied nothing changed since its 10-15 handoff"
+    files: []
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: override_guard_scope
+    chose: flag only methods whose names already exist on unittest.TestCase (fail*/assert*) plus 3.12-removed aliases
+    over: [blanket assert[A-Z_]* ban]
+    because: new helpers like assertSorted are legitimate; the bug class is overriding built-ins
+  - name: digest_helpers_home
+    chose: move err_path/notice into digest.py
+    over: [pass notices into dashboard.build_page, duplicate the formatting in dashboard]
+    because: dashboard cannot import fleet (circular); digest.py is the natural owner; fake write_page(state, path) tests unchanged
+  - name: privacy_guard_x
+    chose: no change
+    over: [flag one-letter names]
+    because: x is a documented placeholder name by design
+
+# ── FINDINGS ─────────────────────────────────────────────────────
+findings:
+  critical:
+    - All 6 peer sessions started before the 2026-10-15 sync; their handoffs still use pre-sync code. Redaction on the synced harness is only verifiable after restart
+    - Parallel workers must not git commit (index.lock races); orchestrator commits per worker
+  useful:
+    - fleet.py handoffs without --fresh shows cached state (a missing handoff can be stale cache)
+    - "Open questions waiting in peer handoffs: amber (bid-ask valuation if 15 Oct close fails), multi-strategy Q2 (IBC switch date), privacy (blocked on clarification), druckenmiller OD-01..OD-06 (kept queued by owner choice)"
+  fyi:
+    - bloks rules added - unittest 3.12 alias removal; install/test_sync_global live-tree race
+
+worked: [parallel workers on disjoint files with orchestrator commits, AST pre-scan in premortem to confirm 0 offenders, temp-HOME end-to-end check of dashboard notice]
+
+failed:
+  - attempted: user typing '! git push' as a mid-turn message
+    root_cause: mid-turn messages are text, not executed
+    avoid: assuming mid-turn '!' lines ran
+    use_instead: verify with git status -sb; ask the user to type each '!' at an idle prompt
+
+user_intent: |
+  User runs ~6 parallel sessions and is preparing to close the whole fleet, then reopen
+  projects fresh on the synced harness. Wants every session handed off first.
+
+blockers: []
+questions:
+  - "Guard gap: extend tools/test_no_testcase_overrides.py to class-level 'fail = ...' assignments? A skip (Recommended: no known case), B add it"
+
+next:
+  - "Check round 2: py -3.13 tools/fleet/fleet.py handoffs --since 1792387370 --fresh"
+  - "Reopen projects: /fleet open (amber should be listed)"
+  - "In reopened sessions, grep the first new handoff for home path / private terms; expect '~' and '<private:'"
+
+next_session_prompt: |
+  The fleet was closed after handoff-all round 2 (baseline 1792387370). First run
+  py -3.13 tools/fleet/fleet.py handoffs --since 1792387370 --fresh and tell me which
+  projects have a fresh handoff. Then help me reopen projects with /fleet open (amber
+  should now be listed; fix cfbfbaf). Once sessions write their first handoff on the
+  synced harness (a297ab6), check those files contain '~' and '<private:...>' and no home
+  path or private term. Everything is pushed and synced; nothing is pending in this repo.
+
+files:
+  created: [tools/test_no_testcase_overrides.py]
+  modified: [tools/fleet/launch.py, tools/fleet/test_launch.py, tools/fleet/digest.py, tools/fleet/fleet.py, tools/fleet/dashboard.py, tools/fleet/test_dashboard.py, tools/fleet/schema.md, install/test_sync_global.py, CLAUDE.md, harness/skills/fleet/SKILL.md]

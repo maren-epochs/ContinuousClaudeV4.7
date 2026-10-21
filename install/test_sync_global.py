@@ -1,0 +1,722 @@
+#!/usr/bin/env python3
+"""Exit-code contract tests for install/sync_global.py (VAL-001, VAL-104).
+
+Runs the sync script against a temporary --target directory (never the real
+~/.claude) and asserts:
+
+  1. dry run against a fresh/stale target -> exit 1 (drift detected)
+  2. --apply against that target         -> exit 0
+  3. dry run immediately after apply     -> exit 0, output contains "in sync"
+  4. dry-run drift checks (VAL-104): stale .ccv47-installed SHA notes/warnings
+     and read-only hook-registration warnings against settings.json, none of
+     which change the exit-code contract.
+  5. tools/ data files (.json, e.g. tools/viz/palette.json) are installed, and
+     `py -3.13 tools/viz/<x>.py` commands in skills are rewritten to absolute
+     paths exactly like the existing `py -3.13 tools/validate_report.py` rule
+     (VAL-301).
+  6. --apply writes <target>/.ccv47-manifest.json atomically (installed path ->
+     repo path, sha256, kept flag); dry runs write nothing and the manifest is
+     never planned or reported as drift (VAL-802).
+
+Stdlib only. Run as: py -3.13 install/test_sync_global.py
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+SCRIPT = Path(__file__).resolve().parent / "sync_global.py"
+sys.path.insert(0, str(SCRIPT.parent))
+if str(SCRIPT.parent.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT.parent.parent))
+# importlib (not a late `import`) keeps ruff quiet under both default (E402) and RUF100 configs
+_sync = importlib.import_module("sync_global")
+_model = importlib.import_module("tools.fleet.model")
+home_path = importlib.import_module("tools._testing").home_path
+NOT_EVENT_HOOKS, render, rewrites = _sync.NOT_EVENT_HOOKS, _sync.render, _sync.rewrites
+
+TIMEOUT = 120
+HOOKS = sorted(
+    p.name
+    for p in (SCRIPT.parent.parent / ".claude" / "hooks").glob("*.mjs")
+    if not p.name.startswith("test") and p.name not in NOT_EVENT_HOOKS
+)
+FAKE_SHA = "0" * 40
+
+
+def run_sync(target: Path, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--target", str(target), *extra],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+        check=False,
+    )
+
+
+class ExitCodeContract(unittest.TestCase):
+    def test_exit_code_contract(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+
+            # (a) fresh target has drift: dry run must exit 1
+            dry = run_sync(target)
+            self.assertEqual(
+                dry.returncode,
+                1,
+                f"dry run with drift should exit 1, got {dry.returncode}\n"
+                f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}",
+            )
+            self.assertNotIn("in sync", dry.stdout)
+
+            # (b) --apply succeeds: exit 0
+            applied = run_sync(target, "--apply")
+            self.assertEqual(
+                applied.returncode,
+                0,
+                f"--apply should exit 0, got {applied.returncode}\n"
+                f"stdout:\n{applied.stdout}\nstderr:\n{applied.stderr}",
+            )
+
+            # (c) dry run after apply: in sync, exit 0
+            clean = run_sync(target)
+            self.assertEqual(
+                clean.returncode,
+                0,
+                f"dry run when in sync should exit 0, got {clean.returncode}\n"
+                f"stdout:\n{clean.stdout}\nstderr:\n{clean.stderr}",
+            )
+            self.assertIn("in sync", clean.stdout)
+
+
+def warn_lines(out: str) -> list[str]:
+    return [l for l in out.splitlines() if l.startswith("warn:")]
+
+
+def note_lines(out: str) -> list[str]:
+    return [l for l in out.splitlines() if l.startswith("note:")]
+
+
+class DriftChecks(unittest.TestCase):
+    def test_partial_registration_warns_unregistered_hooks(self) -> None:
+        self.assertGreaterEqual(len(HOOKS), 3, "need several repo hooks for this test")
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+
+            registered, missing = HOOKS[:2], HOOKS[2:]
+            settings = {
+                "statusLine": {
+                    "type": "command",
+                    "command": f'node "{target.as_posix()}/hooks/{registered[0]}"',
+                },
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Read",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f'node "{target.as_posix()}/hooks/{registered[1]}"',
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+            (target / "settings.json").write_text(
+                json.dumps(settings), encoding="utf-8"
+            )
+
+            dry = run_sync(target)
+            self.assertEqual(
+                dry.returncode,
+                0,
+                f"registration warnings must not change exit code\n"
+                f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}",
+            )
+            self.assertIn("in sync", dry.stdout)
+            warns = warn_lines(dry.stdout)
+            for name in missing:
+                self.assertTrue(
+                    any(name in w for w in warns),
+                    f"expected warn naming {name}, got: {warns}",
+                )
+            for name in registered:
+                self.assertFalse(
+                    any(name in w for w in warns),
+                    f"registered hook {name} must not be warned: {warns}",
+                )
+
+    def test_non_event_hooks_never_warned(self) -> None:
+        self.assertIn("tldr-shim.mjs", NOT_EVENT_HOOKS)
+        self.assertIn("privacy-redact.mjs", NOT_EVENT_HOOKS)
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            # every event hook registered; non-event hooks deliberately absent
+            settings = {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Read",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f'node "{target.as_posix()}/hooks/{name}"',
+                                }
+                                for name in HOOKS
+                            ],
+                        }
+                    ]
+                }
+            }
+            (target / "settings.json").write_text(
+                json.dumps(settings), encoding="utf-8"
+            )
+
+            dry = run_sync(target)
+            self.assertEqual(
+                dry.returncode, 0, f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}"
+            )
+            self.assertTrue(
+                (target / "hooks" / "tldr-shim.mjs").is_file(),
+                "non-event hooks must still be installed",
+            )
+            self.assertTrue(
+                (target / "hooks" / "privacy-redact.mjs").is_file(),
+                "the shared privacy module must be installed next to its hooks",
+            )
+            self.assertEqual(
+                warn_lines(dry.stdout),
+                [],
+                f"no registration warnings expected: {dry.stdout}",
+            )
+
+    def test_missing_settings_json_is_informational(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+
+            dry = run_sync(target)  # no settings.json in target
+            self.assertEqual(
+                dry.returncode,
+                0,
+                f"missing settings.json must not change exit code or crash\n"
+                f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}",
+            )
+            self.assertEqual(warn_lines(dry.stdout), [])
+            notes = note_lines(dry.stdout)
+            self.assertEqual(
+                len(notes), 1, f"expected one informational line, got: {notes}"
+            )
+            self.assertIn("settings.json", notes[0])
+
+    def test_stale_sha_note_when_contents_in_sync(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / ".ccv47-installed").write_text(FAKE_SHA + "\n", encoding="utf-8")
+
+            dry = run_sync(target)
+            self.assertEqual(
+                dry.returncode,
+                0,
+                f"stale SHA record with contents in sync must stay exit 0\n"
+                f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}",
+            )
+            self.assertIn("in sync", dry.stdout)
+            sha_notes = [n for n in note_lines(dry.stdout) if FAKE_SHA in n]
+            self.assertEqual(
+                len(sha_notes), 1, f"expected one SHA-mismatch note, got: {dry.stdout}"
+            )
+            self.assertIn("HEAD", sha_notes[0])
+
+    def test_stale_sha_warn_with_drift(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            (target / ".ccv47-installed").write_text(FAKE_SHA + "\n", encoding="utf-8")
+
+            dry = run_sync(target)  # fresh target: file drift -> exit 1
+            self.assertEqual(
+                dry.returncode,
+                1,
+                f"file drift must still exit 1\nstdout:\n{dry.stdout}\nstderr:\n{dry.stderr}",
+            )
+            sha_warns = [w for w in warn_lines(dry.stdout) if FAKE_SHA in w]
+            self.assertEqual(
+                len(sha_warns),
+                1,
+                f"expected one SHA-mismatch warning, got: {dry.stdout}",
+            )
+            self.assertIn("HEAD", sha_warns[0])
+
+
+class ToolsInstall(unittest.TestCase):
+    """VAL-301: the globally installed tools.viz package must be complete and reachable."""
+
+    def test_tools_json_installed(self) -> None:
+        src = SCRIPT.parent.parent / "tools" / "viz" / "palette.json"
+        self.assertTrue(src.is_file(), f"fixture missing: {src}")
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            applied = run_sync(target, "--apply")
+            self.assertEqual(
+                applied.returncode,
+                0,
+                f"stdout:\n{applied.stdout}\nstderr:\n{applied.stderr}",
+            )
+            dst = target / "tools" / "viz" / "palette.json"
+            self.assertTrue(dst.is_file(), "tools/viz/palette.json must be installed")
+            self.assertEqual(
+                json.loads(dst.read_text(encoding="utf-8")),
+                json.loads(src.read_text(encoding="utf-8")),
+            )
+            # installed skill no longer carries repo-relative viz commands
+            skill = (target / "skills" / "visualize" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("py -3.13 tools/viz/", skill)
+            self.assertIn(f"{target.as_posix()}/tools/viz/recommend.py", skill)
+
+    def test_viz_command_rewritten_like_other_tools(self) -> None:
+        dest, python = home_path("x", "posix") + "/.claude", "py -3.13"
+        rules = rewrites(dest, python)
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            md = Path(td) / "SKILL.md"
+            md.write_text(
+                "py -3.13 tools/validate_report.py r.json\n"
+                "py -3.13 tools/viz/recommend.py agg.parquet --json\n"
+                "python3 tools/viz/export.py render out.html out.png\n",
+                encoding="utf-8",
+            )
+            out = render(md, rules, "\n").decode("utf-8").splitlines()
+        self.assertEqual(
+            out,
+            [
+                f"{python} {dest}/tools/validate_report.py r.json",
+                f"{python} {dest}/tools/viz/recommend.py agg.parquet --json",
+                f"{python} {dest}/tools/viz/export.py render out.html out.png",
+            ],
+        )
+
+    def test_fleet_paths_rewritten_like_viz(self) -> None:
+        """VAL-811: installed skill docs reference the installed tools/fleet/fleet.py."""
+        dest, python = home_path("x", "posix") + "/.claude", "py -3.13"
+        rules = rewrites(dest, python)
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            md = Path(td) / "SKILL.md"
+            md.write_text(
+                "py -3.13 tools/fleet/fleet.py report --fresh\n"
+                'F=tools/fleet/fleet.py; [ -f "$F" ] || F="$HOME/.claude/tools/fleet/fleet.py"\n'
+                "py -3.13 tools/fleet/model.py\n",
+                encoding="utf-8",
+            )
+            out = render(md, rules, "\n").decode("utf-8").splitlines()
+        self.assertEqual(
+            out,
+            [
+                f"{python} {dest}/tools/fleet/fleet.py report --fresh",
+                f'F=tools/fleet/fleet.py; [ -f "$F" ] || F="{dest}/tools/fleet/fleet.py"',
+                f"{python} {dest}/tools/fleet/model.py",
+            ],
+        )
+
+    def test_fleet_installed_and_skill_points_at_it(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertTrue((target / "tools" / "fleet" / "fleet.py").is_file())
+            skill = (target / "skills" / "fleet" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("$HOME/.claude/tools/fleet/", skill)
+            self.assertIn(f'F="{target.as_posix()}/tools/fleet/fleet.py"', skill)
+
+    def test_user_privacy_terms_never_planned(self) -> None:
+        """VAL-704: the sync only writes mapped subtrees, never ~/.claude/privacy-terms."""
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            (target / "privacy-terms").write_text("sentinel\n", encoding="utf-8")
+            plan = _sync.build_plan(target, rewrites(target.as_posix(), "py"), "\n")
+            self.assertTrue(plan, "fresh target must plan installs")
+            mapped = {dst for _, dst in _sync.MAPPINGS}
+            for _, dst, _, _ in plan:
+                rel = dst.relative_to(target)
+                self.assertNotEqual(dst.name, "privacy-terms", rel)
+                self.assertIn(rel.parts[0], mapped, rel)
+
+
+class UpdateDiffBackup(unittest.TestCase):
+    """VAL-612 characterization of main(): update/new listing, --diff output,
+    --apply backups and the install record, pinned before main() was split."""
+
+    def test_update_diff_and_backup(self) -> None:
+        rel = "tools/requirements.txt"
+        src = SCRIPT.parent.parent / rel
+        self.assertTrue(src.is_file(), f"fixture missing: {src}")
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "lf").returncode, 0)
+            dst = target / rel
+            original = dst.read_bytes()
+            dst.write_bytes(b"locally edited\n" + original)
+            gone = target / "tools" / "viz" / "palette.json"
+            gone.unlink()
+
+            dry = run_sync(target, "--diff", "--eol", "lf")
+            self.assertEqual(dry.returncode, 1, dry.stdout + dry.stderr)
+            lines = dry.stdout.splitlines()
+            self.assertIn(f"update  {rel}", lines)
+            self.assertIn("new     tools/viz/palette.json", lines)
+            i = lines.index(f"update  {rel}")
+            self.assertEqual(lines[i + 1 : i + 3], ["--- installed", "+++ repo"])
+            self.assertTrue(lines[i + 3].startswith("@@ "), lines[i + 3])
+            self.assertIn("-locally edited", lines[i + 4 : i + 6])
+            self.assertEqual(
+                lines[-1], "dry run - pass --apply to write (exit 1: out of sync)"
+            )
+            self.assertEqual(lines[-2], "")
+
+            # dry run without --diff lists the same plan and nothing else
+            plain = run_sync(target, "--eol", "lf")
+            self.assertEqual(
+                [
+                    l
+                    for l in plain.stdout.splitlines()
+                    if l.startswith(("new", "update"))
+                ],
+                [l for l in lines if l.startswith(("new ", "update "))],
+            )
+            self.assertNotIn("--- installed", plain.stdout)
+
+            applied = run_sync(target, "--apply", "--eol", "lf")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertEqual(dst.read_bytes(), original)
+            self.assertTrue(gone.is_file())
+            backups = list((target / ".ccv47-backup").iterdir())
+            self.assertEqual(len(backups), 1)
+            self.assertRegex(backups[0].name, r"^\d{8}-\d{6}$")
+            # only updated files are backed up; new files have nothing to back up
+            saved = sorted(
+                p.relative_to(backups[0]).as_posix()
+                for p in backups[0].rglob("*")
+                if p.is_file()
+            )
+            self.assertEqual(saved, [rel])
+            self.assertEqual(
+                (backups[0] / rel).read_bytes(), b"locally edited\n" + original
+            )
+            self.assertIn(f"\nwrote 2 file(s); backups in {backups[0]}", applied.stdout)
+            record = (target / ".ccv47-installed").read_text(encoding="utf-8")
+            self.assertRegex(record, r"^[0-9a-f]{40}( \(dirty\))?\n$")
+
+    def test_apply_in_sync_only_rewrites_record(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / ".ccv47-installed").write_text("stale\n", encoding="utf-8")
+            again = run_sync(target, "--apply")
+            self.assertEqual(again.returncode, 0)
+            self.assertIn("in sync", again.stdout)
+            self.assertNotIn("wrote", again.stdout)
+            self.assertFalse((target / ".ccv47-backup").exists())
+            record = (target / ".ccv47-installed").read_text(encoding="utf-8")
+            self.assertRegex(record, r"^[0-9a-f]{40}( \(dirty\))?\n$")
+
+    def test_crlf_and_lf_rendering(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "crlf").returncode, 0)
+            body = (target / "tools" / "requirements.txt").read_bytes()
+            self.assertIn(b"\r\n", body)
+            # switching eol makes every text file an update
+            dry = run_sync(target, "--eol", "lf")
+            self.assertEqual(dry.returncode, 1)
+            self.assertIn("update  tools/requirements.txt", dry.stdout.splitlines())
+
+    def test_target_plan_matches_main(self) -> None:
+        """target_plan (fleet in_sync) plans exactly what main's --apply wrote."""
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "lf").returncode, 0)
+            self.assertEqual(_sync.actionable(_sync.target_plan(target, "lf")), [])
+            crlf = _sync.actionable(_sync.target_plan(target, "crlf"))
+            self.assertIn(
+                "tools/requirements.txt",
+                {dst.relative_to(target).as_posix() for _, dst, _, _ in crlf},
+            )
+            with self.assertRaises(KeyError):
+                _sync.target_plan(target, "cr")
+
+
+class KeepList(unittest.TestCase):
+    """VAL-713: <target>/.ccv47-keep pins install-relative paths against --apply."""
+
+    def test_load_keep_parses_comments_and_separators(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(_sync.load_keep(target), set(), "missing file = empty")
+            (target / ".ccv47-keep").write_text(
+                "# user pins\n"
+                "\n"
+                "  skills/resume-handoff/SKILL.md  \n"
+                "./tools\\requirements.txt\n"
+                "   # indented comment\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                _sync.load_keep(target),
+                {"skills/resume-handoff/SKILL.md", "tools/requirements.txt"},
+            )
+
+    def test_kept_paths_never_written_and_reported(self) -> None:
+        edited_rel = "tools/requirements.txt"
+        gone_rel = "tools/viz/palette.json"
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply", "--eol", "lf").returncode, 0)
+            edited = target / edited_rel
+            local = b"user copy\n"
+            edited.write_bytes(local)
+            (target / gone_rel).unlink()
+            (target / ".ccv47-keep").write_text(
+                f"# pinned\n{edited_rel}\n{gone_rel}\n", encoding="utf-8"
+            )
+
+            dry = run_sync(target, "--eol", "lf")
+            lines = dry.stdout.splitlines()
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertIn(f"keep    {edited_rel}", lines)
+            self.assertIn(f"keep    {gone_rel}", lines)
+            self.assertFalse(
+                [l for l in lines if l.startswith(("new", "update"))], dry.stdout
+            )
+            self.assertIn("in sync", dry.stdout)
+
+            applied = run_sync(target, "--apply", "--eol", "lf")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertIn(f"keep    {edited_rel}", applied.stdout.splitlines())
+            self.assertEqual(edited.read_bytes(), local, "kept file overwritten")
+            self.assertFalse((target / gone_rel).exists(), "kept file recreated")
+            self.assertFalse((target / ".ccv47-backup").exists())
+
+    def test_keep_does_not_mask_other_drift(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            (target / ".ccv47-keep").write_text(
+                "skills/resume-handoff/SKILL.md\n", encoding="utf-8"
+            )
+            dry = run_sync(target)  # fresh target: everything else is new
+            lines = dry.stdout.splitlines()
+            self.assertEqual(dry.returncode, 1, dry.stdout + dry.stderr)
+            self.assertIn("keep    skills/resume-handoff/SKILL.md", lines)
+            self.assertNotIn("new     skills/resume-handoff/SKILL.md", lines)
+            self.assertIn("new     tools/viz/palette.json", lines)
+
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertFalse(
+                (target / "skills" / "resume-handoff" / "SKILL.md").exists()
+            )
+            self.assertTrue((target / "skills" / "review" / "SKILL.md").is_file())
+
+    def test_unmatched_keep_entry_noted(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / ".ccv47-keep").write_text(
+                "skills/no-such/SKILL.md\n", encoding="utf-8"
+            )
+            dry = run_sync(target)
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertTrue(
+                any("skills/no-such/SKILL.md" in n for n in note_lines(dry.stdout)),
+                dry.stdout,
+            )
+
+
+MANIFEST = ".ccv47-manifest.json"
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def installed_files(target: Path) -> dict[str, str]:
+    """installed rel path -> repo rel path for every file the sync maps into target."""
+    out: dict[str, str] = {}
+    for src_rel, dst_rel in _sync.MAPPINGS:
+        root = target / dst_rel
+        for p in root.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(root).as_posix()
+                out[f"{dst_rel}/{rel}"] = f"{src_rel}/{rel}"
+    return out
+
+
+class Manifest(unittest.TestCase):
+    """VAL-802: --apply writes <target>/.ccv47-manifest.json atomically."""
+
+    def load(self, target: Path) -> dict:
+        return json.loads((target / MANIFEST).read_text(encoding="utf-8"))
+
+    def test_apply_writes_manifest_of_every_installed_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            applied = run_sync(target, "--apply", "--eol", "lf")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            data = self.load(target)
+            self.assertEqual(data["schema_version"], 1)
+            self.assertRegex(data["generated_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertRegex(data["head_sha"], r"^[0-9a-f]{40}$")
+            self.assertIsInstance(data["dirty"], bool)
+            self.assertEqual(data["eol"], "lf")
+            self.assertEqual(Path(data["repo"]), SCRIPT.parent.parent)
+            files = data["files"]
+            expected = installed_files(target)
+            self.assertTrue(expected)
+            self.assertEqual(set(files), set(expected))
+            self.assertEqual(
+                files["hooks/status.mjs"]["repo_path"], ".claude/hooks/status.mjs"
+            )
+            for rel, entry in files.items():
+                self.assertEqual(set(entry), {"repo_path", "sha256", "kept"}, rel)
+                self.assertEqual(entry["repo_path"], expected[rel], rel)
+                self.assertEqual(entry["sha256"], sha256_of(target / rel), rel)
+                self.assertIs(entry["kept"], False, rel)
+            self.assertNotIn(MANIFEST, files)
+            # atomic replace leaves no temp file behind
+            self.assertEqual(
+                sorted(p.name for p in target.iterdir() if p.is_file()),
+                [".ccv47-installed", MANIFEST],
+            )
+
+    def test_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target).returncode, 1)
+            self.assertEqual(list(target.iterdir()), [], "dry run wrote files")
+
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            before = (target / MANIFEST).read_bytes()
+            (target / "tools" / "requirements.txt").write_bytes(b"drift\n")
+            self.assertEqual(run_sync(target).returncode, 1)
+            self.assertEqual((target / MANIFEST).read_bytes(), before)
+
+    def test_manifest_is_not_sync_managed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            (target / MANIFEST).write_text("not json", encoding="utf-8")
+
+            plan = _sync.build_plan(target, rewrites(target.as_posix(), "py"), "\n")
+            self.assertNotIn(target / MANIFEST, [dst for _, dst, _, _ in plan])
+
+            dry = run_sync(target)
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertIn("in sync", dry.stdout)
+            self.assertNotIn(MANIFEST, dry.stdout)
+
+            again = run_sync(target, "--apply")
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+            self.assertNotIn("wrote", again.stdout)
+            self.assertFalse((target / ".ccv47-backup").exists())
+            self.assertEqual(
+                set(self.load(target)["files"]), set(installed_files(target))
+            )
+
+    def test_kept_paths_flagged_and_not_overwritten(self) -> None:
+        edited_rel = "tools/requirements.txt"
+        gone_rel = "tools/viz/palette.json"
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td)
+            self.assertEqual(run_sync(target, "--apply").returncode, 0)
+            local = b"user copy\n"
+            (target / edited_rel).write_bytes(local)
+            (target / gone_rel).unlink()
+            (target / ".ccv47-keep").write_text(
+                f"{edited_rel}\n{gone_rel}\n", encoding="utf-8"
+            )
+
+            applied = run_sync(target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertEqual((target / edited_rel).read_bytes(), local)
+            files = self.load(target)["files"]
+            self.assertEqual(
+                files[edited_rel],
+                {
+                    "repo_path": edited_rel,
+                    "sha256": hashlib.sha256(local).hexdigest(),
+                    "kept": True,
+                },
+            )
+            self.assertEqual(
+                files[gone_rel], {"repo_path": gone_rel, "sha256": None, "kept": True}
+            )
+            kept = sorted(rel for rel, e in files.items() if e["kept"])
+            self.assertEqual(kept, sorted([edited_rel, gone_rel]))
+
+    def test_default_target_is_model_manifest_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            env = {**os.environ, "HOME": td, "USERPROFILE": td}
+            applied = subprocess.run(
+                [sys.executable, str(SCRIPT), "--apply"],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            # home_dir resolves the same env the subprocess got; patching home_dir
+            # (not os.environ) keeps tldr secure from flagging the read below.
+            home = _model.home_dir(env={"HOME": td, "USERPROFILE": td})
+            with mock.patch.object(_model, "home_dir", return_value=home):
+                path = _model.manifest_path()
+            self.assertEqual(path, Path(td) / ".claude" / MANIFEST)
+            self.assertTrue(path.is_file())
+            self.assertTrue(json.loads(path.read_text(encoding="utf-8"))["files"])
+
+
+class WriteAtomic(unittest.TestCase):
+    """write_atomic failure path and the manifest JSON writer."""
+
+    def test_failure_removes_temp_and_keeps_original(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-sync-test-") as td:
+            target = Path(td) / MANIFEST
+            _sync.write_atomic(target, "original\n")
+            for exc in (OSError("disk"), PermissionError("held open")):
+                with (
+                    self.subTest(exc=type(exc).__name__),
+                    mock.patch.object(_sync.os, "replace", side_effect=exc) as rep,
+                    mock.patch.object(_sync.time, "sleep") as slept,
+                ):
+                    with self.assertRaises(type(exc)):
+                        _sync.write_atomic(target, "new\n")
+                    retries = 5 if isinstance(exc, PermissionError) else 1
+                    self.assertEqual(rep.call_count, retries)
+                    self.assertEqual(slept.call_count, retries - 1)
+                    self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
+                    self.assertEqual([p.name for p in Path(td).iterdir()], [MANIFEST])
+
+    def test_manifest_text_rejects_nan_and_infinity(self) -> None:
+        self.assertEqual(json.loads(_sync.manifest_text({"a": 1.5})), {"a": 1.5})
+        self.assertTrue(_sync.manifest_text({"a": 1}).endswith("}\n"))
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                _sync.manifest_text({"files": {"x": {"sha256": bad}}})
+
+
+if __name__ == "__main__":
+    unittest.main()

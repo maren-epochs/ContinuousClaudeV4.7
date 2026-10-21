@@ -1,0 +1,47 @@
+---
+session: general
+date: 2026-10-07
+status: partial
+outcome: PARTIAL_PLUS
+---
+
+goal: "fleet-control build: 9 of 11 assertions committed; usage limit hit mid-wave"
+now: "Resume /autonomous on continuum/autonomous/fleet-control/contract.json: m3 fix round, VAL-808, m2 fix round, VAL-811"
+test: "make test"
+
+mental_model: |
+  Contract continuum/autonomous/fleet-control/contract.json holds status per assertion, decisions and carried findings
+  (read decisions.scope_2026-10-07: full plan; nothing harmful to projects; blocking is fine when warranted;
+  guard denies even if proposal save fails once a managed target is identified; risky-action log kept).
+  premortem.yaml (WARN) amendments are binding. Reviews: reports/r-m1.json, r-m2.json, r-m3.json.
+  Workers in worktrees cannot write main-repo reports: they write inside the worktree; orchestrator copies the report
+  and cherry-picks the commit, then removes the worktree + branch.
+
+codebase_state:
+  branch: "main 69e299b, NOT pushed (origin at 765bf31)"
+  uncommitted_changes: "likely: VAL-808 worker was stopped mid-implementation in the MAIN tree (tools/fleet/fleet.py, tools/fleet/test_fleet_cli.py, harness/skills/fleet/SKILL.md) - inspect git status/diff, keep or discard"
+  worktrees: "m2 fix worker stopped mid-work in .claude/worktrees/agent-abc025c8c590754b0 (branch worktree-agent-abc025c8c590754b0) - inspect, salvage or remove"
+
+done_this_session:
+  - "premortem (WARN) + contract amendments"
+  - "VAL-801 f133a43 + fix 13f8d24, VAL-802 612daf6, VAL-803 45a84d0, VAL-804 1a8b17b, VAL-805 34325e3, VAL-806 f14b5c8, VAL-807 eead5a1, VAL-809 078f59d, VAL-810 69e299b"
+  - "m1 gate passed (validation/m1-core.json); m2 automated gate green, review r-m2 done; m3 automated gate green (755 passed), review r-m3 done"
+
+next:
+  - "m2 fix round (redo or salvage): r-m2 findings - PowerShell common params, # comments, [[ > ]], cd tracking, prefix check before stat, node:crypto, cap/redact proposals, deny on proposal-save failure, audit truncate-before-redact + linear regexes (100k < 50 ms), extra credential patterns, worktree .git, upgrade-harness SKILL.md points to repo copy"
+  - "m3 fix round: BLOCKING context_pct wrong on 1M windows (read tmpdir claude-context-pct-<sid8>.txt from status.mjs when fresh, transcript rule fallback; do not inherit spawning session env); repo collisions only when >=2 members active in last 30 min (orchestrator's chosen default - tell user); statusline counts warn/error alerts only; collect self-deadline (e.g. 20 s) and lock reaping; bounded _subagent_writes; UNC excluded from report path regex"
+  - "VAL-808 /fleet skill + CLI (finish or redo); dashboard subcommand default ~/.claude/fleet/dashboard.html; lessons cap 10 memory-only"
+  - "Then m4 gate, VAL-811 register_hooks.py with REQUIRED live if-filter path-spelling check; docs; user runs sync --apply and register script"
+  - "Turn-limit marker format in checks.py is unverified (classifier denied live grep) - ask user before reading a live transcript"
+
+findings:
+  critical:
+    - "Never open ~/.claude/sessions/*.key (secrets). One worker did so for verification; all prompts now carry the hard rule."
+    - "Record user decisions at literal scope (memory no-invented-rules)."
+    - "Explain status in plain words (memory plain-language-status)."
+
+next_session_prompt: |
+  Resume fleet-control from thoughts/shared/handoffs/general/2026-10-07_14-00_fleet-control-midbuild.yaml.
+  First inspect `git status` (stopped VAL-808 worker may have left partial edits) and the stopped worktree
+  .claude/worktrees/agent-abc025c8c590754b0. Then continue /autonomous on continuum/autonomous/fleet-control/contract.json
+  with the next: list. Explain progress in plain words; ask only via A-D with a recommendation.

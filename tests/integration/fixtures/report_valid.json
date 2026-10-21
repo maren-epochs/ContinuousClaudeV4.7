@@ -1,0 +1,20 @@
+{
+  "task": "fixture: a complete, well-formed worker report",
+  "assertion": "VAL-999",
+  "result": "success",
+  "implemented": "nothing; integration-test fixture",
+  "remaining": "",
+  "tests": {
+    "added": [
+      {"file": "tests/integration/test_validate_report_cli.py", "name": "test_valid_report_exits_zero", "verifies": "validator accepts this file"}
+    ],
+    "command": "py -3.13 -m pytest tests/integration -q",
+    "exit_code": 0
+  },
+  "checks": [{"command": "py -3.13 tools/validate_report.py report_valid.json", "exit_code": 0}],
+  "bloks_used": [{"card": "example-card", "helpful": true}],
+  "corrections": [],
+  "discoveries": [],
+  "issues": [{"severity": "non-blocking", "description": "fixture"}],
+  "conventions": []
+}

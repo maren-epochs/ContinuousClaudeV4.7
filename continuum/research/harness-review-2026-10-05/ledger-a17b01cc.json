@@ -1,0 +1,433 @@
+{
+  "transcript": "<projects>/project-A\\a17b01cc.jsonl",
+  "version": "2.1.218",
+  "turns": 15176,
+  "skipped_lines": 0,
+  "peak_context": 934047,
+  "total_output_tokens": 10303922,
+  "compactions": [
+    {
+      "turn": 127,
+      "from": 149295,
+      "to": 0
+    },
+    {
+      "turn": 1411,
+      "from": 932332,
+      "to": 88933
+    },
+    {
+      "turn": 2125,
+      "from": 704959,
+      "to": 0
+    },
+    {
+      "turn": 2206,
+      "from": 770535,
+      "to": 0
+    },
+    {
+      "turn": 2477,
+      "from": 932158,
+      "to": 83310
+    },
+    {
+      "turn": 3121,
+      "from": 587974,
+      "to": 0
+    },
+    {
+      "turn": 3745,
+      "from": 933180,
+      "to": 87576
+    },
+    {
+      "turn": 5263,
+      "from": 932144,
+      "to": 87425
+    },
+    {
+      "turn": 6099,
+      "from": 562884,
+      "to": 0
+    },
+    {
+      "turn": 6788,
+      "from": 934047,
+      "to": 93162
+    },
+    {
+      "turn": 7086,
+      "from": 307290,
+      "to": 0
+    },
+    {
+      "turn": 7776,
+      "from": 931589,
+      "to": 96519
+    },
+    {
+      "turn": 8977,
+      "from": 933316,
+      "to": 0
+    },
+    {
+      "turn": 9901,
+      "from": 672038,
+      "to": 0
+    },
+    {
+      "turn": 10415,
+      "from": 930236,
+      "to": 0
+    },
+    {
+      "turn": 11516,
+      "from": 812319,
+      "to": 0
+    },
+    {
+      "turn": 11672,
+      "from": 931214,
+      "to": 0
+    },
+    {
+      "turn": 11734,
+      "from": 190330,
+      "to": 0
+    },
+    {
+      "turn": 12044,
+      "from": 437757,
+      "to": 0
+    },
+    {
+      "turn": 12418,
+      "from": 782204,
+      "to": 0
+    },
+    {
+      "turn": 12509,
+      "from": 834688,
+      "to": 0
+    },
+    {
+      "turn": 12644,
+      "from": 933372,
+      "to": 111637
+    },
+    {
+      "turn": 12749,
+      "from": 156976,
+      "to": 0
+    },
+    {
+      "turn": 13955,
+      "from": 886683,
+      "to": 0
+    },
+    {
+      "turn": 14027,
+      "from": 933889,
+      "to": 110901
+    },
+    {
+      "turn": 14467,
+      "from": 418767,
+      "to": 108249
+    },
+    {
+      "turn": 14656,
+      "from": 261948,
+      "to": 0
+    },
+    {
+      "turn": 15156,
+      "from": 559391,
+      "to": 522577
+    }
+  ],
+  "spans": [
+    {
+      "label": "(none)",
+      "first_turn": 1,
+      "last_turn": 35,
+      "turns": 35,
+      "start_context": 42708,
+      "end_context": 50000,
+      "delta": 50000
+    },
+    {
+      "label": "fewer-permission-prompts",
+      "first_turn": 36,
+      "last_turn": 55,
+      "turns": 20,
+      "start_context": 53584,
+      "end_context": 73534,
+      "delta": 23534
+    },
+    {
+      "label": "(none)",
+      "first_turn": 56,
+      "last_turn": 433,
+      "turns": 378,
+      "start_context": 74466,
+      "end_context": 315566,
+      "delta": 391327
+    },
+    {
+      "label": "schedule",
+      "first_turn": 434,
+      "last_turn": 445,
+      "turns": 12,
+      "start_context": 321321,
+      "end_context": 328048,
+      "delta": 12482
+    },
+    {
+      "label": "(none)",
+      "first_turn": 446,
+      "last_turn": 567,
+      "turns": 122,
+      "start_context": 328766,
+      "end_context": 412266,
+      "delta": 84218
+    },
+    {
+      "label": "fewer-permission-prompts",
+      "first_turn": 568,
+      "last_turn": 575,
+      "turns": 8,
+      "start_context": 416238,
+      "end_context": 423329,
+      "delta": 11063
+    },
+    {
+      "label": "(none)",
+      "first_turn": 576,
+      "last_turn": 1319,
+      "turns": 744,
+      "start_context": 424701,
+      "end_context": 801501,
+      "delta": 378172
+    },
+    {
+      "label": "update-config",
+      "first_turn": 1320,
+      "last_turn": 1326,
+      "turns": 7,
+      "start_context": 849962,
+      "end_context": 851063,
+      "delta": 49562
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1327,
+      "last_turn": 1348,
+      "turns": 22,
+      "start_context": 852417,
+      "end_context": 862090,
+      "delta": 11027
+    },
+    {
+      "label": "schedule",
+      "first_turn": 1349,
+      "last_turn": 1356,
+      "turns": 8,
+      "start_context": 866270,
+      "end_context": 873346,
+      "delta": 11256
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1357,
+      "last_turn": 1378,
+      "turns": 22,
+      "start_context": 873731,
+      "end_context": 890732,
+      "delta": 17386
+    },
+    {
+      "label": "doctor",
+      "first_turn": 1379,
+      "last_turn": 1423,
+      "turns": 45,
+      "start_context": 908599,
+      "end_context": 107694,
+      "delta": 60361
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1424,
+      "last_turn": 1425,
+      "turns": 2,
+      "start_context": 107947,
+      "end_context": 107947,
+      "delta": 253
+    },
+    {
+      "label": "schedule",
+      "first_turn": 1426,
+      "last_turn": 1433,
+      "turns": 8,
+      "start_context": 113307,
+      "end_context": 118209,
+      "delta": 10262
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1434,
+      "last_turn": 1958,
+      "turns": 525,
+      "start_context": 118778,
+      "end_context": 573261,
+      "delta": 455052
+    },
+    {
+      "label": "artifact-design",
+      "first_turn": 1959,
+      "last_turn": 1964,
+      "turns": 6,
+      "start_context": 576883,
+      "end_context": 582280,
+      "delta": 9019
+    },
+    {
+      "label": "(none)",
+      "first_turn": 1965,
+      "last_turn": 2987,
+      "turns": 1023,
+      "start_context": 582667,
+      "end_context": 484215,
+      "delta": 2226277
+    },
+    {
+      "label": "artifact-design",
+      "first_turn": 2988,
+      "last_turn": 2991,
+      "turns": 4,
+      "start_context": 487985,
+      "end_context": 499603,
+      "delta": 15388
+    },
+    {
+      "label": "(none)",
+      "first_turn": 2992,
+      "last_turn": 7351,
+      "turns": 4360,
+      "start_context": 500149,
+      "end_context": 520823,
+      "delta": 4010576
+    },
+    {
+      "label": "artifact-design",
+      "first_turn": 7352,
+      "last_turn": 7357,
+      "turns": 6,
+      "start_context": 522507,
+      "end_context": 527901,
+      "delta": 7078
+    },
+    {
+      "label": "(none)",
+      "first_turn": 7358,
+      "last_turn": 12215,
+      "turns": 4858,
+      "start_context": 528133,
+      "end_context": 603529,
+      "delta": 5817908
+    },
+    {
+      "label": "hookify:writing-rules",
+      "first_turn": 12216,
+      "last_turn": 12246,
+      "turns": 31,
+      "start_context": 608130,
+      "end_context": 628883,
+      "delta": 25354
+    },
+    {
+      "label": "(none)",
+      "first_turn": 12247,
+      "last_turn": 12342,
+      "turns": 96,
+      "start_context": 629350,
+      "end_context": 711249,
+      "delta": 82366
+    },
+    {
+      "label": "frontend-design:frontend-design",
+      "first_turn": 12343,
+      "last_turn": 12345,
+      "turns": 3,
+      "start_context": 717419,
+      "end_context": 721619,
+      "delta": 10370
+    },
+    {
+      "label": "(none)",
+      "first_turn": 12346,
+      "last_turn": 15162,
+      "turns": 2817,
+      "start_context": 722433,
+      "end_context": 525890,
+      "delta": 4718825
+    },
+    {
+      "label": "create-handoff",
+      "first_turn": 15163,
+      "last_turn": 15176,
+      "turns": 14,
+      "start_context": 529326,
+      "end_context": 544568,
+      "delta": 18678
+    }
+  ],
+  "skills": {
+    "(none)": {
+      "delta": 18243387,
+      "spans": 13,
+      "turns": 15004
+    },
+    "fewer-permission-prompts": {
+      "delta": 34597,
+      "spans": 2,
+      "turns": 28
+    },
+    "schedule": {
+      "delta": 34000,
+      "spans": 3,
+      "turns": 28
+    },
+    "update-config": {
+      "delta": 49562,
+      "spans": 1,
+      "turns": 7
+    },
+    "doctor": {
+      "delta": 60361,
+      "spans": 1,
+      "turns": 45
+    },
+    "artifact-design": {
+      "delta": 31485,
+      "spans": 3,
+      "turns": 16
+    },
+    "hookify:writing-rules": {
+      "delta": 25354,
+      "spans": 1,
+      "turns": 31
+    },
+    "frontend-design:frontend-design": {
+      "delta": 10370,
+      "spans": 1,
+      "turns": 3
+    },
+    "create-handoff": {
+      "delta": 18678,
+      "spans": 1,
+      "turns": 14
+    }
+  }
+}
