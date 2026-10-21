@@ -293,7 +293,7 @@ class LlmCallForms(unittest.TestCase):
 
 class AgentCallForms(unittest.TestCase):
     def _run(self, *args, **kwargs):
-        with mock.patch("subprocess.run") as run:
+        with mock.patch.object(oh, "_run_bounded") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "done", "")
             out = oh._call_agent(*args, **kwargs)
         return out, run.call_args
@@ -305,9 +305,15 @@ class AgentCallForms(unittest.TestCase):
             call.args[0],
             ["claude", "-p", "t", "--output-format", "text", "--max-turns", "25"],
         )
+        self.assertEqual(call.args[1], 600)
         self.assertEqual(
             call.kwargs,
-            {"capture_output": True, "text": True, "timeout": 600, "cwd": None},
+            {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "cwd": None,
+            },
         )
 
     def test_all_positional(self):
@@ -319,7 +325,7 @@ class AgentCallForms(unittest.TestCase):
                 "--max-turns", "3", "--worktree", "--permission-mode", "plan",
             ],
         )  # fmt: skip
-        self.assertEqual((call.kwargs["timeout"], call.kwargs["cwd"]), (9, "/w"))
+        self.assertEqual((call.args[1], call.kwargs["cwd"]), (9, "/w"))
 
     def test_research_skill_form(self):
         _, call = self._run("t", agent="claude-code", model="sonnet", max_turns=5)
@@ -334,7 +340,7 @@ class AgentCallForms(unittest.TestCase):
     def test_prompt_keyword_codex(self):
         _, call = self._run(prompt="t", agent="codex", model="o3", timeout=5)
         self.assertEqual(call.args[0], ["codex", "exec", "t", "--json", "-m", "o3"])
-        self.assertEqual(call.kwargs["timeout"], 5)
+        self.assertEqual(call.args[1], 5)
 
     def test_unknown_agent_is_error_dict(self):
         out, call = self._run("t", agent="x")

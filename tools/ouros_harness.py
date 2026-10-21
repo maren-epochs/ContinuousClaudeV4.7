@@ -60,7 +60,9 @@ def _load_env():
     """Load API keys from ~/.claude/.env if present."""
     env_path = Path.home() / ".claude" / ".env"
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        # utf-8-sig: a BOM (Notepad) would otherwise glue onto the first key.
+        text = env_path.read_text(encoding="utf-8-sig", errors="replace")
+        for line in text.splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 key, _, value = line.partition("=")
@@ -322,7 +324,7 @@ _NIA_HELP = {
             "agent": "'claude-code' (default) or 'codex'",
             "model": "Model override: 'sonnet', 'opus', 'haiku' (optional)",
             "max_turns": "Max agent turns (default 25; claude-code only)",
-            "timeout": "Max seconds to wait (default 600 = 10 min)",
+            "timeout": "Seconds before the agent's process tree is killed (default 600, max 600)",
             "cwd": "Working directory for the agent (optional)",
         },
         "returns": "str — the agent's final text output",
@@ -349,7 +351,7 @@ _NIA_HELP = {
         "description": "Run an allowlisted command WITHOUT a shell: tldr, grep, rg, wc, echo, git log/diff/show/blame, cargo build/test/clippy, npm test/run, python -m pytest, uv run python. No pipes, chaining, redirection or substitution.",
         "args": {
             "cmd": "Command string or argv list (required)",
-            "timeout": "Timeout in seconds (default 30)",
+            "timeout": "Seconds before the process tree is killed (default 30, max 600)",
         },
     },
     "run_python": {
@@ -619,6 +621,7 @@ SECURITY_POLICY = {
         "host_interpreter": "$OUROS_HOST_PYTHON, else the harness's own CPython 3.13, else py -3.13, else the harness's own interpreter",
         "max_concurrent": 1,
         "default_timeout_s": 60,
+        # Also the cap for run_command and agent_call (_bounded_timeout).
         "max_timeout_s": 600,
         "output_cap_bytes": 8192,
     },
@@ -779,32 +782,47 @@ def _arg_refusal(arg):
     return ""
 
 
-def _is_recursive_grep_flag(a):
-    """-r/-R/--recursive/--dereference-recursive, or a short-flag cluster holding r/R."""
-    return a in ("-r", "-R", "--recursive", "--dereference-recursive") or bool(
-        a.startswith("-") and not a.startswith("--") and set(a[1:]) & {"r", "R"}
-    )
+def _caseless_glob(pat):
+    """fnmatch glob matching `pat` in any letter case: '.env' -> '.[eE][nN][vV]'
+    (letters only; grep --exclude has no case-insensitive form)."""
+    return "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in pat)
+
+
+def _secret_filters(exe):
+    """Deny filters for a recursive-capable search tool, [] for any other exe.
+
+    rg: --iglob (case-insensitive; rg applies every --iglob after every
+    --glob). grep: --exclude/--exclude-dir with caseless brackets.
+    """
+    names = SECURITY_POLICY["read_deny_names"]
+    if exe == "rg":
+        return [f"--iglob=!{p}" for p in names]
+    if exe == "grep":
+        return [f"--exclude={_caseless_glob(p)}" for p in names] + [
+            f"--exclude-dir={_caseless_glob(d.split('/')[-1])}"
+            for d in SECURITY_POLICY["read_deny_dirs"]
+        ]
+    return []
 
 
 def _with_secret_excludes(exe, argv):
-    """Recursive search reads every file under a directory: keep secrets out of it."""
-    if exe == "rg":
-        return (
-            argv[:1]
-            + [f"--glob=!{p}" for p in SECURITY_POLICY["read_deny_names"]]
-            + argv[1:]
-        )
-    if exe == "grep" and any(_is_recursive_grep_flag(a) for a in argv[1:]):
-        return (
-            argv[:1]
-            + [f"--exclude={p}" for p in SECURITY_POLICY["read_deny_names"]]
-            + [
-                f"--exclude-dir={d.split('/')[-1]}"
-                for d in SECURITY_POLICY["read_deny_dirs"]
-            ]
-            + argv[1:]
-        )
-    return argv
+    """Keep secrets out of every grep/rg run (recursion has too many spellings:
+    -r, -d recurse, --directories=recurse, abbreviated --recurs, ...).
+
+    The filters go AFTER the caller's options: rg's later glob and grep's last
+    matching --include/--exclude win, so a caller '--include=.env*' or
+    '-g .env*' placed after them would re-admit secrets. They go before the
+    first '--' (after it everything is a file/pattern operand). The first
+    filter is repeated so a dangling value-taking option at the end of the
+    caller's options ('-e', '--include') swallows the copy, not a filter.
+    run_command also drops POSIXLY_CORRECT, under which grep would stop
+    option parsing at the first operand and read the filters as file names.
+    """
+    filters = _secret_filters(exe)
+    if not filters:
+        return argv
+    cut = argv.index("--") if "--" in argv[1:] else len(argv)
+    return argv[:cut] + filters[:1] + filters + argv[cut:]
 
 
 def _check_command_allowed(cmd):
@@ -852,7 +870,7 @@ def _call_read_file(path):
     if not allowed:
         return {"error": f"read_file denied: '{path}' is {reason}"}
     try:
-        return Path(path).read_text()
+        return Path(path).read_text(encoding="utf-8")  # not the cp1252 locale
     except Exception as e:
         return {"error": f"read_file failed: {e}"}
 
@@ -910,20 +928,68 @@ def _call_run_command(cmd, timeout=30):
         return {
             "error": "run_command denied: cmd metacharacters in arguments to a .cmd/.bat target"
         }
+    timeout = _bounded_timeout(timeout, 30)
+    # Unset POSIXLY_CORRECT: grep would read the appended secret filters as files.
+    env = {k: v for k, v in os.environ.items() if k.upper() != "POSIXLY_CORRECT"}
     try:
-        r = subprocess.run(
+        r = _run_bounded(
             [exe] + argv[1:],
+            timeout,
             shell=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            env=env,
         )
         result = {"stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
         return result
     except subprocess.TimeoutExpired:
-        return {"error": f"Command timed out after {timeout}s"}
+        return {"error": f"Command timed out after {timeout:g}s"}
     except Exception as e:
         return {"error": f"run_command failed: {e}"}
+
+
+def _bounded_timeout(timeout, default):
+    """Seconds for a child process: a finite positive number capped at the
+    policy max (run_python max_timeout_s); `default` for anything else
+    (non-numeric, NaN, <= 0). inf and huge values clamp to the max."""
+    import math
+
+    try:
+        t = float(timeout)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if math.isnan(t) or t <= 0:
+        return default
+    return min(t, SECURITY_POLICY["run_python"]["max_timeout_s"])
+
+
+def _run_bounded(argv, timeout, **popen_kw):
+    """subprocess.run with a hard wall-clock bound on the whole process tree.
+
+    subprocess.run kills only the direct child on timeout and then waits
+    without a limit; on Windows a grandchild (npm.cmd -> cmd.exe -> node)
+    keeps the pipes open, so it hangs. Here a timeout kills the tree and
+    allows 10 s more to drain the pipes, then raises TimeoutExpired carrying
+    whatever was read. Any other exception (e.g. KeyboardInterrupt) also
+    kills the tree before it propagates. Returns a CompletedProcess.
+    """
+    import subprocess
+
+    proc = subprocess.Popen(argv, **popen_kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out = err = None
+        raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err) from None
+    except BaseException:
+        _kill_process_tree(proc)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 # --- run_python: host-CPython DS bridge -----------------------------------
@@ -995,11 +1061,9 @@ def _call_run_python(code, timeout=60):
 
 
 def _run_python_timeout(timeout):
-    """Requested timeout as float, capped at max_timeout_s; the default if not numeric."""
-    try:
-        return min(float(timeout), SECURITY_POLICY["run_python"]["max_timeout_s"])
-    except (TypeError, ValueError):
-        return SECURITY_POLICY["run_python"]["default_timeout_s"]
+    """Requested timeout capped at max_timeout_s; the default if not a finite
+    positive number (NaN used to pass min() uncapped)."""
+    return _bounded_timeout(timeout, SECURITY_POLICY["run_python"]["default_timeout_s"])
 
 
 def _run_host_python(code, timeout):
@@ -1015,26 +1079,21 @@ def _run_host_python(code, timeout):
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
-    proc = subprocess.Popen(
-        _host_python_cmd() + ["-c", code],
-        cwd=str(work_dir),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
     try:
-        out, _ = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_process_tree(proc)
-        try:
-            out, _ = proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            out = ""
-        return out or "", proc.returncode, True
-    return out or "", proc.returncode, False
+        r = _run_bounded(
+            _host_python_cmd() + ["-c", code],
+            timeout,
+            cwd=str(work_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired as e:
+        return e.output or "", None, True
+    return r.stdout or "", r.returncode, False
 
 
 def _format_run_output(out, returncode, timed_out, timeout):
@@ -1304,7 +1363,8 @@ def _call_agent(prompt, *args, **kwargs):
         max_turns: Max agent turns (default: None -> policy
                    agent_default_max_turns, 25). The agent exits with an
                    error at the limit; pass a larger value for long tasks.
-        timeout: Max seconds to wait (default 600 = 10 min). This is the
+        timeout: Max seconds to wait (default 600 = 10 min, also the max; the
+                 whole process tree is killed at the limit). This is the
                  real safety valve — if the agent hasn't finished, it's stuck.
         cwd: Working directory for the agent (default: current directory)
         isolated: If True, run in a git worktree (Claude Code only).
@@ -1322,23 +1382,25 @@ def _call_agent(prompt, *args, **kwargs):
     import subprocess
 
     o = AgentCallOptions(*args, **kwargs)
-    agent, timeout = o.agent, o.timeout
+    agent = o.agent
+    timeout = _bounded_timeout(o.timeout, AgentCallOptions.timeout)
     build = _AGENT_ARGV.get(agent)
     if build is None:
         return {"error": f"Unknown agent: {agent}. Supported: claude-code, codex"}
     cmd = build(prompt, o.model, o.max_turns, o.isolated, o.permission_mode)
 
     try:
-        r = subprocess.run(
+        r = _run_bounded(
             cmd,
-            capture_output=True,
+            timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=o.cwd,
         )
     except subprocess.TimeoutExpired:
         return {
-            "error": f"Agent timed out after {timeout}s. Task may be too complex or agent is stuck."
+            "error": f"Agent timed out after {timeout:g}s. Task may be too complex or agent is stuck."
         }
     except FileNotFoundError:
         return {"error": f"Agent '{agent}' not found on PATH. Is it installed?"}
@@ -1711,7 +1773,7 @@ def _read_code(args):
     if args.code:
         return args.code
     if args.file:
-        return Path(args.file).read_text()
+        return Path(args.file).read_text(encoding="utf-8-sig")
     if not sys.stdin.isatty():
         return sys.stdin.read()
     return None

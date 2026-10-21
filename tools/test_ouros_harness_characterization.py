@@ -29,7 +29,9 @@ _spec = importlib.util.spec_from_file_location("ouros_harness_charac", HARNESS)
 oh = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(oh)
 
-NIA_HELP_SHA256 = "492a39ce5a486b7ecd3a8d6ed17ebbe80e49dadeacae40869ec6035d46c609a9"
+# Re-pinned 2026-10-21: run_command/agent_call timeout help now states the
+# 600 s cap and process-tree kill.
+NIA_HELP_SHA256 = "e703e09fac5c64f0374c19e947b18412edc124837353db541a41ac0de0bb6c59"
 
 
 def _digest(obj):
@@ -289,6 +291,20 @@ class RunPythonTests(unittest.TestCase):
         self.assertEqual(_FakePopen.instances[-1].timeouts, [600])
         self._run([("", 0)], "x", timeout="abc")
         self.assertEqual(_FakePopen.instances[-1].timeouts, [60])
+
+    def test_nan_and_nonpositive_timeouts_fall_back(self):
+        # min(nan, 600) is nan: the cap was bypassed and communicate() raised
+        for bad in (float("nan"), 0, -5):
+            with self.subTest(timeout=bad):
+                self._run([("", 0)], "x", timeout=bad)
+                self.assertEqual(_FakePopen.instances[-1].timeouts, [60])
+        self._run([("", 0)], "x", timeout=float("inf"))
+        self.assertEqual(_FakePopen.instances[-1].timeouts, [600])
+
+    def test_communicate_exception_kills_tree(self):
+        out, kill = self._run([ValueError("boom")], "x")
+        self.assertEqual(out, {"error": "run_python failed: boom"})
+        kill.assert_called_once_with(_FakePopen.instances[0])
 
     def test_nonzero_exit_and_none_output(self):
         out, _ = self._run([(None, 3)], "x")
