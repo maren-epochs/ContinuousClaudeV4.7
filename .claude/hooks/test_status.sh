@@ -480,7 +480,8 @@ if $PYCHK -c "import sys; sys.exit(sys.version_info < (3, 10))" >/dev/null 2>&1;
   printf 'SECRETKEYBYTES-sttst' > "$FAKEHOME/.claude/sessions/999991.sttst.key"
   printf '{"pid":999991,"sessionId":"sess-e2e","cwd":"%s","status":"idle","kind":"interactive"}' "$PROJF" > "$FAKEHOME/.claude/sessions/999991.json"
   printf '{"schema_version":1,"id":"20261007T120000Z-0000abcd","kind":"edit","status":"pending"}' > "$FAKEHOME/.claude/harness-inbox/20261007T120000Z-0000abcd.json"
-  OUT=$(cd "$PROJF" && printf '%s' "$(spay)" | node "$STOPHOOK" 2>"$ERRFILE"); RC=$?
+  # FLEET_MEM_WARN_GB=0: a low-memory machine alert would add "| 1 alert" to the line
+  OUT=$(cd "$PROJF" && printf '%s' "$(spay)" | FLEET_MEM_WARN_GB=0 node "$STOPHOOK" 2>"$ERRFILE"); RC=$?
   i=0; while [ ! -s "$STATE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
   sleep 1
   [ -s "$STATE" ]; check "i18a real fleet.py collect wrote ~/.claude/fleet/state.json (temp HOME)" $?

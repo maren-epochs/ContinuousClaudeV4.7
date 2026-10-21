@@ -1,0 +1,144 @@
+---
+session: 56444984
+date: 2026-10-21
+status: partial
+outcome: PARTIAL_PLUS
+---
+
+# ── STATUSLINE (REQUIRED — parsed by hooks) ──────────────────────
+goal: Ultra review of PR #2 (10 security-boundary files) -> 10 findings; ask-queue + ouros fixes done, pre-compact + harness-guard workers running
+now: Collect the pre-compact and harness-guard worker results, run full suite, commit per area, push, sync_global --apply
+test: py -3.13 -m pytest -q -m "not integration" && bash .claude/hooks/test_harness_guard.sh && bash .claude/hooks/test_pre_compact.sh && bash .claude/hooks/test_fleet_audit.sh && bash .claude/hooks/test_ask_queue.sh
+
+# ── MENTAL MODEL (REQUIRED) ──────────────────────────────────────
+mental_model: |
+  /code-review ultra reviews diffs only (branch or PR) and refused PR #1 (189 files, 59K lines) as
+  too large; 10 files / 5.5K lines (PR #2) was accepted. Whole-tree review trick: review-base =
+  commit-tree(empty tree, parent main); review-X = commit-tree(<tree>, parent review-base). GitHub
+  rejects PRs between unrelated histories, so the base must descend from main. gh pr create on this
+  fork defaults to the upstream parent: always pass --repo maren-epochs/ContinuousClaudeV4.7.
+  Only the user can start ultra (/code-review ultra <PR#>); 1 of 3 free runs used.
+  fleet.py handoffs credits a handoff to a session by file_path inputs OR shell write targets
+  (_shell_targets: >/>>, tee, Set-Content/Add-Content/Out-File, $f resolved via f=... in the same
+  command), whole base-name match. Harness shown times + file names are pinned to America/New_York
+  (model.harness_tz(), install _harness_now(), harnessClock() in pre-compact/status.mjs); machine
+  stamps stay UTC. The laptop flips Windows zone Eastern <-> GMT Standard (Epoch Privacy harden);
+  git commit offsets record whichever zone is active (-0400 / +0100) - user does not care (privacy
+  project scope is on-device/network, not GitHub).
+  pre-commit stashes unstaged files during `git commit`: never commit while workers are editing.
+
+# ── CODEBASE STATE (REQUIRED) ────────────────────────────────────
+codebase_state:
+  builds: true
+  tests_passing: "last full non-integration run 1072 passed/2 skipped (before review fixes); ask-queue 22/22 + fleet 378; ouros 122 passed 1 skipped (worker)"
+  test_command: py -3.13 -m pytest -q -m "not integration"
+  pre_existing_failures: []
+  uncommitted_changes: true
+  branch: main (5e449cc local, not pushed; origin at 75a525d)
+  dirty_files: [tools/ouros_harness.py, tools/test_ouros_policy.py, tools/test_ouros_harness_characterization.py, .claude/hooks/pre-compact.mjs, .claude/hooks/privacy-redact.mjs, .claude/hooks/fleet-audit.mjs, .claude/hooks/test_pre_compact.sh, .claude/hooks/test_fleet_audit.sh, "harness-guard.mjs + test_harness_guard.sh (guard worker, in progress)"]
+  warnings: "rg not installed: test_rg skipped; LF/CRLF warnings on commit are normal"
+  context: "peak 20% (203K) | resume-handoff +78K, create-handoff +4K"
+
+# ── WHAT WAS DONE ────────────────────────────────────────────────
+done_this_session:
+  - task: fleet handoffs credits shell-written handoffs (multi-strategy heredoc case), then tightened to write-target + whole-name match
+    files: [tools/fleet/fleet.py, tools/fleet/test_fleet_cli.py]
+  - task: "Rule: Claude runs pushes/syncs/installs itself; hand over only after an actual denial"
+    files: [CLAUDE.md, harness/skills/fleet/SKILL.md, install/README.md, README.md, install/register_hooks.py, "~/.claude/CLAUDE.md", memory claude-runs-everything.md]
+  - task: Harness times and file names in America/New_York (user choice)
+    files: [tools/fleet/model.py, tools/fleet/fleet.py, tools/fleet/digest.py, install/sync_global.py, install/register_hooks.py, scripts/readiness.sh, .claude/hooks/pre-compact.mjs, .claude/hooks/status.mjs, harness/skills/create-handoff/SKILL.md]
+  - task: Deleted untracked leftovers (2 settings.template .bak = exact git blobs dcea0b7/cc0ad05, old auto-handoff)
+    files: []
+  - task: "Review PRs: #1 full tree (too large for ultra), #2 security-critical 10 files; ultra ran on #2"
+    files: []
+  - task: "Fix ask-queue queue loss: shared <sid>.json.lock (10 s stale), new queue only on ENOENT, fail open; committed 5e449cc"
+    files: [.claude/hooks/ask-queue.mjs, .claude/hooks/test_ask_queue.sh, tools/fleet/questions.py, tools/fleet/test_questions.py, tools/fleet/schema.md]
+  - task: "Fix ouros: secret filters on every grep/rg after caller args (case-insensitive), POSIXLY_CORRECT dropped, _bounded_timeout (600 s cap) + _run_bounded tree kill for run_command/agent_call/run_python, utf-8 reads; uncommitted"
+    files: [tools/ouros_harness.py, tools/test_ouros_policy.py, tools/test_ouros_harness_characterization.py]
+  - task: "Replied to documents-dc: IB Gateway 1051 run by multi-strategy scripts/start_ibc_gateway.ps1 via IBC; IBKR sharing doc at Documents/ibkr-gateway-sharing.md"
+    files: []
+
+# ── DECISIONS (capture WHY) ──────────────────────────────────────
+decisions:
+  - name: harness_tz
+    chose: America/New_York for shown times and created file names; UTC for machine stamps
+    over: [Europe/London, UTC, local Windows zone]
+    because: user answered "est or edt"; local zone flips with Epoch Privacy harden
+  - name: public_repo_offsets
+    chose: no change for -04:00 in auto-handoffs / git commit offsets
+    over: [UTC or London in saved files]
+    because: user - privacy project does not target GitHub
+  - name: review_scope
+    chose: PR #2 = ouros_harness, privacy_guard, validate_report, privacy-redact, harness-guard, fleet-audit, pre-compact, ask-queue, sync_global, register_hooks (source only)
+    over: [full tree PR #1 (refused), fleet src]
+    because: user said "review the most important parts"; ultra size cap
+  - name: guard_scope
+    chose: guard is against accidental agent edits, not an adversary; fixes stay bounded
+    over: [full shell parsing]
+    because: Node start per call; must fail open
+
+# ── FINDINGS ─────────────────────────────────────────────────────
+findings:
+  critical:
+    - Do not git commit while workers edit (pre-commit stash/restore race)
+    - Laptop is currently Eastern/en-US (hardening off); user knows, only report
+  useful:
+    - "Ultra findings list (10): ouros F1 grep/rg secret filter order + recursion spellings, F2 timeouts uncapped/no tree kill, F3 read_text encoding; pre-compact credentials in commands; harness-guard G1 sequential term redaction, G2 >& file, G3 sed -i/dd/bash -c/wrappers, G4 glob/dir copies, G5 symlinked dirs; ask-queue lock"
+    - "ouros worker out-of-scope: grep -f.env (attached option value) not policy-checked; rg has no exclude-dir equivalent; rg untested live"
+    - "ask-queue worker: fleet.py answer exit 1 on 'queue busy' collides with hook text 'exit 1 = already answered elsewhere'"
+    - "Auto-mode classifier denies: Bash/python writes to ~/.claude/CLAUDE.md (Edit tool worked), fleet.py report --fresh (writes state.json)"
+  fyi:
+    - Git Bash `date` ignores TZ names; use py zoneinfo
+    - Python write_text on Windows writes CRLF; repo .py/.mjs are CRLF in git anyway
+
+worked: [parallel workers on disjoint files, empty-base PR for diff-only reviewers, verifying worker claims by rerunning their tests]
+
+failed:
+  - attempted: telling the user to run git push / sync_global
+    root_cause: copied a prior session's habit; both run fine under auto mode
+    avoid: handing over any command before trying it
+    use_instead: run it; hand a ! line only after an actual denial
+  - attempted: /code-review ultra on a 189-file PR
+    root_cause: ultra size cap (not documented)
+    avoid: whole-tree PRs
+    use_instead: ~10 files / ~5.5K lines per PR
+
+trajectory:
+  started_as: resume fleet-closing handoff, check round-2 handoffs
+  evolved_to: fleet handoffs fix, run-it-yourself rule, Eastern time, ultra security review + fixes
+  scoped_to: fix confirmed ultra findings on PR #2 files
+  user_approved_scope: true
+
+user_intent: |
+  User is tired of being handed chores; do everything runnable. Wants the most important code
+  reviewed deeply. Prefers Eastern time in the harness despite London privacy setup.
+
+hypotheses:
+  - status: active
+    claim: pre-compact and harness-guard workers will confirm their findings (reviewer verified each statically)
+    evidence: [reviewer cited exact lines; ask-queue and ouros findings all confirmed]
+    next_test: read their reports in scratchpad/reports/ultra-pr2-{precompact,guard}.json, rerun their tests
+
+blockers: []
+questions:
+  - "fleet.py answer busy exit code: A separate code + update hook text (Recommended), B leave"
+
+next:
+  - Wait for workers ultra-pr2-precompact and ultra-pr2-guard; verify (rerun test_pre_compact.sh, test_fleet_audit.sh, test_harness_guard.sh incl. benchmark)
+  - Full suite py -3.13 -m pytest -q -m "not integration" (~6 min, run in background) + all .claude/hooks/test_*.sh
+  - Commit per area (ouros; pre-compact/privacy-redact/fleet-audit; harness-guard), push, py -3.13 install/sync_global.py --apply
+  - Fix grep -f.env attached-value gap in tools/ouros_harness.py _arg_refusal; busy exit code for fleet.py answer
+  - Close PRs #1 and #2; delete branches review-base, review-all, review-core (local + origin)
+
+next_session_prompt: |
+  Continue the ultra review fixes for PR #2. If the pre-compact and harness-guard workers'
+  changes are in the tree, verify them (bash .claude/hooks/test_pre_compact.sh,
+  test_fleet_audit.sh, test_harness_guard.sh), run the full suite, then commit per area
+  (ouros, pre-compact/privacy-redact/fleet-audit, harness-guard), push and run
+  py -3.13 install/sync_global.py --apply yourself. Then fix the grep -f.env gap in
+  tools/ouros_harness.py, close PRs #1/#2 and delete the review-* branches. Do every
+  runnable step yourself; never hand me a command unless your own attempt is denied.
+
+files:
+  created: [tools/fleet/schema.md lock section, memory claude-runs-everything.md]
+  modified: [tools/fleet/fleet.py, tools/fleet/test_fleet_cli.py, tools/fleet/model.py, tools/fleet/digest.py, tools/fleet/questions.py, tools/fleet/test_questions.py, tools/fleet/schema.md, .claude/hooks/ask-queue.mjs, .claude/hooks/test_ask_queue.sh, .claude/hooks/pre-compact.mjs, .claude/hooks/status.mjs, install/sync_global.py, install/register_hooks.py, install/README.md, scripts/readiness.sh, CLAUDE.md, README.md, harness/skills/fleet/SKILL.md, harness/skills/create-handoff/SKILL.md, tools/ouros_harness.py]

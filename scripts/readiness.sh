@@ -628,10 +628,14 @@ REPORT_ITEMS="${REPORT_ITEMS%,}"
 
 python3 -c "
 import json, datetime, zoneinfo
+try:
+    tz = zoneinfo.ZoneInfo('America/New_York')  # EST/EDT, not the Windows zone
+except Exception:  # no tz data (Store python3): local time
+    tz = None
 report = {
     'target': '$TARGET',
     'language': '$LANG_DETECTED',
-    'evaluatedAt': datetime.datetime.now(zoneinfo.ZoneInfo('America/New_York')).isoformat(),
+    'evaluatedAt': datetime.datetime.now(tz).astimezone(tz).isoformat(),
     'level': $LEVEL,
     'passRate': $PASS_RATE,
     'errorSurface': $ERROR_SURFACE,
