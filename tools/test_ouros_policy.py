@@ -520,6 +520,21 @@ class SecretFilterGrepLiveTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"POSIXLY_CORRECT": "1"}):
             self._assert_clean("grep -r TOKEN .")
 
+    @unittest.skipUnless(shutil.which("rg"), "rg not installed")
+    def test_rg_no_glob_leaks(self):
+        for cmd in (
+            "rg TOKEN .",
+            "rg --hidden TOKEN .",
+            "rg --hidden -uu TOKEN .",
+            "rg --hidden -g .env* -g *.txt TOKEN .",
+            "rg --hidden --glob=* TOKEN .",
+            "rg --hidden --iglob=.ENV* --iglob=*.txt TOKEN .",
+            "rg --hidden --no-ignore TOKEN -- .",
+            "rg --hidden TOKEN . -g .env* -g *.txt",
+        ):
+            with self.subTest(cmd=cmd):
+                self._assert_clean(cmd)
+
 
 class BoundedTimeoutTests(unittest.TestCase):
     """F2: one timeout policy for run_command, agent_call and run_python."""
