@@ -167,13 +167,8 @@ echo "$C" | grep -q "C:/$U/<redacted>/repo"; check "home path keeps its prefix l
 pfx() { printf '%s%s' "$1" "$2"; }
 SKL="$(pfx sk_ live_)"; SKT="$(pfx sk_ test_)"; RKT="$(pfx rk_ test_)"; GLP="$(pfx glp at-)"
 NPMP="$(pfx np m_)"; HFP="$(pfx h f_)"; XB="$(pfx xo xb-)"; XP="$(pfx xo xp-)"; XA="$(pfx xo xa-)"
-while IFS="$(printf '\t')" read -r cmd leak; do
-  [ -n "$cmd" ] || continue
-  run "git push --force && $cmd"
-  C="$(field command)"
-  case "$C" in *"$leak"*|'') r=1;; *) r=0;; esac
-  check "redacts: ${cmd:0:60} (got: ${C:18:70})" $r
-done <<EOF
+CREDS="$WORK/creds.tsv" # also replayed by the built-in-copy parity check below
+cat > "$CREDS" <<EOF
 git clone https://${GLP}AbCdEfGhIjKlMnOpQrSt@gitlab.com/o/r.git	AbCdEfGhIjKl
 git clone https://oauthTok12345678@github.com/o/r.git	oauthTok12345678
 git remote add o https://deploy:Pw0rdSecret9@host.example/r	Pw0rdSecret9
@@ -206,6 +201,13 @@ mysql -u root -phunter2secret db	hunter2secret
 mysqldump -pdumpPw777 shop	dumpPw777
 mysql.exe -p'quotedPw778' shop	quotedPw778
 EOF
+while IFS="$(printf '\t')" read -r cmd leak; do
+  [ -n "$cmd" ] || continue
+  run "git push --force && $cmd"
+  C="$(field command)"
+  case "$C" in *"$leak"*|'') r=1;; *) r=0;; esac
+  check "redacts: ${cmd:0:60} (got: ${C:18:70})" $r
+done < "$CREDS"
 run 'git push --force && mysql -p mydb && ssh://git@github.com/o/r && mkdir -p build'
 case "$(field command)" in *"-p mydb"*"git@github.com"*"-p build"*) r=0;; *) r=1;; esac
 check "non-attached -p and ssh git@ user kept (got: $(field command))" $r
@@ -301,6 +303,57 @@ if (ra.command !== rb.command || ra.cats.join() !== rb.cats.join()) { console.er
 check "module missing: built-in rules redact exactly like the shared module" $?
 ! grep -qE "^(import|\}) .*from '\./privacy-redact\.mjs'" "$HOOK"
 check "privacy-redact.mjs is not a static import" $?
+
+# --- credential redaction lives in privacy-redact.mjs (secretSpans, shared with pre-compact) ---
+# the built-in copy (module missing) redacts the whole credential corpus exactly like the module
+node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [real, lone, creds] = process.argv.slice(1);
+const a = await import(pathToFileURL(real).href + "?lib");
+const b = await import(pathToFileURL(lone).href + "?lib");
+const o = { users: ["zedtester"], terms: [] };
+let bad = 0, n = 0;
+for (const line of readFileSync(creds, "utf8").split(/\r?\n/)) {
+  const cmd = line.split("\t")[0];
+  if (!cmd) continue;
+  n++;
+  const ra = a.redact(cmd, o), rb = b.redact(cmd, o);
+  if (ra !== rb) { bad++; console.error(ra + "\n" + rb); }
+}
+process.exit(bad || n < 30 ? 1 : 0);
+' "$HOOK" "$LONE/fleet-audit.mjs" "$CREDS" 2>/dev/null
+check "built-in credential copy matches privacy-redact.mjs secretSpans on every corpus line" $?
+# the hook uses the module's secretSpans when present (marker spans added only by the module)
+MODX="$WORK/modx"; mkdir -p "$MODX"; cp "$HOOK" "$MODX/fleet-audit.mjs"
+node -e '
+const fs = require("fs");
+const [src, dst] = process.argv.slice(1);
+const head = "export function secretSpans(text, spans = []) {";
+const s = fs.readFileSync(src, "utf8");
+if (!s.includes(head)) process.exit(1);
+fs.writeFileSync(dst, s.replace(head, head + " { const i = text.indexOf(\"MARKERWORD\"); if (i >= 0) spans.push([i, i + 10]); }"));
+' "$HERE/privacy-redact.mjs" "$MODX/privacy-redact.mjs"
+rm -f "$AUDIT"
+OUT=$(payload 'git push --force MARKERWORD TOKEN=s3cr3tval' | env USERNAME=zedtester node "$MODX/fleet-audit.mjs" 2>/dev/null); RC=$?
+C="$(field command)"
+[ "$RC" -eq 0 ] && [ "$C" = 'git push --force <redacted> TOKEN=<redacted>' ]
+check "hook redacts credentials with privacy-redact.mjs secretSpans (got: $C)" $?
+# an installed privacy-redact.mjs that predates secretSpans: built-in credential rules still apply
+OLDM="$WORK/oldmod"; mkdir -p "$OLDM"; cp "$HOOK" "$OLDM/fleet-audit.mjs"
+node -e '
+const fs = require("fs");
+const [src, dst] = process.argv.slice(1);
+const s = fs.readFileSync(src, "utf8");
+const cut = s.indexOf("// --- credential redaction");
+if (cut < 0) process.exit(1);
+fs.writeFileSync(dst, s.slice(0, cut));
+' "$HERE/privacy-redact.mjs" "$OLDM/privacy-redact.mjs"
+rm -f "$AUDIT"
+OUT=$(payload "git push --force TOKEN=s3cr3tval C:/$U/alice/x" | env USERNAME=zedtester node "$OLDM/fleet-audit.mjs" 2>/dev/null); RC=$?
+C="$(field command)"
+[ "$RC" -eq 0 ] && [ "$C" = "git push --force TOKEN=<redacted> C:/$U/<redacted>/x" ]
+check "module without secretSpans: built-in credential rules used (got: $C)" $?
 
 # --- fail open ---
 rm -f "$AUDIT"

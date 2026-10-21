@@ -27,6 +27,15 @@
  * match). Fail open: on any redaction error the handoff is written with home paths
  * replaced only, and the systemMessage says so.
  *
+ * Credentials: before the handoff is built, every captured text field (goal, todos, file
+ * paths, commands, error labels and tool output, last assistant message) goes through
+ * privacy-redact.mjs redactSecrets() (the credential shapes fleet-audit.mjs redacts:
+ * KEY=v, --token v, JSON/YAML secrets, auth headers, Bearer/Basic, URL userinfo, curl -u,
+ * gh*_/github_pat_/sk-/... tokens) on the raw text, capped at RAW_CAP chars with a
+ * lookahead margin, so the display cuts never leave part of a secret. When the module or
+ * redactSecrets is unavailable (partial install), commands, errors and the last assistant
+ * message are withheld and the remaining fields get a minimal built-in credential strip.
+ *
  * Input: JSON on stdin with trigger, session_id, transcript_path
  * Output: JSON with continue: true, systemMessage
  */
@@ -63,8 +72,7 @@ function homeOnlyFallback(text) {
 }
 
 // [redacted text, null], or [home-only text, reason] when full redaction failed.
-async function redactHandoff(content, projectDir) {
-  const mod = await loadRedactor();
+function redactHandoff(content, projectDir, mod) {
   try {
     if (!mod) throw new Error('privacy-redact.mjs not loadable');
     return [mod.redact(content, { cwd: projectDir }), null];
@@ -72,6 +80,78 @@ async function redactHandoff(content, projectDir) {
     const reason = err && err.message ? String(err.message).slice(0, 120) : 'unknown error';
     try { return [mod ? mod.redactHome(content) : homeOnlyFallback(content), reason]; }
     catch { return [homeOnlyFallback(content), reason]; }
+  }
+}
+
+// Raw text kept per captured field before credential redaction (display cuts are shorter);
+// redaction looks RAW_MARGIN chars past the cap so a secret crossing it is still removed.
+const RAW_CAP = 4000;
+const RAW_MARGIN = 600;
+const capRaw = (t) => (typeof t === 'string' ? t.slice(0, RAW_CAP + RAW_MARGIN) : '');
+
+// Built-in minimal credential strip, used only when privacy-redact.mjs (or its
+// redactSecrets) is unavailable: KEY=value, auth headers, Bearer/Basic, URL userinfo and
+// common token prefixes. Bounded quantifiers only. Group `s` is the secret.
+const MINIMAL_SECRET_PATTERNS = [
+  /[A-Za-z0-9_]{0,64}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]{0,64}[ \t]{0,8}=[ \t]{0,8}(?<s>"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&]{1,512})/gi,
+  /(?<![\w-])(?:x-[\w-]{0,32}(?:key|token|auth|secret)[\w-]{0,32}|authorization|proxy-authorization|private-token)[ \t]{0,8}:[ \t]{0,8}(?:(?:Bearer|Basic|Token|Digest)[ \t]{1,8})?(?<s>[^\s"']{1,512})/gi,
+  /\b(?:Bearer|Basic)[ \t]{1,8}(?<s>[A-Za-z0-9._~+/=-]{6,512})/gi,
+  /:\/\/(?!git@)(?<s>[^\s/@:]{1,256}(?::[^\s/@]{0,256})?)@/g,
+  /(?<![A-Za-z0-9_-])(?<s>gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255}|glpat-[A-Za-z0-9_-]{16,255}|sk-[A-Za-z0-9_-]{16,255}|[sr]k_(?:live|test)_[A-Za-z0-9]{8,255}|npm_[A-Za-z0-9]{20,255}|hf_[A-Za-z0-9]{20,255}|xox[abprs]-[A-Za-z0-9-]{10,255}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,255})/g,
+];
+function minimalSecretStrip(text) {
+  for (const re of MINIMAL_SECRET_PATTERNS) {
+    text = text.replace(re, (...args) => {
+      const m = args[0];
+      const sec = args[args.length - 1].s;
+      const at = m.lastIndexOf(sec);
+      return `${m.slice(0, at)}<redacted>${m.slice(at + sec.length)}`;
+    });
+  }
+  return text;
+}
+
+// Summary with every captured text field passed through fn.
+function mapSummaryText(summary, fn) {
+  const tcs = summary.recentToolCalls.map((tc) => {
+    if (!tc.input) return { ...tc };
+    const input = {};
+    for (const [k, v] of Object.entries(tc.input)) input[k] = typeof v === 'string' ? fn(v) : v;
+    return { ...tc, input };
+  });
+  return {
+    ...summary,
+    goal: fn(summary.goal),
+    lastTodos: summary.lastTodos.map((t) => ({ ...t, content: fn(String(t.content)) })),
+    recentToolCalls: tcs,
+    filesModified: summary.filesModified.map((f) => fn(String(f))),
+    recentCommands: summary.recentCommands.map(fn),
+    errors: summary.errors.map((e) => ({ label: fn(e.label), text: fn(e.text) })),
+    lastAssistantMessage: fn(summary.lastAssistantMessage),
+  };
+}
+
+// [summary with credentials redacted, null], or, when redactSecrets is unavailable or
+// throws, [summary with commands / errors / last message withheld and the minimal strip
+// on the rest, reason].
+function scrubSecrets(summary, mod) {
+  try {
+    if (!mod || typeof mod.redactSecrets !== 'function') throw new Error('redactSecrets unavailable');
+    const fn = (t) => mod.redactSecrets(capRaw(t), { limit: RAW_CAP });
+    return [mapSummaryText(summary, fn), null];
+  } catch (err) {
+    const reason = err && err.message ? String(err.message).slice(0, 120) : 'unknown error';
+    const fn = (t) => minimalSecretStrip(capRaw(t)).slice(0, RAW_CAP);
+    const safe = mapSummaryText(summary, fn);
+    const withheld = 'withheld (credential redaction unavailable)';
+    safe.recentToolCalls = safe.recentToolCalls.map((tc) => (
+      tc.input && 'command' in tc.input ? { ...tc, input: { command: withheld } } : tc));
+    safe.recentCommands = [];
+    safe.errors = summary.errors.length
+      ? [{ label: `${summary.errors.length} tool error(s)`, text: withheld }] : [];
+    safe.lastAssistantMessage = '';
+    safe.withheld = withheld;
+    return [safe, reason];
   }
 }
 
@@ -134,7 +214,7 @@ function parseTranscript(transcriptPath) {
         if (!b || typeof b !== 'object') continue;
 
         if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-          summary.lastAssistantMessage = b.text;
+          summary.lastAssistantMessage = capRaw(b.text);
         }
 
         if (b.type === 'tool_use') {
@@ -146,7 +226,7 @@ function parseTranscript(transcriptPath) {
           if (lname === 'todowrite' && Array.isArray(input.todos)) {
             summary.lastTodos = input.todos.map((t, i) => ({
               id: (t && t.id) || `todo-${i}`,
-              content: (t && t.content) || '',
+              content: capRaw(String((t && t.content) || '')),
               status: (t && t.status) || 'pending',
             }));
           }
@@ -157,8 +237,9 @@ function parseTranscript(transcriptPath) {
           }
 
           if ((lname === 'bash' || lname === 'powershell') && typeof input.command === 'string') {
-            summary.recentCommands.push(input.command);
-            tc.input = { command: input.command };
+            const command = capRaw(input.command);
+            summary.recentCommands.push(command);
+            tc.input = { command };
           }
 
           if (b.id) callsById.set(b.id, tc);
@@ -170,7 +251,7 @@ function parseTranscript(transcriptPath) {
     if (entry.type === 'user') {
       if (typeof msg.content === 'string') {
         if (entry.isSidechain !== true && isGoalText(msg.content.trim())) {
-          summary.goal = msg.content.trim().slice(0, 300);
+          summary.goal = capRaw(msg.content.trim());
         }
       } else if (blocks) {
         for (const b of blocks) {
@@ -178,7 +259,7 @@ function parseTranscript(transcriptPath) {
 
           if (b.type === 'text' && typeof b.text === 'string' &&
               entry.isSidechain !== true && isGoalText(b.text.trim())) {
-            summary.goal = b.text.trim().slice(0, 300);
+            summary.goal = capRaw(b.text.trim());
           }
 
           if (b.type === 'tool_result') {
@@ -191,7 +272,7 @@ function parseTranscript(transcriptPath) {
               const label = tc
                 ? (tc.input && tc.input.command) || (tc.input && tc.input.file_path) || tc.name
                 : 'tool';
-              summary.errors.push(`${label}: ${(text || 'failed').slice(0, 200)}`);
+              summary.errors.push({ label: capRaw(String(label)), text: capRaw(text || 'failed') });
             }
           }
         }
@@ -202,7 +283,6 @@ function parseTranscript(transcriptPath) {
   summary.recentToolCalls = allToolCalls.slice(-8);
   summary.filesModified = [...filesModified].slice(-20);
   summary.recentCommands = summary.recentCommands.slice(-8);
-  summary.lastAssistantMessage = summary.lastAssistantMessage.slice(0, 500);
   summary.errors = summary.errors.slice(-5);
   return summary;
 }
@@ -218,7 +298,7 @@ function generateHandoff(summary, sessionName) {
   ];
 
   lines.push('## Goal', '');
-  lines.push(summary.goal || 'No user goal captured.', '');
+  lines.push(summary.goal ? summary.goal.slice(0, 300) : 'No user goal captured.', '');
 
   lines.push('## In Progress', '');
   if (summary.lastTodos.length) {
@@ -248,7 +328,8 @@ function generateHandoff(summary, sessionName) {
   lines.push('');
 
   lines.push('## Recent Commands', '');
-  if (summary.recentCommands.length) summary.recentCommands.forEach(c => lines.push(`- \`${c.slice(0, 160)}\``));
+  if (summary.withheld) lines.push(`Commands ${summary.withheld}.`);
+  else if (summary.recentCommands.length) summary.recentCommands.forEach(c => lines.push(`- \`${c.slice(0, 160)}\``));
   else lines.push('No commands recorded.');
   lines.push('');
 
@@ -259,13 +340,14 @@ function generateHandoff(summary, sessionName) {
 
   if (summary.errors.length) {
     lines.push('## Errors Encountered', '');
-    summary.errors.forEach(e => lines.push('```', e, '```'));
+    summary.errors.forEach(e => lines.push('```', `${e.label}: ${e.text.slice(0, 200)}`, '```'));
     lines.push('');
   }
 
   lines.push('## Last Context', '');
-  if (summary.lastAssistantMessage) {
-    lines.push('```', summary.lastAssistantMessage);
+  if (summary.withheld) lines.push(`Last assistant message ${summary.withheld}.`);
+  else if (summary.lastAssistantMessage) {
+    lines.push('```', summary.lastAssistantMessage.slice(0, 500));
     if (summary.lastAssistantMessage.length >= 500) lines.push('[... truncated]');
     lines.push('```');
   } else lines.push('No assistant message captured.');
@@ -297,8 +379,9 @@ async function main() {
 
   if (trigger === 'auto' && transcriptExists) {
     try {
-      const summary = parseTranscript(transcriptPath);
-      const [content, redactError] = await redactHandoff(generateHandoff(summary, sessionName), projectDir);
+      const mod = await loadRedactor();
+      const [safe, secretError] = scrubSecrets(parseTranscript(transcriptPath), mod);
+      const [content, redactError] = redactHandoff(generateHandoff(safe, sessionName), projectDir, mod);
 
       const projectHandoffs = join(projectDir, 'thoughts', 'shared', 'handoffs');
       const handoffDir = existsSync(projectHandoffs)
@@ -313,6 +396,7 @@ async function main() {
 
       message = `[PreCompact:auto] Created ${join(handoffDir, filename).replace(/\\/g, '/')}`;
       if (redactError) message += ` (privacy redaction failed: ${redactError}; home paths only)`;
+      if (secretError) message += ` (credential redaction unavailable: ${secretError}; commands, errors and last message withheld)`;
     } catch (err) {
       message = `[PreCompact:auto] Handoff generation failed (${err && err.message ? String(err.message).slice(0, 120) : 'unknown error'}). Consider running /create-handoff manually.`;
     }

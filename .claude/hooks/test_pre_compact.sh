@@ -417,6 +417,101 @@ check "VAL-803e module missing: exit 0, handoff written with the home dir replac
 printf '%s' "$OUT" | grep -qi "home paths only"
 check "VAL-803e module missing: systemMessage says redaction fell back" $?
 
+# =====================================================================
+# SEC-1: credentials in commands, error labels / tool output, the last assistant message,
+#   the goal and todos are redacted before the handoff is written (privacy-redact.mjs
+#   redactSecrets, the redactor fleet-audit.mjs uses), on the raw text before the display
+#   cuts. Module missing, or without redactSecrets: commands, errors and the last message
+#   are withheld and the rest gets a minimal strip. Token prefixes are assembled at run
+#   time so no secret-scanner shape lands in the repo.
+# =====================================================================
+SECTR="$WORK/secrets.jsonl"
+node - "$SECTR" <<'EOF'
+const { writeFileSync } = require('fs');
+const p = (a, b) => a + b;
+const ghp = p('gh', 'p_') + 'Q'.repeat(36);
+const pat = p('github', '_pat_') + 'R'.repeat(30);
+const ant = p('sk-', 'ant-') + 'S'.repeat(24);
+const cmd = 'EXA_API_KEY=envSecret111 && export X_API_KEY=exportSecret222 && curl -H "Authorization: Bearer bearerTok333" https://bob:urlPass444@host.example/r ' + ghp;
+const straddle = 'echo ' + 'x'.repeat(130) + ' ' + pat; // token crosses the 160-char display cut
+const L = [
+  { type: 'user', message: { role: 'user', content: 'Deploy with DEPLOY_TOKEN=goalSecret555 please' } },
+  { type: 'assistant', message: { role: 'assistant', content: [
+    { type: 'tool_use', id: 'w1', name: 'TodoWrite', input: { todos: [{ content: 'rotate PASSWORD=todoSecret666', status: 'pending' }] } },
+    { type: 'tool_use', id: 'b1', name: 'Bash', input: { command: cmd } },
+    { type: 'tool_use', id: 'b2', name: 'PowerShell', input: { command: straddle } }] } },
+  { type: 'user', message: { role: 'user', content: [
+    { type: 'tool_result', tool_use_id: 'b1', is_error: true, content: 'auth failed for ' + ant + ' (password: errPw777)' }] } },
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Next: set OPENAI_API_KEY=lastSecret888 and retry' }] } },
+];
+writeFileSync(process.argv[2], L.map((x) => JSON.stringify(x)).join('\n') + '\n');
+EOF
+check "SEC-1 secrets fixture written" $?
+no_leaks() { # <handoff> -> 0 when no secret value survives
+  local r=0
+  [ -f "$1" ] || return 1
+  for l in envSecret111 exportSecret222 bearerTok333 urlPass444 QQQQQQQQ RRRRRRRR SSSSSSSS \
+           errPw777 goalSecret555 todoSecret666 lastSecret888; do
+    grep -q "$l" "$1" && { echo "  leaked: $l"; r=1; }
+  done
+  return $r
+}
+run_secrets() { # <hook> <project> -> OUT, RC, HS (handoff path)
+  mkdir -p "$2/thoughts/shared/handoffs"
+  OUT=$(printf '{"trigger":"auto","session_id":"secret-session-01","transcript_path":"%s"}' "$SECTR" \
+        | CLAUDE_PROJECT_DIR="$2" CCV_PRIVACY_KEY_FILE="$WORK/keys/sec-key" CCV_PRIVACY_TERMS= node "$1")
+  RC=$?
+  HS=$(find "$2/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+  HS="${HS:-$WORK/missing}"
+}
+run_secrets "$HOOK" "$WORK/proj12"
+[ "$RC" -eq 0 ] && [ -f "$HS" ]
+check "SEC-1 hook exit 0, handoff written" $?
+no_leaks "$HS"
+check "SEC-1 no credential in commands, errors, last message, goal or todos" $?
+grep -qF 'EXA_API_KEY=<redacted> && export X_API_KEY=<redacted>' "$HS" \
+  && grep -qF 'Authorization: Bearer <redacted>' "$HS" && grep -qF 'https://<redacted>@host.example/r' "$HS" \
+  && grep -qF 'auth failed for <redacted> (password: <redacted>' "$HS" \
+  && grep -qF 'OPENAI_API_KEY=<redacted> and retry' "$HS" && grep -qF 'DEPLOY_TOKEN=<redacted> please' "$HS" \
+  && grep -qF 'PASSWORD=<redacted>' "$HS"
+check "SEC-1 redacted fields keep their shape (secret value -> <redacted>)" $?
+grep -q "^- \`echo x\{130\} <redacted>\`$" "$HS"
+check "SEC-1 token crossing the 160-char command cut is redacted whole, not cut first" $?
+! printf '%s' "$OUT" | grep -qi "withheld\|home paths only"
+check "SEC-1 full redaction: systemMessage reports no fallback (got: ${OUT:0:160})" $?
+# module missing (partial install): commands / errors / last message withheld, rest stripped
+run_secrets "$WORK/lonehook/pre-compact.mjs" "$WORK/proj13"
+[ "$RC" -eq 0 ] && no_leaks "$HS" && grep -q "Commands withheld" "$HS" \
+  && grep -q "Last assistant message withheld" "$HS" && grep -q "1 tool error(s): withheld" "$HS" \
+  && grep -qF 'DEPLOY_TOKEN=<redacted> please' "$HS" && ! grep -q "run_placeholder\|curl\|retry" "$HS"
+check "SEC-1 module missing: no leak, commands/errors/last message withheld, goal stripped" $?
+printf '%s' "$OUT" | grep -q "credential redaction unavailable" && printf '%s' "$OUT" | grep -q "withheld"
+check "SEC-1 module missing: systemMessage says commands were withheld (got: ${OUT:0:200})" $?
+# installed privacy-redact.mjs predates redactSecrets: same withholding
+mkdir -p "$WORK/oldlib"; cp "$HOOK" "$WORK/oldlib/pre-compact.mjs"
+printf 'export const redact = (t) => t;\nexport const redactHome = (t) => t;\n' > "$WORK/oldlib/privacy-redact.mjs"
+run_secrets "$WORK/oldlib/pre-compact.mjs" "$WORK/proj14"
+[ "$RC" -eq 0 ] && no_leaks "$HS" && grep -q "Commands withheld" "$HS" \
+  && printf '%s' "$OUT" | grep -q "redactSecrets unavailable"
+check "SEC-1 module without redactSecrets: no leak, commands withheld (got: ${OUT:0:200})" $?
+# library: redactSecrets exported, limit keeps a secret that crosses the cut out whole
+node --input-type=module - "$LIB" <<'EOF'
+import { pathToFileURL } from 'url';
+const { redactSecrets, secretSpans, REDACTED } = await import(pathToFileURL(process.argv[2]).href);
+const cases = [
+  [redactSecrets('TOKEN=abcdef tail', { limit: 8 }), 'TOKEN=<redacted>'],
+  [redactSecrets('ok TOKEN=abc', { limit: 3 }), 'ok '],
+  [redactSecrets('plain text, nothing here'), 'plain text, nothing here'],
+  [redactSecrets('git push -u origin main'), 'git push -u origin main'],
+  [String(REDACTED), '<redacted>'],
+  [String(secretSpans('A_KEY=v').length), '1'],
+];
+let bad = 0;
+for (const [got, want] of cases) if (got !== want) { bad++; console.error(`got ${JSON.stringify(got)} want ${JSON.stringify(want)}`); }
+process.exit(bad ? 1 : 0);
+EOF
+check "SEC-1 privacy-redact.mjs redactSecrets / secretSpans / REDACTED exported, limit semantics" $?
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

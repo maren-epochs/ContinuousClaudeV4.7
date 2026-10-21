@@ -20,8 +20,9 @@
  * plaintext, attached mysql -p<pass>) plus the rules ported from tools/privacy_guard.py
  * (user-home paths, OS username, UUID-shaped ids, private terms from CCV_PRIVACY_TERMS,
  * ~/.claude/privacy-terms and .git/info/privacy-terms; an unreadable .git is skipped),
- * taken from privacy-redact.mjs via a lazy import; when that module is missing (partial
- * install) a built-in copy of the same rules is used, so the event is still logged.
+ * all taken from privacy-redact.mjs via a lazy import (credentials: its secretSpans, shared
+ * with pre-compact.mjs); when that module is missing (partial install) a built-in copy of
+ * the same rules is used, so the event is still logged.
  * Every regex is bounded (no nested or unbounded quantifiers) and the scanners are linear:
  * a 100k-char command costs well under 50 ms. Heuristic, quote-aware tokenizing; nested
  * `bash -c` / `cmd /c` / `pwsh -Command` are analyzed. Never blocks: always exit 0, no
@@ -104,26 +105,13 @@ function builtinRules() {
   };
 }
 
-async function privacyRules() {
-  try {
-    return await import(new URL('./privacy-redact.mjs', import.meta.url).href);
-  } catch (e) {
-    process.stderr.write(`fleet-audit: privacy-redact.mjs unavailable (${e && e.code ? e.code : e}); built-in rules\n`);
-    return builtinRules();
-  }
-}
-
-const {
-  PLACEHOLDER_NAMES, HOME_PATTERNS, UUID_RE, escapeRe, loadTerms, usernames,
-} = await privacyRules();
-
-// --- redaction (credential shapes here; privacy rules from above) ---
-
+// Built-in copy of privacy-redact.mjs secretSpans() (same patterns, same spans), used only
+// when that module is missing or predates secretSpans (partial install).
 // Credential shapes; group `s` (when present) is the secret, else the whole match.
 // Linear by construction: every quantifier is bounded and none is nested.
 const VAL = String.raw`(?<s>\\"[^"]{0,512}"|"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&]{1,512})`;
 const SECRET_NAME = String.raw`(?:token|password|passwd|secret|api[_-]?key)`;
-const SECRET_PATTERNS = [
+const SECRET_PATTERNS = [ // same as privacy-redact.mjs SECRET_PATTERNS
   new RegExp(String.raw`[A-Za-z0-9_]{0,64}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]{0,64}[ \t]{0,8}=[ \t]{0,8}${VAL}`, 'dgi'),
   new RegExp(String.raw`(?<![\w-])--?[\w-]{0,32}${SECRET_NAME}[\w-]{0,32}(?:[=:]|[ \t]{1,8})${VAL}`, 'dgi'),
   // JSON / YAML key: value (optionally quoted or \"-escaped key)
@@ -193,16 +181,36 @@ function pipedValue(text, at) {
   return [k + 1, end];
 }
 
-// Redacted text[0, limit); spans are found over all of text so a secret crossing the
-// limit is still recognized (callers pass a lookahead margin past the limit).
-export function redact(text, { users = usernames(), terms = [], limit = text.length } = {}) {
-  const spans = [];
+function builtinSecretSpans(text, spans = []) {
   const secret = (m) => (m.indices.groups && m.indices.groups.s) || m.indices[0];
   for (const re of SECRET_PATTERNS) {
     for (const m of text.matchAll(re)) spans.push(secret(m));
   }
   if (MYSQL_RE.test(text)) for (const m of text.matchAll(MYSQL_PW_RE)) spans.push(secret(m));
   secureStringSpans(text, spans);
+  return spans;
+}
+
+async function privacyRules() {
+  try {
+    return await import(new URL('./privacy-redact.mjs', import.meta.url).href);
+  } catch (e) {
+    process.stderr.write(`fleet-audit: privacy-redact.mjs unavailable (${e && e.code ? e.code : e}); built-in rules\n`);
+    return builtinRules();
+  }
+}
+
+const rules = await privacyRules();
+const { PLACEHOLDER_NAMES, HOME_PATTERNS, UUID_RE, escapeRe, loadTerms, usernames } = rules;
+const secretSpans = typeof rules.secretSpans === 'function' ? rules.secretSpans : builtinSecretSpans;
+
+// --- redaction (credentials: privacy-redact.mjs secretSpans; privacy rules from above) ---
+
+// Redacted text[0, limit); spans are found over all of text so a secret crossing the
+// limit is still recognized (callers pass a lookahead margin past the limit).
+export function redact(text, { users = usernames(), terms = [], limit = text.length } = {}) {
+  const spans = [];
+  secretSpans(text, spans);
   for (const re of HOME_PATTERNS) {
     for (const m of text.matchAll(re)) {
       const { pre, name } = m.groups;

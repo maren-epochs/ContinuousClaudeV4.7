@@ -28,6 +28,12 @@
  *    repo allowlist `.privacy-allow` (repo-specific; holds only UUID entries, which
  *    redact never touches). Known gap: characters newer than Python's Unicode
  *    database (case/word data from Node's ICU) can match differently.
+ * 3. Credential redaction (moved from fleet-audit.mjs), used by fleet-audit.mjs and
+ *    pre-compact.mjs: secretSpans(text) -> [start, end) of every credential shape
+ *    (SECRET_PATTERNS, attached mysql -p<pass>, ConvertTo-SecureString plaintext);
+ *    applySpans(text, spans, limit) -> text[0, limit) with spans replaced by REDACTED;
+ *    redactSecrets(text, { limit }) -> both. Every regex is bounded and linear.
+ *    fleet-audit.mjs keeps a built-in copy for partial installs; its test checks parity.
  */
 import {
   readFileSync, statSync, mkdirSync, openSync, writeSync, closeSync, fsyncSync, linkSync,
@@ -335,4 +341,116 @@ export function redact(text, { users = usernames(), terms, key = null, cwd = pro
     }
     return args[0];
   });
+}
+
+// --- credential redaction (moved from fleet-audit.mjs; used by fleet-audit and pre-compact) ---
+
+export const REDACTED = '<redacted>';
+
+// Credential shapes; group `s` (when present) is the secret, else the whole match.
+// Linear by construction: every quantifier is bounded and none is nested.
+const VAL = String.raw`(?<s>\\"[^"]{0,512}"|"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&]{1,512})`;
+const SECRET_NAME = String.raw`(?:token|password|passwd|secret|api[_-]?key)`;
+export const SECRET_PATTERNS = [
+  new RegExp(String.raw`[A-Za-z0-9_]{0,64}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]{0,64}[ \t]{0,8}=[ \t]{0,8}${VAL}`, 'dgi'),
+  new RegExp(String.raw`(?<![\w-])--?[\w-]{0,32}${SECRET_NAME}[\w-]{0,32}(?:[=:]|[ \t]{1,8})${VAL}`, 'dgi'),
+  // JSON / YAML key: value (optionally quoted or \"-escaped key)
+  new RegExp(String.raw`(\\?["']?)[\w-]{0,32}${SECRET_NAME}[\w-]{0,32}\1[ \t]{0,8}:[ \t]{0,8}(?<s>\\"[^"]{0,512}"|"[^"]{0,512}"|'[^']{0,512}'|[^\s,;}'"|&]{1,512})`, 'dgi'),
+  // headers: x-*-key/token/auth/secret, Authorization, Private-Token
+  /(?<![\w-])(?:x-[\w-]{0,32}(?:key|token|auth|secret)[\w-]{0,32}|authorization|proxy-authorization|private-token)[ \t]{0,8}:[ \t]{0,8}(?:(?:Bearer|Basic|Token|Digest)[ \t]{1,8})?(?<s>[^\s"']{1,512})/dgi,
+  /\b(?:Bearer|Basic)[ \t]{1,8}(?<s>[A-Za-z0-9._~+/=-]{6,512})/dgi,
+  // URL userinfo (user:pass@ or a bare token@), except the conventional ssh `git@`
+  /:\/\/(?!git@)(?<s>[^\s/@:]{1,256}(?::[^\s/@]{0,256})?)@/dg,
+  // curl -u / --user user:pass (needs the colon, so `git push -u origin` is untouched)
+  /(?<![\w-])(?:-u|--user)(?:[ \t]{1,8}|=)?(?<s>"[^"\s]{0,256}:[^"]{1,256}"|'[^'\s]{0,256}:[^']{1,256}'|[^\s"':;|&]{0,256}:[^\s"';|&]{1,256})/dg,
+  /(?<![A-Za-z0-9_-])(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255}|glpat-[A-Za-z0-9_-]{16,255}|sk-[A-Za-z0-9_-]{16,255}|[sr]k_(?:live|test)_[A-Za-z0-9]{8,255}|npm_[A-Za-z0-9]{20,255}|hf_[A-Za-z0-9]{20,255}|xox[abprs]-[A-Za-z0-9-]{10,255}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,255})/dg,
+];
+const MYSQL_RE = /(?<![\w.-])(?:mysql|mysqldump|mysqladmin|mysqlimport|mysqlshow|mysqlcheck|mariadb(?:-dump|-admin)?)(?:\.exe)?(?![\w-])/i;
+const MYSQL_PW_RE = /(?<!\S)-p(?<s>"[^"]{0,256}"|'[^']{0,256}'|[^\s;|&]{1,256})/dg;
+const SECURE_RE = /ConvertTo-SecureString(?![\w-])/gi;
+const PS_TOKEN_RE = /[ \t]{1,8}(?<t>-[A-Za-z]{1,32}(?::[^\s;|&]{0,64})?|"[^"]{0,512}"|'[^']{0,512}'|[^\s;|&()]{1,512})/y;
+
+// [start, end) of the value piped into the command at `at` (`'x' | ConvertTo-...`), else null
+function pipedValue(text, at) {
+  const ws = (c) => c === ' ' || c === '\t';
+  let j = at - 1;
+  while (j >= 0 && ws(text[j])) j--;
+  if (text[j] !== '|' || text[j - 1] === '|') return null;
+  j--;
+  while (j >= 0 && ws(text[j])) j--;
+  if (j < 0) return null;
+  const end = j + 1;
+  if (text[j] === '"' || text[j] === "'") {
+    const k = text.lastIndexOf(text[j], j - 1);
+    return k >= 0 && end - k <= 514 ? [k, end] : null;
+  }
+  let k = j;
+  while (k >= 0 && end - k <= 512 && !/[\s|;&]/.test(text[k])) k--;
+  return [k + 1, end];
+}
+
+// ConvertTo-SecureString's plaintext: -String value, first positional, or the piped-in value.
+function secureStringSpans(text, spans) {
+  for (const m of text.matchAll(SECURE_RE)) {
+    let pos = m.index + m[0].length;
+    let found = false;
+    let takeNext = false;
+    let skipNext = false;
+    for (let k = 0; k < 8; k++) {
+      PS_TOKEN_RE.lastIndex = pos;
+      const t = PS_TOKEN_RE.exec(text);
+      if (!t) break;
+      pos = PS_TOKEN_RE.lastIndex;
+      const tok = t.groups.t;
+      const start = pos - tok.length;
+      if (skipNext) { skipNext = false; continue; }
+      if (!takeNext && tok.startsWith('-')) {
+        const name = tok.slice(1).split(':')[0].toLowerCase();
+        const inline = tok.includes(':');
+        if ('string'.startsWith(name) && name.length >= 1) {
+          if (inline) { spans.push([start + name.length + 2, pos]); found = true; break; }
+          takeNext = true;
+        } else if (['key', 'securekey'].includes(name) && !inline) skipNext = true;
+        continue;
+      }
+      spans.push([start, pos]);
+      found = true;
+      break;
+    }
+    if (!found) { const v = pipedValue(text, m.index); if (v) spans.push(v); }
+  }
+}
+
+// Appends the [start, end) span of every credential in text to spans (returned):
+// KEY=v, --token v, JSON/YAML "token"/"password"/"secret"/"api_key": v, x-*-key /
+// Authorization / Private-Token headers, Bearer/Basic, URL userinfo, curl -u user:pass,
+// gh*_/github_pat_/glpat-/sk-/sk_live_/sk_test_/rk_/npm_/hf_/xox*-/AKIA/AIza tokens,
+// ConvertTo-SecureString plaintext, attached mysql -p<pass>.
+export function secretSpans(text, spans = []) {
+  const secret = (m) => (m.indices.groups && m.indices.groups.s) || m.indices[0];
+  for (const re of SECRET_PATTERNS) {
+    for (const m of text.matchAll(re)) spans.push(secret(m));
+  }
+  if (MYSQL_RE.test(text)) for (const m of text.matchAll(MYSQL_PW_RE)) spans.push(secret(m));
+  secureStringSpans(text, spans);
+  return spans;
+}
+
+// text[0, limit) with each span replaced by REDACTED (overlapping spans merge); spans may
+// reach past limit, so a secret crossing the cut is still removed.
+export function applySpans(text, spans, limit = text.length) {
+  spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  let out = '', pos = 0;
+  for (const [s, e] of spans) {
+    if (s >= limit) break;
+    if (e <= pos) continue;
+    if (s >= pos) { out += text.slice(pos, s) + REDACTED; pos = e; }
+    else pos = e; // overlap: extend the redaction already emitted
+  }
+  return pos < limit ? out + text.slice(pos, limit) : out;
+}
+
+// Credentials alone -> REDACTED (no home/user/term rules); limit as in applySpans.
+export function redactSecrets(text, { limit = text.length } = {}) {
+  return applySpans(text, secretSpans(text), limit);
 }
