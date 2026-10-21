@@ -627,11 +627,11 @@ done
 REPORT_ITEMS="${REPORT_ITEMS%,}"
 
 python3 -c "
-import json, datetime
+import json, datetime, zoneinfo
 report = {
     'target': '$TARGET',
     'language': '$LANG_DETECTED',
-    'evaluatedAt': datetime.datetime.now().isoformat(),
+    'evaluatedAt': datetime.datetime.now(zoneinfo.ZoneInfo('America/New_York')).isoformat(),
     'level': $LEVEL,
     'passRate': $PASS_RATE,
     'errorSurface': $ERROR_SURFACE,

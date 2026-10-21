@@ -427,6 +427,21 @@ def proposal_path(proposal_id: str) -> Path:
     return inbox_dir() / f"{proposal_id}.json"
 
 
+HARNESS_TZ = (
+    "America/New_York"  # times shown and file names: EST/EDT, not Windows' zone
+)
+
+
+def harness_tz() -> _dt.tzinfo | None:
+    """HARNESS_TZ as a tzinfo; None (= the machine zone) without tz data."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(HARNESS_TZ)
+    except Exception:  # noqa: BLE001 - no tzdata: fall back to local time
+        return None
+
+
 def now_iso() -> str:
     """Current UTC time as ``YYYY-MM-DDTHH:MM:SSZ``."""
     return _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

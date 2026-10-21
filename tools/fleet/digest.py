@@ -176,7 +176,7 @@ def build(state: FleetState, now: _dt.datetime | None = None) -> dict[str, Any]:
     rows = sorted((_session(s, ts) for s in state.sessions if s.alive), key=_sort_key)
     machine_alerts = [_alert(a) for a in state.machine_alerts]
     return {
-        "date": now.astimezone().date().isoformat(),
+        "date": now.astimezone(model.harness_tz()).date().isoformat(),
         "generated_at": now.astimezone(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "state_at": state.generated_at,
         "state_age_s": _age_s(state.generated_at, ts),

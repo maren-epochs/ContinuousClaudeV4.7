@@ -34,6 +34,19 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, basename, resolve } from 'path';
 import { homedir } from 'os';
 
+// Times shown and file names use America/New_York (EST/EDT), not the Windows zone
+// (the laptop flips zones). Returns [YYYY-MM-DD, HH:MM:SS, offset like -04:00].
+const HARNESS_TZ = 'America/New_York';
+function harnessClock(date = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: HARNESS_TZ, hourCycle: 'h23', timeZoneName: 'longOffset',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  const offset = p.timeZoneName.replace(/^GMT/, '') || '+00:00';
+  return [`${p.year}-${p.month}-${p.day}`, `${p.hour}:${p.minute}:${p.second}`, offset];
+}
+
 // Loaded lazily so a missing module (partial install) cannot stop the hook.
 async function loadRedactor() {
   try { return await import(new URL('./privacy-redact.mjs', import.meta.url).href); } catch { return null; }
@@ -195,7 +208,8 @@ function parseTranscript(transcriptPath) {
 }
 
 function generateHandoff(summary, sessionName) {
-  const ts = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const [day, time, offset] = harnessClock();
+  const ts = `${day}T${time}${offset}`;
   const lines = [
     '---', `date: ${ts}`, 'type: auto-handoff', 'trigger: pre-compact-auto',
     `session: ${sessionName}`, '---', '',
@@ -292,7 +306,8 @@ async function main() {
         : join(homedir(), '.claude', 'handoffs', basename(resolve(projectDir)) || 'project', sessionName);
       mkdirSync(handoffDir, { recursive: true });
 
-      const ts = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, '');
+      const [day, time] = harnessClock();
+      const ts = `${day}T${time.replace(/:/g, '-')}`;
       const filename = `auto-handoff-${ts}.md`;
       writeFileSync(join(handoffDir, filename), content);
 

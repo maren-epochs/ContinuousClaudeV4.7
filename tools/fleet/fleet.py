@@ -151,7 +151,9 @@ def _daily_digest(state: FleetState) -> None:
     next successful run (written, or today's file already there) removes."""
     try:
         now = digest._now()
-        if not digest.digest_path(now.astimezone().date().isoformat()).exists():
+        if not digest.digest_path(
+            now.astimezone(model.harness_tz()).date().isoformat()
+        ).exists():
             digest.write(digest.build(state, now))
     except Exception as exc:  # noqa: BLE001 - detached run: record, never raise
         with contextlib.suppress(Exception):
@@ -889,7 +891,7 @@ HANDOFF_COLUMNS = (
 def _when(epoch: float) -> str:
     return (
         _dt.datetime.fromtimestamp(epoch, _dt.UTC)
-        .astimezone()
+        .astimezone(model.harness_tz())
         .strftime("%Y-%m-%d %H:%M")
     )
 
