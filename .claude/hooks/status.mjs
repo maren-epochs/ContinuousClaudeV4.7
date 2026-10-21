@@ -12,6 +12,19 @@ import { execSync } from 'child_process';
 import { join, resolve, basename } from 'path';
 import { tmpdir, homedir } from 'os';
 
+// Times shown and file names use America/New_York (EST/EDT), not the Windows zone
+// (the laptop flips zones). Returns [YYYY-MM-DD, HH:MM:SS, offset like -04:00].
+const HARNESS_TZ = 'America/New_York';
+function harnessClock(date = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: HARNESS_TZ, hourCycle: 'h23', timeZoneName: 'longOffset',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  const offset = p.timeZoneName.replace(/^GMT/, '') || '+00:00';
+  return [`${p.year}-${p.month}-${p.day}`, `${p.hour}:${p.minute}:${p.second}`, offset];
+}
+
 function getSessionId(data) {
   const sid = typeof data.session_id === 'string' ? data.session_id : '';
   if (sid) return sid.slice(0, 8);
@@ -49,7 +62,7 @@ function writeContextPct(pct, data) {
       try {
         const prev = parseInt(readFileSync(file, 'utf-8').trim(), 10);
         if (prev - pct > 10) {
-          const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+          const ts = harnessClock().slice(0, 2).join(' ');
           const logFile = join(homedir(), '.claude', 'autocompact.log');
           writeFileSync(logFile, `${ts} | session:${sid} | ${prev}% -> ${pct}% (drop: ${prev - pct}%)\n`, { flag: 'a' });
         }

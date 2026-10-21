@@ -40,6 +40,17 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+
+def _harness_now() -> datetime:
+    """Now in America/New_York (EST/EDT) for backup names; local without tz data."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/New_York"))
+    except Exception:  # noqa: BLE001 - no tzdata
+        return datetime.now().astimezone()
+
+
 REPO = Path(__file__).resolve().parent.parent
 
 # repo subtree -> destination subtree under ~/.claude
@@ -341,9 +352,7 @@ def _git(*args: str) -> str:
 
 def apply_plan(target: Path, plan) -> None:
     """Write the plan; files being updated are backed up first."""
-    backup = (
-        target / ".ccv47-backup" / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    )
+    backup = target / ".ccv47-backup" / _harness_now().strftime("%Y%m%d-%H%M%S")
     for _, dst, new, kind in plan:
         if kind == "update":
             b = backup / dst.relative_to(target)

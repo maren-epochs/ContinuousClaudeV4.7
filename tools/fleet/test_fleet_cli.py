@@ -1092,6 +1092,12 @@ class HandoffsTests(CliHome):
         _, out, _ = self.run_main("handoffs", "--since", "2000")
         self.assertTrue(self.rows(out)["proj-1"].endswith("waiting"), out)
 
+    def test_times_show_in_eastern_whatever_the_machine_zone(self):
+        if model.harness_tz() is None:
+            self.skipTest("no tz data")
+        self.assertEqual(fleet._when(1792387370), "2026-10-19 01:22")  # EDT
+        self.assertEqual(fleet._when(1768478400), "2026-01-15 07:00")  # EST
+
     def test_since_accepts_iso_and_rejects_garbage(self):
         code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")
         self.assertEqual(code, 0)

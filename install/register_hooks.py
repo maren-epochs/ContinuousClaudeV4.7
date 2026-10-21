@@ -38,6 +38,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+def _harness_now() -> datetime:
+    """Now in America/New_York (EST/EDT) for backup names; local without tz data."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/New_York"))
+    except Exception:  # noqa: BLE001 - no tzdata
+        return datetime.now().astimezone()
+
+
 from sync_global import write_atomic  # sibling script: install/ is sys.path[0]
 
 MIN_NODE = 18
@@ -168,7 +179,7 @@ def register(cfg: dict, hooks_dir: str) -> tuple[dict, list[str]]:
 
 def backup_path(path: Path) -> Path:
     """Unused <name>.bak-<timestamp>[-N]-register-hooks sibling of path."""
-    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    stamp = _harness_now().strftime("%Y%m%d-%H%M%S")
     cand = path.with_name(f"{path.name}.bak-{stamp}-register-hooks")
     n = 1
     while cand.exists():
