@@ -1,8 +1,0 @@
-{
-  "task": "fixture: malformed worker report (bad result enum, wrong types, missing fields)",
-  "assertion": "VAL-999",
-  "result": "done",
-  "implemented": "",
-  "tests": {"added": "none", "command": "", "exit_code": "0"},
-  "checks": [{"command": "x"}]
-}
