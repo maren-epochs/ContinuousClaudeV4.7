@@ -22,7 +22,7 @@ mental_model: |
   (_shell_targets: >/>>, tee, Set-Content/Add-Content/Out-File, $f resolved via f=... in the same
   command), whole base-name match. Harness shown times + file names are pinned to America/New_York
   (model.harness_tz(), install _harness_now(), harnessClock() in pre-compact/status.mjs); machine
-  stamps stay UTC. The laptop flips Windows zone Eastern <-> GMT Standard (Epoch Privacy harden);
+  stamps stay UTC. The laptop flips Windows zone Eastern <-> GMT Standard (laptop privacy hardening);
   git commit offsets record whichever zone is active (-0400 / +0100) - user does not care (privacy
   project scope is on-device/network, not GitHub).
   pre-commit stashes unstaged files during `git commit`: never commit while workers are editing.
@@ -41,7 +41,7 @@ codebase_state:
 
 # ── WHAT WAS DONE ────────────────────────────────────────────────
 done_this_session:
-  - task: fleet handoffs credits shell-written handoffs (multi-strategy heredoc case), then tightened to write-target + whole-name match
+  - task: fleet handoffs credits shell-written handoffs (another project's heredoc case), then tightened to write-target + whole-name match
     files: [tools/fleet/fleet.py, tools/fleet/test_fleet_cli.py]
   - task: "Rule: Claude runs pushes/syncs/installs itself; hand over only after an actual denial"
     files: [CLAUDE.md, harness/skills/fleet/SKILL.md, install/README.md, README.md, install/register_hooks.py, "~/.claude/CLAUDE.md", memory claude-runs-everything.md]
@@ -55,7 +55,6 @@ done_this_session:
     files: [.claude/hooks/ask-queue.mjs, .claude/hooks/test_ask_queue.sh, tools/fleet/questions.py, tools/fleet/test_questions.py, tools/fleet/schema.md]
   - task: "Fix ouros: secret filters on every grep/rg after caller args (case-insensitive), POSIXLY_CORRECT dropped, _bounded_timeout (600 s cap) + _run_bounded tree kill for run_command/agent_call/run_python, utf-8 reads; uncommitted"
     files: [tools/ouros_harness.py, tools/test_ouros_policy.py, tools/test_ouros_harness_characterization.py]
-  - task: "Replied to documents-dc: IB Gateway 1051 run by multi-strategy scripts/start_ibc_gateway.ps1 via IBC; IBKR sharing doc at Documents/ibkr-gateway-sharing.md"
     files: []
 
 # ── DECISIONS (capture WHY) ──────────────────────────────────────
@@ -63,11 +62,11 @@ decisions:
   - name: harness_tz
     chose: America/New_York for shown times and created file names; UTC for machine stamps
     over: [Europe/London, UTC, local Windows zone]
-    because: user answered "est or edt"; local zone flips with Epoch Privacy harden
+    because: user answered "est or edt"; local zone flips with laptop privacy hardening
   - name: public_repo_offsets
     chose: no change for -04:00 in auto-handoffs / git commit offsets
     over: [UTC or London in saved files]
-    because: user - privacy project does not target GitHub
+    because: user - the laptop privacy setup does not target GitHub
   - name: review_scope
     chose: PR #2 = ouros_harness, privacy_guard, validate_report, privacy-redact, harness-guard, fleet-audit, pre-compact, ask-queue, sync_global, register_hooks (source only)
     over: [full tree PR #1 (refused), fleet src]
