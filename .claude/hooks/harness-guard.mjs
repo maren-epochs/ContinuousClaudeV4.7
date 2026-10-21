@@ -4,8 +4,11 @@
  * Requires Node 18+ (node: imports; proposal-id randomness loaded lazily from 'node:crypto').
  *
  * A Write/Edit/MultiEdit/NotebookEdit whose target, or a Bash/PowerShell command whose
- * write target (>, >>, N>, &>, tee, cp, mv, Copy-Item, Move-Item, Set-Content,
- * Add-Content, Out-File, Tee-Object), resolves to a file listed in the install manifest
+ * write target (>, >>, N>, &>, >&file, tee, cp, mv, install, ln, rsync, dd of=, sed -i,
+ * perl -i, Copy-Item, Move-Item, Set-Content, Add-Content, Out-File, Tee-Object, New-Item,
+ * [IO.File]::WriteAll.. / AppendAll.. / Copy / Move; bodies of bash/sh -c, eval, pwsh -Command /
+ * -EncodedCommand and Invoke-Expression re-parsed, depth 3; wrapper options of sudo, env,
+ * timeout, nice, stdbuf, xargs, ... skipped), resolves to a file listed in the install manifest
  * (~/.claude/.ccv47-manifest.json, tools/fleet/schema.md) is DENIED. The deny names the
  * repo file to change and the inbox id of a Proposal (kind edit, the exact intended
  * change) saved to ~/.claude/harness-inbox/<id>.json. Kept (keep-list) entries are
@@ -20,7 +23,13 @@
  * relative paths resolved; case-insensitive on win32. A target is stat'ed (realpath.native
  * on the deepest existing parent: 8.3 short names, symlinks) only when its lexical form is
  * under ~/.claude or, on win32, carries an 8.3 `~N` component off UNC; UNC and
- * network-style targets are never touched on disk.
+ * network-style targets are never touched on disk. A target counts as managed when its
+ * lexical OR resolved path is a manifest entry (a symlink/junction inside ~/.claude that
+ * points outside still guards the installed path). Glob targets (* ? [] {a,b}) match
+ * manifest keys; a directory, glob or recursive copy (cp -r, mv, rsync, Copy-Item -Recurse,
+ * dest an ancestor of ~/.claude) hits each manifest entry under the destination whose
+ * source file exists (unknown / UNC sources: assumed to exist). At most MAX_PROPOSALS
+ * proposals per call; further hits are listed in the deny message.
  *
  * Proposal: change strings share a 256 KiB (UTF-16 units) budget, `change.truncated: true`
  * when cut; the stored shell command has home paths -> ~ and username / privacy terms
@@ -41,6 +50,7 @@ const FILE_TOOLS = { Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_pat
 const HOME = homedir();
 const CLAUDE = join(HOME, '.claude');
 const CHANGE_BUDGET = 256 * 1024;
+const MAX_PROPOSALS = 5;
 
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -248,7 +258,9 @@ function tokenize(cmd, ps) {
       op('<');
       continue;
     }
-    if (cur === null && '(){}'.includes(c)) { op(';'); i++; continue; }
+    // bash `{` / `}` are reserved words only standalone (`{ cmd; }`); `{}` and `{a,b}` are words
+    const group = ps || c === '(' || c === ')' || (c === '{' ? /^[\s;]?$/.test(cmd[i + 1] ?? '') : atCmdStart());
+    if (cur === null && '(){}'.includes(c) && group) { op(';'); i++; continue; }
     cur = (cur ?? '') + c;
     i++;
   }
@@ -256,12 +268,45 @@ function tokenize(cmd, ps) {
   return toks;
 }
 
-const PREFIXES = new Set(['sudo', 'command', 'builtin', 'env', 'nohup', 'time', 'exec', '&', '.']);
+// Command wrappers: short options taking a value (v), short options whose value is the rest
+// of the cluster (o), long options taking a separate value (l), leading operands (pos).
+const WRAPPERS = {
+  sudo: { v: 'CDgpRrtTUu', l: ['close-from', 'chdir', 'group', 'prompt', 'chroot', 'role', 'type', 'command-timeout', 'other-user', 'user', 'host'] },
+  doas: { v: 'uC' },
+  env: { v: 'uCS', l: ['unset', 'chdir', 'split-string'] },
+  timeout: { v: 'sk', l: ['signal', 'kill-after'], pos: 1 },
+  nice: { v: 'n', l: ['adjustment'] },
+  ionice: { v: 'cnp', l: ['class', 'classdata', 'pid'] },
+  stdbuf: { v: 'ioe', l: ['input', 'output', 'error'] },
+  xargs: { v: 'aEdILnPs', o: 'eil', l: ['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var'] },
+  time: { v: 'fo', l: ['format', 'output'] },
+  exec: { v: 'a' },
+  nohup: {}, setsid: {}, command: {}, builtin: {},
+};
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'mksh']);
+const PWSH = new Set(['pwsh', 'powershell']);
+const TARGET_DIR = { v: 'St', l: ['suffix', 'target-directory'], tdir: true };
+const COPY_LIKE = {
+  cp: { ...TARGET_DIR, rec: 'rRa', lrec: ['recursive', 'archive'] },
+  mv: { ...TARGET_DIR, always: true },
+  ln: TARGET_DIR,
+  install: { v: 'mogSt', l: ['mode', 'owner', 'group', 'suffix', 'target-directory', 'strip-program'], tdir: true },
+  rsync: { v: 'efBTM', rec: 'ra', lrec: ['recursive', 'archive'], l: ['exclude', 'include', 'filter', 'exclude-from',
+    'include-from', 'files-from', 'rsh', 'rsync-path', 'temp-dir', 'partial-dir', 'backup-dir', 'suffix', 'chmod',
+    'chown', 'log-file', 'password-file', 'compare-dest', 'copy-dest', 'link-dest', 'max-size', 'min-size', 'bwlimit',
+    'timeout', 'port', 'out-format', 'usermap', 'groupmap', 'info', 'debug', 'block-size', 'remote-option'] },
+};
+const PS_CLI_VALUED = new Set(['executionpolicy', 'ex', 'ep', 'windowstyle', 'w', 'win', 'workingdirectory', 'wd',
+  'configurationname', 'config', 'custompipename', 'inputformat', 'inp', 'if', 'outputformat', 'o', 'of', 'version', 'v',
+  'psconsolefile', 'settingsfile', 'settings', 'configurationfile', 'encodedarguments', 'ea']);
+const IO_FILE = /^\[(?:system\.)?io\.file\]::(\w+)\((.*)$/is;
 const PS_COPY = new Set(['copy-item', 'cpi', 'copy', 'cp', 'move-item', 'mi', 'move', 'mv']);
 const PS_CONTENT = new Set(['set-content', 'sc', 'add-content', 'ac']);
 const PS_OUTFILE = new Set(['out-file']);
 const PS_TEE = new Set(['tee-object', 'tee']);
 const PS_LOCATION = new Set(['set-location', 'sl', 'cd', 'chdir', 'push-location', 'pushd']);
+const PS_NEWITEM = new Set(['new-item', 'ni']);
+const PS_IEX = new Set(['invoke-expression', 'iex']);
 const PATH_ALIASES = { pspath: 'literalpath', lp: 'literalpath' };
 const PS_COMMON = {
   valued: ['erroraction', 'warningaction', 'informationaction', 'errorvariable', 'warningvariable',
@@ -285,6 +330,8 @@ const PS_SPECS = {
     { path: 'filepath', nooverwrite: 'noclobber' }),
   tee: spec(['filepath', 'literalpath', 'variable', 'inputobject', 'encoding'], ['append'], { path: 'filepath' }),
   location: spec(['path', 'literalpath', 'stackname'], ['passthru']),
+  newitem: spec(['path', 'name', 'itemtype', 'value', 'credential'], ['force'], { type: 'itemtype', target: 'value' }),
+  iex: spec(['command'], []),
 };
 
 function psParamName(name, sp) {
@@ -304,68 +351,221 @@ function psParams(args, sp) {
     const m = /^-([A-Za-z][\w-]*)(?::(.*))?$/.exec(a);
     if (!m) { pos.push(a); continue; }
     const full = psParamName(m[1].toLowerCase(), sp);
-    if (full && sp.switches.has(full)) continue;
+    if (full && sp.switches.has(full)) { named[full] = true; continue; }
     const value = m[2] !== undefined ? m[2] : args[++i];
     if (full && value !== undefined) named[full] = value;
   }
   return { named, pos };
 }
 
-// -> { targets: [{ p, src? }], cd?: { kind: 'cd'|'push'|'pop', dir: string|null|undefined } }
+const cmdName = (w) => basename(w.replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
+
+// GNU-style options (permuted; `--` ends them) -> { flags: Set, vals: {name: value}, pos: [] }
+function gnuParse(args, { v = '', o = '', l = [] }) {
+  const flags = new Set();
+  const vals = {};
+  const pos = [];
+  let opts = true;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!opts || a.length < 2 || a[0] !== '-') { pos.push(a); continue; }
+    if (a === '--') { opts = false; continue; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq < 0 ? a.slice(2) : a.slice(2, eq);
+      if (eq >= 0) vals[name] = a.slice(eq + 1);
+      else if (l.includes(name)) vals[name] = args[++i] ?? '';
+      else flags.add(name);
+      continue;
+    }
+    for (let j = 1; j < a.length; j++) {
+      const ch = a[j];
+      if (o.includes(ch)) { vals[ch] = a.slice(j + 1); break; }
+      if (v.includes(ch)) { vals[ch] = j + 1 < a.length ? a.slice(j + 1) : (args[++i] ?? ''); break; }
+      flags.add(ch);
+    }
+  }
+  return { flags, vals, pos };
+}
+
+// index of the wrapped command after a wrapper's options and leading operands
+function skipWrapper(words, i, sp, name) {
+  while (i < words.length) {
+    const a = words[i];
+    if (a === '--') { i++; break; }
+    if (a === '-' && name === 'env') { i++; continue; }
+    if (a.length < 2 || a[0] !== '-') break;
+    i++;
+    if (a.startsWith('--')) { if (!a.includes('=') && sp.l?.includes(a.slice(2))) i++; continue; }
+    for (let j = 1; j < a.length; j++) {
+      if (sp.o?.includes(a[j])) break;
+      if (sp.v?.includes(a[j])) { if (j === a.length - 1) i++; break; }
+    }
+  }
+  return i + (sp.pos ?? 0);
+}
+
+// bash/sh -c BODY -> BODY | null
+function shellBody(args) {
+  let c = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--' || a === '-') return c ? args[i + 1] ?? null : null;
+    if (a.length > 1 && (a[0] === '-' || a[0] === '+')) {
+      if (a.startsWith('--')) { if (a === '--rcfile' || a === '--init-file') i++; continue; }
+      if (a.includes('c', 1)) c = true;
+      if (/[oO]/.test(a.slice(1))) i++;
+      continue;
+    }
+    return c ? a : null;
+  }
+  return null;
+}
+
+// pwsh / powershell -Command ... | -EncodedCommand B64 -> script text | null
+function pwshBody(args) {
+  for (let i = 0; i < args.length; i++) {
+    const m = /^[-/]([A-Za-z]+)(:.*)?$/.exec(args[i]);
+    if (!m) return null;
+    const n = m[1].toLowerCase();
+    if ('command'.startsWith(n)) return args.slice(i + 1).join(' ') || null;
+    if ('encodedcommand'.startsWith(n) || n === 'ec') {
+      const b = args[i + 1];
+      return b ? Buffer.from(b, 'base64').toString('utf16le') : null;
+    }
+    if ('file'.startsWith(n)) return null;
+    if (!m[2] && (PS_CLI_VALUED.has(n) || (n.length >= 3 && [...PS_CLI_VALUED].some((x) => x.startsWith(n))))) i++;
+  }
+  return null;
+}
+
+// [IO.File]::Method(path, ...) anywhere in a PowerShell segment
+function ioFileTargets(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    const m = IO_FILE.exec(words[i]);
+    if (!m) continue;
+    const meth = m[1].toLowerCase();
+    const idx = /^(copy|move|replace)$/.test(meth) ? 1
+      : /^(write|append)all|^(create|createtext|appendtext|openwrite)$/.test(meth) ? 0 : -1;
+    if (idx < 0) continue;
+    const arg = [m[2], ...words.slice(i + 1)].join(' ').split(',')[idx];
+    const p = arg === undefined ? '' : arg.trim().replace(/\)+$/, '').trim();
+    if (p) out.push({ p });
+  }
+  return out;
+}
+
+// cp / mv / ln / install / rsync -> [{ p, src?, into?, noDir?, rec?, contents? }]
+function copyTargets(name, args) {
+  const sp = COPY_LIKE[name];
+  const { flags, vals, pos } = gnuParse(args, sp);
+  if (name === 'install' && (flags.has('d') || flags.has('directory'))) return [];
+  const rec = sp.always === true || [...flags].some((f) => (f.length === 1 ? (sp.rec ?? '').includes(f) : (sp.lrec ?? []).includes(f)));
+  const dir = sp.tdir ? (vals.t ?? vals['target-directory']) : undefined;
+  if (dir !== undefined) return pos.map((s) => ({ p: dir, src: s, into: true, rec }));
+  if (name === 'ln' && pos.length === 1) return [{ p: basename(pos[0].replace(/[\\/]+$/, '')) }];
+  if (pos.length < 2) return [];
+  const dest = pos.pop();
+  if (name === 'rsync' && /^[^/\\]*:/.test(dest) && !/^[A-Za-z]:/.test(dest)) return []; // remote
+  const noDir = sp.tdir === true && (flags.has('T') || flags.has('no-target-directory'));
+  return pos.map((s) => ({ p: dest, src: s, rec, noDir, contents: name === 'rsync' && /[\\/]\.?$/.test(s) }));
+}
+
+// -> { targets: [{ p, src?, ... }], nested?: [{ cmd, ps }], cd?: { kind: 'cd'|'push'|'pop', dir } }
 function segmentInfo(words, ps) {
   let k = 0;
-  while (k < words.length && (PREFIXES.has(words[k].toLowerCase()) || /^[A-Za-z_]\w*=/.test(words[k]))) k++;
-  if (k >= words.length) return { targets: [] };
-  const name = basename(words[k].replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
+  for (let n = 0; k < words.length && n < 16; n++) {
+    const w = words[k];
+    if (w === '&' || w === '.' || /^[A-Za-z_]\w*=/.test(w)) { k++; continue; }
+    const wn = cmdName(w);
+    if (!Object.hasOwn(WRAPPERS, wn)) break;
+    k = skipWrapper(words, k + 1, WRAPPERS[wn], wn);
+  }
+  const io = ps ? ioFileTargets(words) : [];
+  if (k >= words.length) return { targets: io };
+  const name = cmdName(words[k]);
   const args = words.slice(k + 1);
+  if (SHELLS.has(name)) {
+    const b = shellBody(args);
+    return { targets: io, nested: b ? [{ cmd: b, ps: false }] : [] };
+  }
+  if (PWSH.has(name)) {
+    const b = pwshBody(args);
+    return { targets: io, nested: b ? [{ cmd: b, ps: true }] : [] };
+  }
   if (ps) {
-    if (name === 'pop-location' || name === 'popd') return { targets: [], cd: { kind: 'pop' } };
+    if (name === 'pop-location' || name === 'popd') return { targets: io, cd: { kind: 'pop' } };
     if (PS_LOCATION.has(name)) {
       const { named, pos } = psParams(args, PS_SPECS.location);
       const dir = named.path ?? named.literalpath ?? pos[0];
-      return { targets: [], cd: { kind: name.startsWith('push') ? 'push' : 'cd', dir: dir ?? '~' } };
+      return { targets: io, cd: { kind: name.startsWith('push') ? 'push' : 'cd', dir: dir ?? '~' } };
     }
     if (PS_COPY.has(name)) {
       const { named, pos } = psParams(args, PS_SPECS.copy);
       const path = named.path ?? named.literalpath;
       const src = path ?? pos[0];
       const dest = named.destination ?? (path !== undefined ? pos[0] : pos[1]);
-      return { targets: dest === undefined ? [] : [{ p: dest, src }] };
+      const rec = named.recurse === true || /^(move-item|mi|move|mv)$/.test(name);
+      return { targets: dest === undefined ? io : [...io, src === undefined ? { p: dest } : { p: dest, src, rec }] };
     }
     if (PS_CONTENT.has(name)) {
       const { named, pos } = psParams(args, PS_SPECS.content);
       const t = named.path ?? named.literalpath ?? pos[0];
-      return { targets: t === undefined ? [] : [{ p: t }] };
+      return { targets: t === undefined ? io : [...io, { p: t }] };
     }
     if (PS_OUTFILE.has(name) || PS_TEE.has(name)) {
       const { named, pos } = psParams(args, PS_OUTFILE.has(name) ? PS_SPECS.outfile : PS_SPECS.tee);
       const t = named.filepath ?? named.literalpath ?? pos[0];
-      return { targets: t === undefined ? [] : [{ p: t }] };
+      return { targets: t === undefined ? io : [...io, { p: t }] };
     }
-    return { targets: [] };
+    if (PS_NEWITEM.has(name)) {
+      const { named, pos } = psParams(args, PS_SPECS.newitem);
+      if (typeof named.itemtype === 'string' && /^d/i.test(named.itemtype)) return { targets: io };
+      const base = named.path ?? pos[0];
+      const t = typeof named.name === 'string' ? (base !== undefined ? `${base}/${named.name}` : named.name) : base;
+      return { targets: t === undefined ? io : [...io, { p: t }] };
+    }
+    if (PS_IEX.has(name)) {
+      const { named, pos } = psParams(args, PS_SPECS.iex);
+      const b = typeof named.command === 'string' ? named.command : pos.join(' ');
+      return { targets: io, nested: b ? [{ cmd: b, ps: true }] : [] };
+    }
+    return { targets: io };
   }
   if (name === 'cd' || name === 'pushd') {
     const dir = args.filter((a) => a === '-' || !a.startsWith('-'))[0];
     return { targets: [], cd: { kind: name === 'pushd' ? 'push' : 'cd', dir: dir ?? '~' } };
   }
   if (name === 'popd') return { targets: [], cd: { kind: 'pop' } };
-  if (name === 'tee') return { targets: args.filter((a) => !a.startsWith('-')).map((p) => ({ p })) };
-  if (name !== 'cp' && name !== 'mv') return { targets: [] };
-  let dir = null;
-  const rest = [];
-  let opts = true;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (opts && a === '--') { opts = false; continue; }
-    if (opts && (a === '-t' || a === '--target-directory')) { dir = args[++i] ?? null; continue; }
-    if (opts && a.startsWith('--target-directory=')) { dir = a.slice(19); continue; }
-    if (opts && a.startsWith('-') && a.length > 1) continue;
-    rest.push(a);
+  if (name === 'find') { // find ... -exec CMD ARGS {} \; | +  -> CMD parsed as its own command
+    const targets = [];
+    const nested = [];
+    for (let i = 0; i < args.length; i++) {
+      if (!/^-(exec|execdir|ok|okdir)$/.test(args[i])) continue;
+      let j = i + 1;
+      while (j < args.length && args[j] !== ';' && args[j] !== '+') j++;
+      const sub = segmentInfo(args.slice(i + 1, j), false);
+      targets.push(...sub.targets);
+      if (sub.nested) nested.push(...sub.nested);
+      i = j;
+    }
+    return { targets, nested };
   }
-  if (dir !== null) return { targets: rest.map((s) => ({ p: join(dir, basename(s.replace(/[\\/]+$/, ''))) })) };
-  if (rest.length < 2) return { targets: [] };
-  const dest = rest.pop();
-  return { targets: rest.map((s) => ({ p: dest, src: s })) };
+  if (name === 'eval') return { targets: [], nested: args.length ? [{ cmd: args.join(' '), ps: false }] : [] };
+  if (name === 'tee') return { targets: args.filter((a) => !a.startsWith('-')).map((p) => ({ p })) };
+  if (name === 'dd') return { targets: args.filter((a) => a.startsWith('of=')).map((a) => ({ p: a.slice(3) })) };
+  if (name === 'sed' || name === 'perl') {
+    const sed = name === 'sed';
+    const { flags, vals, pos } = gnuParse(args, sed
+      ? { v: 'efl', o: 'i', l: ['expression', 'file', 'line-length'] }
+      : { v: 'eE', o: 'iIMmxdD' });
+    if (!('i' in vals) && !flags.has('in-place') && !('in-place' in vals)) return { targets: [] };
+    const script = sed ? ['e', 'f', 'expression', 'file'].some((x) => x in vals) : 'e' in vals || 'E' in vals;
+    return { targets: (script ? pos : pos.slice(1)).map((p) => ({ p })) };
+  }
+  if (Object.hasOwn(COPY_LIKE, name)) return { targets: copyTargets(name, args) };
+  return { targets: [] };
 }
 
 function changeDir(cwd, dir, ps) {
@@ -376,8 +576,8 @@ function changeDir(cwd, dir, ps) {
   return resolve(cwd ?? process.cwd(), e);
 }
 
-// -> [{ p, src?, cwd }]; no fs access
-function shellTargets(cmd, cwd0, ps) {
+// -> [{ p, src?, into?, noDir?, rec?, contents?, cwd }]; no fs access
+function shellTargets(cmd, cwd0, ps, depth = 0) {
   const toks = tokenize(cmd, ps);
   const out = [];
   const stack = [];
@@ -386,6 +586,7 @@ function shellTargets(cmd, cwd0, ps) {
   const flush = () => {
     const info = segmentInfo(words, ps);
     for (const t of info.targets) out.push({ ...t, cwd });
+    if (info.nested && depth < 3) for (const nb of info.nested) out.push(...shellTargets(nb.cmd, cwd, nb.ps, depth + 1));
     if (info.cd) {
       if (info.cd.kind === 'pop') cwd = stack.length ? stack.pop() : null;
       else {
@@ -402,7 +603,8 @@ function shellTargets(cmd, cwd0, ps) {
     const next = toks[i + 1];
     if (next && next.w !== undefined) {
       i++;
-      if (t.op === '>') out.push({ p: next.w, cwd });
+      // `>&WORD` / `N>&WORD` duplicates a fd only for digits (`1`, `1-`) or `-`; else WORD is a file
+      if (t.op === '>' || (t.op === 'dup' && !/^(\d+-?|-)$/.test(next.w))) out.push({ p: next.w, cwd });
     }
   }
   flush();
@@ -470,15 +672,18 @@ function redactCommand(text, cwd) {
   const users = [];
   try { users.push(userInfo().username); } catch {}
   users.push(process.env.USERNAME || '', process.env.USER || '');
-  for (const u of new Set(users.filter((u) => u.length >= 3 && !['runner', 'runneradmin', 'root'].includes(u.toLowerCase())))) {
-    out = out.replace(new RegExp(`(?<!\\w)${escapeRe(u)}(?!\\w)`, 'gi'), '<redacted>');
+  // One alternation, longest first: a term inside a longer term (or username) never leaves
+  // the longer one's remainder in clear. Terms override a same-spelled username (broader).
+  const alts = new Map();
+  for (const u of users) {
+    if (u.length >= 3 && !['runner', 'runneradmin', 'root'].includes(u.toLowerCase())) alts.set(u.toLowerCase(), `(?<!\\w)${escapeRe(u)}(?!\\w)`);
   }
   const env = (process.env.CCV_PRIVACY_TERMS || '').split(/[,\r\n]/).map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
   const clone = cloneTermsFile(cwd);
-  for (const t of new Set([...env, ...fileLines(join(CLAUDE, 'privacy-terms')), ...(clone ? fileLines(clone) : [])])) {
-    out = out.replace(new RegExp(escapeRe(t), 'gi'), '<redacted>');
-  }
-  return out;
+  for (const t of [...env, ...fileLines(join(CLAUDE, 'privacy-terms')), ...(clone ? fileLines(clone) : [])]) alts.set(t.toLowerCase(), escapeRe(t));
+  if (!alts.size) return out;
+  const re = [...alts].sort((a, b) => b[0].length - a[0].length).map((x) => x[1]).join('|');
+  return out.replace(new RegExp(re, 'gi'), '<redacted>');
 }
 
 function changeOf(tool, input, cwd) {
@@ -522,6 +727,96 @@ function saveProposal(proposal) {
   renameSync(tmp, file);
 }
 
+// --- target -> manifest keys ---
+
+const claudeRootKeys = () => (claudeKeys ??= [...new Set([keyOf(CLAUDE), keyOf(real(CLAUDE))])]);
+
+// Manifest-relative keys of an absolute path, from its lexical form (a symlink / junction
+// inside ~/.claude pointing outside still names the installed path) and its resolved form.
+function relKeys(abs) {
+  const out = new Set();
+  for (const k of new Set([keyOf(abs), keyOf(real(abs))])) {
+    for (const c of claudeRootKeys()) if (under(k, c)) out.add(k.slice(c.length + 1));
+  }
+  return out;
+}
+
+const GLOB = /[*?[]|\{[^{}]*,[^{}]*\}/;
+function globSrc(pat) {
+  let re = '';
+  for (let i = 0; i < pat.length; i++) {
+    const c = pat[i];
+    if (c === '*') re += '[^/]*';
+    else if (c === '?') re += '[^/]';
+    else if (c === '[') {
+      const j = pat.indexOf(']', i + 2);
+      if (j < 0) { re += '\\['; continue; }
+      const body = pat.slice(i + 1, j);
+      const neg = body[0] === '!' || body[0] === '^';
+      re += `[${neg ? '^' : ''}${(neg ? body.slice(1) : body).replace(/[\\\]^]/g, '\\$&')}]`;
+      i = j;
+    } else if (c === '{') {
+      const j = pat.indexOf('}', i);
+      const body = j < 0 ? '' : pat.slice(i + 1, j);
+      if (!body.includes(',') || body.includes('{')) { re += '\\{'; continue; }
+      re += `(?:${body.split(',').map(globSrc).join('|')})`;
+      i = j;
+    } else re += escapeRe(c);
+  }
+  return re;
+}
+const segMatch = (pat, seg) => (GLOB.test(pat) ? new RegExp(`^${globSrc(pat)}$`, WIN ? 'i' : '').test(seg) : pat === seg);
+function globRel(pat, key) {
+  const p = pat.split('/');
+  const k = key.split('/');
+  return p.length === k.length && p.every((s, i) => segMatch(s, k[i]));
+}
+
+// Does the copy source hold `segs`? Unknown (unexpanded, glob, unresolvable cwd) and UNC
+// sources are never touched on disk and count as holding it.
+function srcHas(base, segs) {
+  if (base === null || /[*?[$%]/.test(base) || keyOf(base).startsWith('//')) return true;
+  try { statSync(join(base, ...segs)); return true; } catch { return false; }
+}
+
+// Manifest keys (not yet filtered for kept) that target t writes.
+function writtenKeys(t, lex, map, ps) {
+  const out = [];
+  if (t.src === undefined) {
+    for (const r of relKeys(lex)) {
+      if (!r) continue;
+      if (GLOB.test(r)) { for (const k of map.keys()) if (globRel(r, k)) out.push(k); } else out.push(r);
+    }
+    return out;
+  }
+  let isDir = t.into === true || (!t.noDir && /[\\/]$/.test(t.p));
+  if (!isDir && !t.noDir) try { isDir = statSync(real(lex)).isDirectory(); } catch {}
+  const name = basename(t.src.replace(/[\\/]+$/, ''));
+  const src = lexical(t.src, t.cwd, ps);
+  const into = isDir && !t.contents; // dest/<name>[/...]; else dest itself is the copy of src
+  if (into && !t.rec && !GLOB.test(name)) {
+    for (const r of relKeys(join(lex, name))) if (r) out.push(r);
+    return out;
+  }
+  if (!isDir) for (const r of relKeys(lex)) if (r) out.push(r);
+  if (!isDir && !t.rec) return out;
+  const first = into ? keyOf(name) : null;
+  const base = src === null ? null : into ? dirname(src) : src;
+  const dests = [...new Set([keyOf(lex), keyOf(real(lex))])];
+  for (const k of map.keys()) {
+    let rest = null;
+    for (const c of claudeRootKeys()) {
+      const full = `${c}/${k}`;
+      const d = dests.find((x) => under(full, x) && full !== x);
+      if (d !== undefined) { rest = full.slice(d.length + 1).split('/'); break; }
+    }
+    if (rest === null || (rest.length > 1 && !t.rec)) continue;
+    if (first !== null && !segMatch(first, rest[0])) continue;
+    if (srcHas(base, rest)) out.push(k);
+  }
+  return out;
+}
+
 function managedHits(data) {
   const tool = data.tool_name;
   const input = data.tool_input;
@@ -542,23 +837,20 @@ function managedHits(data) {
 
   const manifest = loadManifest();
   if (!manifest) return null;
-  const claudeKey = keyOf(real(CLAUDE));
+  const realClaude = real(CLAUDE);
   const hits = [];
   const seen = new Set();
   for (const t of raw) {
     const lex = lexical(t.p, t.cwd, ps);
-    if (lex === null || !plausible(lex)) continue;
-    let abs = real(lex);
-    if (t.src !== undefined) {
-      let isDir = /[\\/]$/.test(t.p);
-      if (!isDir) try { isDir = statSync(abs).isDirectory(); } catch {}
-      if (isDir) abs = real(join(abs, basename(t.src.replace(/[\\/]+$/, ''))));
+    if (lex === null) continue;
+    // a copy into an ancestor of ~/.claude (cp -r repo/.claude ~/) can still land on managed files
+    if (!plausible(lex) && !(t.src !== undefined && claudeRootKeys().some((c) => under(c, keyOf(lex))))) continue;
+    for (const rel of writtenKeys(t, lex, manifest.map, ps)) {
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const entry = manifest.map.get(rel);
+      if (entry && entry.kept !== true && typeof entry.repo_path === 'string') hits.push({ abs: join(realClaude, entry.rel), entry });
     }
-    const k = keyOf(abs);
-    if (!k.startsWith(claudeKey + '/') || seen.has(k)) continue;
-    seen.add(k);
-    const entry = manifest.map.get(k.slice(claudeKey.length + 1));
-    if (entry && entry.kept !== true && typeof entry.repo_path === 'string') hits.push({ abs, entry });
   }
   return hits.length ? { tool, input, cwd, manifest, hits } : null;
 }
@@ -574,7 +866,7 @@ function main() {
   // A managed target is identified: from here on the call is denied whatever fails.
   const { tool, input, cwd, manifest, hits } = found;
   const lines = [];
-  for (const { abs, entry } of hits) {
+  for (const { abs, entry } of hits.slice(0, MAX_PROPOSALS)) {
     const repoFile = manifest.repo ? join(manifest.repo, entry.repo_path) : entry.repo_path;
     const reason = `${abs} is installed from the ccv47 harness repo; change the repo file ${repoFile} (${entry.repo_path}) and re-run install/sync_global.py --apply.`;
     let id = null;
@@ -598,6 +890,10 @@ function main() {
     lines.push(id
       ? `${reason} The intended change is saved as inbox id ${id} (~/.claude/harness-inbox/${id}.json).`
       : `${reason} The intended change could not be saved to the inbox (~/.claude/harness-inbox; see ~/.claude/fleet/guard-errors.log); make it in the repo file ${entry.repo_path} instead.`);
+  }
+  if (hits.length > MAX_PROPOSALS) {
+    const more = hits.slice(MAX_PROPOSALS).map((h) => h.entry.repo_path);
+    lines.push(`${more.length} more installed harness files are targeted (no proposal saved): ${more.slice(0, 20).join(', ')}${more.length > 20 ? ', ...' : ''}.`);
   }
   console.log(JSON.stringify({
     hookSpecificOutput: {

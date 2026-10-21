@@ -9,6 +9,10 @@
 #   m2 fixes: PowerShell common params/aliases/prefixes, # and <# #> comments, [[ ]] / (( ))
 #   comparisons, cd/pushd/Set-Location tracking, no fs call on UNC targets (fs probe),
 #   node:crypto ids, 256 KiB change cap, command redaction, deny when the proposal save fails.
+#   ultra-pr2 fixes: one-pass longest-first redaction (G1), >&file (G2), sed/perl -i, dd,
+#   install, rsync, ln, nested bash -c / pwsh -Command / eval / iex, New-Item, [IO.File],
+#   wrapper options (G3), glob / directory / recursive copies + proposal cap (G4),
+#   symlink / junction inside ~/.claude pointing outside (G5).
 # Ends with a latency bench (p50 of 20 runs, printed, not asserted).
 # Temp HOME/USERPROFILE only; the real ~/.claude is never touched.
 # Self-contained; run from anywhere: bash .claude/hooks/test_harness_guard.sh
@@ -49,6 +53,7 @@ cat > "$CL/.ccv47-manifest.json" <<EOF
   "hooks/status.mjs": {"repo_path": ".claude/hooks/status.mjs", "sha256": "00", "kept": false},
   "hooks/new-hook.mjs": {"repo_path": ".claude/hooks/new-hook.mjs", "sha256": "01", "kept": false},
   "skills/nb/demo.ipynb": {"repo_path": "harness/skills/nb/demo.ipynb", "sha256": "02", "kept": false},
+  "linked/x.mjs": {"repo_path": ".claude/linked/x.mjs", "sha256": "04", "kept": false},
   "skills/review/SKILL.md": {"repo_path": "harness/skills/review/SKILL.md", "sha256": "03", "kept": true}}}
 EOF
 
@@ -378,7 +383,130 @@ assert "never the installed one" in text
 ')
 check "upgrade-harness skill (installed render) says: edit the repo copy, then sync_global --apply" $?
 
-# --- 7. latency bench: p50 of 20 runs per payload (printed, not asserted) ---
+# --- 7. ultra-pr2 review fixes (G1-G5) ---
+# G1: redaction is one longest-first pass; a shorter term never leaks a longer one's remainder
+export CCV_PRIVACY_TERMS='acme,acmeproj'
+run_hook "$(shell_payload Bash 'cat acmeproj.mjs acme-x.mjs > ~/.claude/hooks/status.mjs')"
+denied; check "deny: G1 command with nested privacy terms" $?
+C="$(pval "$CL/harness-inbox/$(inbox_id).json" 'p.change.command')"
+case "$C" in *proj*|*acme*) r=1;; *'<redacted>.mjs <redacted>-x.mjs'*) r=0;; *) r=1;; esac
+check "G1 longer term redacted whole, shorter term still redacted (got $C)" $r
+unset CCV_PRIVACY_TERMS
+
+# G2: >&WORD writes WORD unless WORD is digits or -
+expect_deny "G2 Bash >& file" "$(shell_payload Bash 'echo x >& ~/.claude/hooks/status.mjs')"
+expect_deny "G2 Bash 1>&file (no space)" "$(shell_payload Bash 'echo x 1>&~/.claude/hooks/status.mjs')"
+expect_deny "G2 Bash >& quoted file" "$(shell_payload Bash 'echo x >& "$HOME/.claude/hooks/status.mjs"')"
+CWD="$CL/hooks"
+expect_allow "G2 Bash 2>&1 and >&2 still fd dups" "$(shell_payload Bash 'ls 2>&1 >&2; ls 1>&2-; ls 2>&-; ls >& 2')"
+CWD="$WORK"
+
+# G3: more writers, nested shell bodies, wrapper options
+expect_deny "G3 sed -i" "$(shell_payload Bash "sed -i 's/a/b/' ~/.claude/hooks/status.mjs")"
+expect_deny "G3 sed -i.bak -e" "$(shell_payload Bash "sed -i.bak -e 's/a/b/' -- ~/.claude/hooks/status.mjs")"
+expect_deny "G3 sed --in-place -E" "$(shell_payload Bash "sed -E --in-place 's/a/b/' ~/.claude/hooks/status.mjs")"
+expect_allow "G3 sed without -i (stdout)" "$(shell_payload Bash "sed -n 's/a/b/p' ~/.claude/hooks/status.mjs")"
+expect_allow "G3 sed -i on another file, -e script names managed path" "$(shell_payload Bash "sed -i -e 's#~/.claude/hooks/status.mjs#x#' out.txt")"
+expect_deny "G3 perl -pi -e" "$(shell_payload Bash "perl -pi -e 's/a/b/' ~/.claude/hooks/status.mjs")"
+expect_deny "G3 perl -i.bak -pe" "$(shell_payload Bash "perl -i.bak -pe 's/a/b/' ~/.claude/hooks/status.mjs")"
+expect_allow "G3 perl -ne (no -i)" "$(shell_payload Bash "perl -ne 'print' ~/.claude/hooks/status.mjs")"
+expect_deny "G3 dd of=" "$(shell_payload Bash 'dd if=status.mjs of=~/.claude/hooks/status.mjs')"
+expect_allow "G3 dd if= managed (read)" "$(shell_payload Bash 'dd if=~/.claude/hooks/status.mjs of=out.bin')"
+expect_deny "G3 install -m" "$(shell_payload Bash 'install -m 644 status.mjs ~/.claude/hooks/status.mjs')"
+expect_deny "G3 install -t dir" "$(shell_payload Bash 'install -t ~/.claude/hooks status.mjs')"
+expect_allow "G3 install -d (directories only)" "$(shell_payload Bash 'install -d ~/.claude/hooks/status.mjs')"
+expect_deny "G3 rsync file" "$(shell_payload Bash 'rsync -av status.mjs ~/.claude/hooks/status.mjs')"
+expect_allow "G3 rsync from managed file" "$(shell_payload Bash 'rsync -a ~/.claude/hooks/status.mjs backup/')"
+expect_allow "G3 rsync to a remote host" "$(shell_payload Bash 'rsync -a status.mjs host:.claude/hooks/status.mjs')"
+expect_deny "G3 ln -sf" "$(shell_payload Bash 'ln -sf ../status.mjs ~/.claude/hooks/status.mjs')"
+expect_deny "G3 ln -s into dir" "$(shell_payload Bash "ln -s '$WORK/status.mjs' ~/.claude/hooks/")"
+expect_deny "G3 cp -rt clustered target dir" "$(shell_payload Bash 'cp -ft ~/.claude/hooks status.mjs')"
+expect_deny "G3 bash -c body" "$(shell_payload Bash "bash -c 'echo x > ~/.claude/hooks/status.mjs'")"
+expect_deny "G3 sh -ec body after cd" "$(shell_payload Bash "sh -ec 'cd ~/.claude && cp a hooks/status.mjs'")"
+expect_deny "G3 bash -o pipefail -c body" "$(shell_payload Bash "bash -o pipefail -c 'tee ~/.claude/hooks/status.mjs'")"
+expect_deny "G3 eval body" "$(shell_payload Bash "eval 'echo x > ~/.claude/hooks/status.mjs'")"
+expect_allow "G3 bash -c read-only body" "$(shell_payload Bash "bash -c 'cat ~/.claude/hooks/status.mjs'")"
+expect_allow "G3 bash script.sh (no -c)" "$(shell_payload Bash 'bash ./x.sh ~/.claude/hooks/status.mjs')"
+expect_deny "G3 pwsh -NoProfile -Command from Bash" "$(shell_payload Bash "pwsh -NoProfile -Command 'Set-Content ~/.claude/hooks/status.mjs x'")"
+expect_deny "G3 powershell -ExecutionPolicy Bypass -c from PowerShell" "$(shell_payload PowerShell "powershell -ExecutionPolicy Bypass -c \"'x' > ~/.claude/hooks/status.mjs\"")"
+ENC="$(node -e "process.stdout.write(Buffer.from(\"Set-Content ~/.claude/hooks/status.mjs x\", 'utf16le').toString('base64'))")"
+expect_deny "G3 pwsh -EncodedCommand" "$(shell_payload Bash "pwsh -nop -EncodedCommand $ENC")"
+expect_allow "G3 pwsh -Command read-only" "$(shell_payload PowerShell "pwsh -Command 'Get-Content ~/.claude/hooks/status.mjs'")"
+expect_allow "G3 pwsh -File script (no -Command)" "$(shell_payload PowerShell 'pwsh -File .\x.ps1 ~/.claude/hooks/status.mjs')"
+expect_deny "G3 Invoke-Expression body" "$(shell_payload PowerShell "Invoke-Expression 'Set-Content ~/.claude/hooks/status.mjs x'")"
+expect_deny "G3 PS New-Item -Force -Value" "$(shell_payload PowerShell 'New-Item -Force -Path ~/.claude/hooks/status.mjs -Value x')"
+expect_deny "G3 PS ni positional + -Name" "$(shell_payload PowerShell 'ni ~/.claude/hooks -Name status.mjs -Force')"
+expect_allow "G3 PS New-Item -ItemType Directory" "$(shell_payload PowerShell 'New-Item -ItemType Directory ~/.claude/hooks/status.mjs')"
+expect_deny "G3 PS [IO.File]::WriteAllText" "$(shell_payload PowerShell '[IO.File]::WriteAllText("$env:USERPROFILE\.claude\hooks\status.mjs", "x")')"
+expect_deny "G3 PS \$null = [System.IO.File]::AppendAllLines" "$(shell_payload PowerShell "\$null = [System.IO.File]::AppendAllLines('~/.claude/hooks/status.mjs', \$l)")"
+expect_deny "G3 PS [IO.File]::Copy dest" "$(shell_payload PowerShell "[IO.File]::Copy('status.mjs', '$CL/hooks/status.mjs', \$true)")"
+expect_allow "G3 PS [IO.File]::Copy from managed" "$(shell_payload PowerShell "[IO.File]::Copy('$CL/hooks/status.mjs', 'x.mjs')")"
+expect_allow "G3 PS [IO.File]::ReadAllText" "$(shell_payload PowerShell "[IO.File]::ReadAllText('$CL/hooks/status.mjs')")"
+expect_deny "G3 sudo -u user tee" "$(shell_payload Bash 'sudo -u bob tee ~/.claude/hooks/status.mjs')"
+expect_deny "G3 env -i NAME=v tee" "$(shell_payload Bash 'env -i -u X A=1 tee ~/.claude/hooks/status.mjs')"
+expect_deny "G3 timeout -s KILL 5 cp" "$(shell_payload Bash 'timeout -s KILL 5 cp status.mjs ~/.claude/hooks/status.mjs')"
+expect_deny "G3 nice -n 5 stdbuf -oL tee" "$(shell_payload Bash 'nice -n 5 stdbuf -oL tee ~/.claude/hooks/status.mjs')"
+expect_deny "G3 xargs -0 -I{} cp" "$(shell_payload Bash 'printf x | xargs -0 -I{} cp {} ~/.claude/hooks/status.mjs')"
+expect_deny "G3 find -exec cp {} managed file" "$(shell_payload Bash 'find . -name s.mjs -exec cp {} ~/.claude/hooks/status.mjs \;')"
+expect_deny "G3 { group; } redirect still parsed" "$(shell_payload Bash '{ echo a; echo b; } > ~/.claude/hooks/status.mjs')"
+expect_allow "G3 sudo -u user cat" "$(shell_payload Bash 'sudo -u bob cat ~/.claude/hooks/status.mjs')"
+expect_allow "G3 timeout 5 managed path as the command" "$(shell_payload Bash 'timeout 5 ~/.claude/hooks/status.mjs')"
+
+# G4: glob, directory and recursive copies
+SRC="$WORK/src"; mkdir -p "$SRC/hooks" "$SRC/other" "$SRC/notes" "$SRC/dot/.claude/hooks"
+printf 's\n' > "$SRC/hooks/status.mjs"; printf 's\n' > "$SRC/other/foo.mjs"; printf 'n\n' > "$SRC/notes/a.md"
+printf 's\n' > "$SRC/dot/.claude/hooks/status.mjs"
+expect_deny "G4 cp glob into managed dir" "$(shell_payload Bash "cp '$SRC'/hooks/* ~/.claude/hooks/")"
+expect_deny "G4 cp -t dir with glob source" "$(shell_payload Bash "cp -t ~/.claude/hooks '$SRC'/hooks/*.mjs")"
+expect_deny "G4 cp -r dir into ~/.claude" "$(shell_payload Bash "cp -r '$SRC/hooks' ~/.claude/")"
+expect_deny "G4 cp -a dir onto ~/.claude/hooks with -T" "$(shell_payload Bash "cp -aT '$SRC/hooks' ~/.claude/hooks")"
+expect_deny "G4 cp -r repo/.claude into HOME" "$(shell_payload Bash "cp -r '$SRC/dot/.claude' ~/")"
+expect_deny "G4 mv dir into ~/.claude" "$(shell_payload Bash "mv '$SRC/hooks' ~/.claude/")"
+expect_deny "G4 rsync -a src/ contents into managed dir" "$(shell_payload Bash "rsync -a '$SRC/hooks/' ~/.claude/hooks/")"
+expect_deny "G4 PS Copy-Item glob" "$(shell_payload PowerShell "Copy-Item '$SRC/hooks/*' ~/.claude/hooks/")"
+expect_deny "G4 PS Copy-Item -Recurse dir" "$(shell_payload PowerShell "Copy-Item -Recurse '$SRC/hooks' -Destination ~/.claude/")"
+expect_deny "G4 tee glob target" "$(shell_payload Bash 'echo x | tee ~/.claude/hooks/*.mjs')"
+expect_deny "G4 tee brace target" "$(shell_payload Bash 'echo x | tee ~/.claude/hooks/{status,other}.mjs')"
+expect_deny "G4 [] class glob target" "$(shell_payload Bash 'echo x > ~/.claude/hooks/[st]tatus.mjs')"
+expect_allow "G4 cp glob, no matching manifest entry" "$(shell_payload Bash "cp '$SRC'/notes/*.md ~/.claude/hooks/")"
+expect_allow "G4 cp glob, source lacks the managed names" "$(shell_payload Bash "cp '$SRC'/other/* ~/.claude/hooks/")"
+expect_allow "G4 cp -r dir without managed files into ~/.claude" "$(shell_payload Bash "cp -r '$SRC/other' ~/.claude/")"
+expect_allow "G4 cp -r dir to HOME (no .claude inside)" "$(shell_payload Bash "cp -r '$SRC/hooks' ~/")"
+expect_allow "G4 cp file to HOME" "$(shell_payload Bash 'cp status.mjs ~/')"
+expect_allow "G4 cp dir without -r" "$(shell_payload Bash "cp '$SRC/hooks' ~/.claude/")"
+expect_allow "G4 glob matching only a kept entry" "$(shell_payload Bash 'echo x | tee ~/.claude/skills/review/*')"
+expect_allow "G4 xargs -I{} placeholder into managed dir" "$(shell_payload Bash 'ls | xargs -I{} cp {} ~/.claude/hooks/')"
+expect_allow "G4 cp -r from ~/.claude to a backup" "$(shell_payload Bash 'cp -r ~/.claude/hooks ./backup/')"
+
+# G4: many hits -> at most 5 proposals, the rest listed in the message
+H6="$WORK/home6"; mkdir -p "$H6/.claude/hooks" "$SRC/many/hooks"
+FILES6=""
+for i in 1 2 3 4 5 6 7; do
+  printf 'x\n' > "$SRC/many/hooks/h$i.mjs"
+  FILES6="$FILES6${FILES6:+,}\"hooks/h$i.mjs\": {\"repo_path\": \".claude/hooks/h$i.mjs\", \"sha256\": \"0$i\", \"kept\": false}"
+done
+printf '{"schema_version": 1, "repo": "%s", "files": {%s}}\n' "$REPO" "$FILES6" > "$H6/.claude/.ccv47-manifest.json"
+RUN_HOME="$H6"; if [ "$PLAT" = "win32" ]; then RUN_UP="$(winpath "$H6")"; else RUN_UP="$H6"; fi
+run_hook "$(shell_payload Bash "cp -r '$SRC/many/hooks' ~/.claude/")"
+denied; check "deny: G4 recursive copy over 7 managed files" $?
+N6="$(ls "$H6/.claude/harness-inbox" 2>/dev/null | wc -l | tr -d ' ')"
+[ "$N6" = "5" ]; check "G4 proposals capped at 5 (got $N6)" $?
+case "$OUT" in *"2 more installed harness files"*) r=0;; *) r=1;; esac; check "G4 deny message lists the uncapped remainder" $r
+RUN_HOME="$HOMEL"; RUN_UP="$UP_DEFAULT"
+
+# G5: a symlink / junction inside ~/.claude pointing outside still guards the installed path
+OUTSIDE="$WORK/outside"; mkdir -p "$OUTSIDE"; printf 'o\n' > "$OUTSIDE/x.mjs"
+if node -e "require('fs').symlinkSync(process.argv[1], process.argv[2], process.platform === 'win32' ? 'junction' : 'dir')" "$OUTSIDE" "$CL/linked" 2>/dev/null; then
+  expect_deny "G5 Write through linked dir" "$(write_payload "$CL/linked/x.mjs")"
+  expect_deny "G5 Bash redirect through linked dir" "$(shell_payload Bash 'echo x > ~/.claude/linked/x.mjs')"
+  expect_deny "G5 cp into linked dir" "$(shell_payload Bash 'cp status.mjs ~/.claude/linked/x.mjs')"
+  expect_allow "G5 non-managed file in linked dir" "$(write_payload "$CL/linked/y.mjs")"
+  expect_allow "G5 the outside target itself (not an installed path)" "$(write_payload "$OUTSIDE/x.mjs")"
+else
+  skip "G5 symlink/junction could not be created"
+fi
+
+# --- 8. latency bench: p50 of 20 runs per payload (printed, not asserted) ---
 env HOME="$HOMEL" USERPROFILE="$UP_DEFAULT" node -e '
 const { spawnSync } = require("child_process");
 const [hook, cwd] = process.argv.slice(1);
