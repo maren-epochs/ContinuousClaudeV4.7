@@ -41,7 +41,7 @@ Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-
 | `ask-queue.mjs` | PreToolUse:AskUserQuestion | Only while away mode is on (`~/.claude/fleet/away`, `fleet.py away on\|off`): denies the question box and queues the questions in `~/.claude/fleet/questions/<session_id>.json`, so the session keeps working and can read messages; it lists them in its reply. Answer there (`fleet.py answer`) or from `/fleet questions` (clickable boxes, relayed by SendMessage). Away off = boxes as usual. Fails open |
 | `fleet-audit.mjs` | PostToolUse:Bash\|PowerShell (unfiltered) | Appends risky shell commands (force-push, history rewrite, hard reset, recursive delete, settings edit, global install) to `~/.claude/fleet/audit.jsonl`, secrets and private terms redacted; never blocks |
 
-Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. The fleet hooks (harness-guard, fleet-audit, ask-queue) are added by `py -3.13 install/register_hooks.py` (user-run). Tests: `.claude/hooks/test_*.sh`.
+Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. The fleet hooks (harness-guard, fleet-audit, ask-queue) are added by `py -3.13 install/register_hooks.py` (Claude runs it; hand over only if denied). Tests: `.claude/hooks/test_*.sh`.
 
 **Handoff root (all handoff readers/writers):** project `thoughts/shared/handoffs/` if it exists, else `~/.claude/handoffs/<project-dir-basename>/` — user repos never get a `thoughts/` dir.
 

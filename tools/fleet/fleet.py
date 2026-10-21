@@ -917,40 +917,62 @@ def _mtime(path: Path) -> float | None:
 
 
 _COMMAND = re.compile(r'"command":\s*"((?:[^"\\]|\\.)*)"')
-# stdout redirect (not 2> or >&), heredoc, or a writing cmdlet: a shell write
-_SHELL_WRITE = re.compile(
-    r"(?<![0-9&>])>>?(?!&)|<<|\btee\b|\b(?:Set|Add)-Content\b|\bOut-File\b",
-    re.IGNORECASE,
+_WORD = r"(\"[^\"]*\"|'[^']*'|[^\s;&|<>()]+)"
+# what a shell command writes to: stdout redirect (not 2>, &>, =>, ->), tee, or
+# a writing cmdlet's -Path / first positional argument
+_WRITE_TARGETS = (
+    re.compile(r"(?<![0-9&>=-])>>?\s*" + _WORD),
+    re.compile(r"\btee\s+(?:-a\s+)?" + _WORD),
+    re.compile(
+        r"\b(?:Set-Content|Add-Content|Out-File)\b[^;|]*?-(?:Literal)?(?:File)?Path\s+"
+        + _WORD,
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:Set-Content|Add-Content|Out-File)\s+(?!-)" + _WORD, re.IGNORECASE
+    ),
 )
+_ASSIGN = re.compile(r"(?:^|[\s;&|])\$?(\w+)\s*=\s*" + _WORD)
+_VAR = re.compile(r"^\$\{?(\w+)\}?$")
 
 
-def _shell_writes(tail: str) -> list[str]:
-    """Bash/PowerShell ``command`` inputs in the tail that write a file."""
-    found = []
+def _shell_targets(tail: str) -> set[str]:
+    """Base names of files the tail's Bash/PowerShell ``command`` inputs write.
+
+    ``$f`` / ``${f}`` targets resolve through ``f=...`` assignments in the same
+    command (``f=h.yaml && cat > $f <<'EOF'``); reads (``cat f``) give nothing.
+    """
+    names = set()
     for raw in _COMMAND.findall(tail):
         try:
             command = json.loads(f'"{raw}"')
         except json.JSONDecodeError:
             continue
-        if _SHELL_WRITE.search(command):
-            found.append(command)
-    return found
+        values = {k: v.strip("\"'") for k, v in _ASSIGN.findall(command)}
+        for pattern in _WRITE_TARGETS:
+            for target in pattern.findall(command):
+                target = target.strip("\"'")
+                var = _VAR.match(target)
+                if var:
+                    target = values.get(var.group(1), "")
+                if target:
+                    names.add(re.split(r"[\\/]", target)[-1])
+    return names
 
 
 def _written_by(transcript: Path, new: list[tuple[float, str]]) -> list[float]:
     """mtimes of the new handoffs this transcript's tail wrote.
 
-    A write is a ``file_path`` tool input naming the file, or a shell command
-    naming it with a write marker (a heredoc ``cat > f <<EOF``); a command that
-    only reads it (``cat f``) does not count.
+    A write is a ``file_path`` tool input whose base name is the file, or a
+    shell command whose write target is it (see ``_shell_targets``).
     """
     tail = collect.read_tail(transcript, collect.TAIL_BYTES)
-    commands = _shell_writes(tail)
+    targets = _shell_targets(tail)
     return [
         m
         for m, name in new
-        if re.search(r'"file_path":\s*"[^"]*' + re.escape(name) + '"', tail)
-        or any(name in command for command in commands)
+        if re.search(r'"file_path":\s*"(?:[^"]*[\\/])?' + re.escape(name) + '"', tail)
+        or name in targets
     ]
 
 

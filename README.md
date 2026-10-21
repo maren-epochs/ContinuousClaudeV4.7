@@ -26,7 +26,7 @@ tools/
 install/
   settings.template.json hook wiring + env config (template for ~/.claude/settings.json)
   sync_global.py   repo -> ~/.claude install (+ install manifest)
-  register_hooks.py adds the fleet hooks to ~/.claude/settings.json (user-run)
+  register_hooks.py adds the fleet hooks to ~/.claude/settings.json (Claude runs it; the user only if denied)
 ```
 
 **Visualization suite (optional).** `tools/viz/` is a charting toolkit driven by the `/visualize` skill: one palette (`palette.json`) validated by a six-check palette validator, a chart-form recommender that refuses known anti-patterns (dual axes, crowded pies, more than 8 hues), a single house style for matplotlib, seaborn, plotly, altair and bokeh, an exporter that saves any of those plus great_tables and holoviews to PNG/SVG/HTML (Playwright Chromium for HTML rasterizing), and a builder for self-contained interactive pages. It runs on host CPython: `py -3.13 -m pip install -r tools/requirements-viz.txt` then `py -3.13 -m playwright install chromium` (details in `install/README.md`).

@@ -1053,13 +1053,44 @@ class HandoffsTests(CliHome):
         self.assertTrue(rows["proj-1"].endswith("landed"), out)
         self.assertTrue(rows["proj-4"].endswith("waiting"), out)
 
-    def test_shell_write_markers(self):
-        writes = ["cat > f <<'EOF'", "echo x >> f", "tee f", "Out-File f", "x > f"]
-        reads = ["cat f", "cat f 2>/dev/null", "ls 2>&1", "grep -c x f"]
-        for command in writes:
-            self.assertTrue(fleet._SHELL_WRITE.search(command), command)
+    def targets(self, command):
+        record = json.dumps(self.shell_record(command))
+        return fleet._shell_targets(record)
+
+    def test_shell_write_targets(self):
+        writes = {
+            "cat > d/h.yaml <<'EOF'\nx\nEOF": "h.yaml",
+            "f=d/h.yaml && cat > $f <<'EOF'\nx\nEOF": "h.yaml",
+            "echo x >> 'd\\h.yaml'": "h.yaml",
+            "echo x | tee -a d/h.yaml": "h.yaml",
+            "Set-Content -Path d\\h.yaml -Value $t": "h.yaml",
+            '$t | Out-File "d\\h.yaml"': "h.yaml",
+        }
+        for command, name in writes.items():
+            self.assertEqual(self.targets(command), {name}, command)
+
+    def test_reads_copies_and_commits_are_not_writes(self):
+        reads = [
+            "cat d/h.yaml",
+            "cat d/h.yaml 2>/dev/null; ls 2>&1",
+            "cat d/h.yaml > copy.txt",
+            "git add d/h.yaml && git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"",
+            "echo 'a => d/h.yaml'",
+        ]
         for command in reads:
-            self.assertFalse(fleet._SHELL_WRITE.search(command), command)
+            self.assertNotIn("h.yaml", self.targets(command), command)
+
+    def test_name_must_match_whole_base_name(self):
+        self.handoff(self.root, "a.yaml", 3000)
+        self.transcript(
+            self.proj,
+            "sess-p1",
+            self.shell_record("cat > d/data.yaml <<'EOF'\nx\nEOF"),
+            self.write_record(str(self.root / "old_a.yaml")),
+        )
+        self.transcript(self.proj, "sess-p4", {"type": "assistant", "message": {}})
+        _, out, _ = self.run_main("handoffs", "--since", "2000")
+        self.assertTrue(self.rows(out)["proj-1"].endswith("waiting"), out)
 
     def test_since_accepts_iso_and_rejects_garbage(self):
         code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")

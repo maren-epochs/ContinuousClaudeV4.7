@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Register the fleet hooks in a Claude Code settings file (user-run, idempotent).
+"""Register the fleet hooks in a Claude Code settings file (idempotent).
 
 Adds, only when the hook is not referenced under that event already:
 
