@@ -117,7 +117,9 @@ function refreshFleet() {
   }
   try {
     const [cmd, pre] = process.env.FLEET_PYTHON ? [process.env.FLEET_PYTHON, []]
-      : process.platform === 'win32' ? ['py', ['-3.13']] : ['python3', []];
+      // pyw -> pythonw: no console. Detached py.exe has none, so its python.exe child
+      // would open a visible console window on every refresh.
+      : process.platform === 'win32' ? ['pyw', ['-3.13']] : ['python3', []];
     const child = spawn(cmd, [...pre, script, 'collect'], {
       cwd: dir, detached: true, stdio: 'ignore', windowsHide: true,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },

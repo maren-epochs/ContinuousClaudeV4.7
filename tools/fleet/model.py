@@ -478,6 +478,10 @@ def write_atomic(path: Path, text: str) -> Path:
     return path
 
 
+# Windows: no console window for children (collect runs under pythonw, which has none).
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def run_git(repo: str, *args: str, timeout: float) -> str | None:
     """Stripped stdout of ``git -C repo <args>``; None on a nonzero exit or failure."""
     try:
@@ -487,6 +491,7 @@ def run_git(repo: str, *args: str, timeout: float) -> str | None:
             text=True,
             timeout=timeout,
             check=False,
+            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
         return None

@@ -294,6 +294,7 @@ def bloks_context(home: Path) -> str | None:
             errors="replace",
             timeout=BLOKS_TIMEOUT,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.SubprocessError):
         return None

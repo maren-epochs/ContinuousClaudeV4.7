@@ -744,7 +744,7 @@ def _watchdog_fire() -> None:
     try:
         sys.stderr.write("fleet collect: deadline exceeded, aborted\n")
         sys.stderr.flush()
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):  # pythonw: sys.stderr is None
         pass
     _hard_exit(WATCHDOG_EXIT)
 
