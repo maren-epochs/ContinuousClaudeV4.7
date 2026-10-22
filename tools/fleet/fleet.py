@@ -57,11 +57,11 @@ from types import ModuleType
 from typing import Any
 
 if __package__:
-    from . import collect, digest, launch, lessons, model, questions
+    from . import collect, digest, launch, lessons, model, permissions, questions
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from fleet import collect, digest, launch, lessons, model, questions
+    from fleet import collect, digest, launch, lessons, model, permissions, questions
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
 LESSONS_MAX = 10
@@ -1301,6 +1301,30 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="save ~/.claude/fleet/digests/YYYY-MM-DD.md, print the path",
     )
+    p = sub.add_parser("denials", help="permission denials across every project")
+    p.add_argument("--project", help="one project (folder name)")
+    p.add_argument(
+        "--since", type=float, metavar="DAYS", help="only the last DAYS days"
+    )
+    p.add_argument("--json", action="store_true", help="masked rows as JSON")
+    p = sub.add_parser(
+        "grant", help="queue of standing permissions for the user to apply"
+    )
+    gsub = p.add_subparsers(dest="grant_cmd", required=True)
+    g = gsub.add_parser("add", help="queue an allow rule or an auto-mode note")
+    g.add_argument(
+        "rule", nargs="?", help="exact permission rule, e.g. 'Bash(git push)'"
+    )
+    g.add_argument("--note", help="auto-mode environment note instead of a rule")
+    g.add_argument(
+        "--reason", required=True, help="what was denied, why it is low-risk"
+    )
+    g.add_argument("--project", help="default: current folder name")
+    g = gsub.add_parser("list", help="pending grants")
+    g.add_argument("--all", action="store_true", help="applied and dropped too")
+    gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
+    g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
+    g.add_argument("--dry-run", action="store_true", help="print what would be added")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1320,10 +1344,24 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
     "digest": _digest_cmd,
+    "denials": lambda a: permissions.denials_report(
+        permissions.scan(a.project, a.since), a.json
+    ),
+    "grant": lambda a: _grant_cmd(a),
     "open": lambda a: open_sessions(
         a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
     ),
 }
+
+
+def _grant_cmd(a: argparse.Namespace) -> str:
+    if a.grant_cmd == "add":
+        return permissions.add(a.rule, a.note, a.reason, a.project)
+    if a.grant_cmd == "list":
+        return permissions.list_grants(a.all)
+    if a.grant_cmd == "drop":
+        return permissions.drop(a.id)
+    return permissions.apply(a.dry_run)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1341,7 +1379,7 @@ def main(argv: list[str] | None = None) -> int:
     except Busy as exc:
         print(f"busy: {exc}", file=sys.stderr)
         return QUEUE_BUSY
-    except Refused as exc:
+    except (Refused, permissions.GrantError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
     return 0

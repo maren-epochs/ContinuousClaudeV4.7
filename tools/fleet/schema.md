@@ -17,6 +17,7 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/guard-errors.log` | text | harness-guard, ask-queue (fail-open errors) | `guard_errors_path()` |
 | `~/.claude/fleet/away` | flag file (UTC timestamp line) | `fleet.py away on` / removed by `away off` | `questions.away_path()`, `is_away`, `set_away` |
 | `~/.claude/fleet/questions/<session_id>.json` | `QuestionQueue` (section below) | ask-queue hook while away (append, atomic replace); `fleet.py answer` | `questions.load`, `questions.answer` |
+| `~/.claude/fleet/grants.json` | `GrantQueue` (section below) | `fleet.py grant add/drop/apply` under the `grants.json.lock` writer lock (same lock code as questions), atomic replace | `permissions.grants_path`, `permissions.add`, `permissions.apply` |
 | `~/.claude/fleet/collect.err` | text, one line per failed collect | `fleet.py collect`, append, capped 256 KB | `fleet._append_err` |
 | `~/.claude/fleet/digests/YYYY-MM-DD.md` | markdown digest (section below), local date | `fleet.py digest --write` (replaces); `fleet.py collect` when today's file is absent; atomic | `digest.digest_path`, `digest.write` |
 | `~/.claude/fleet/digest.err` | text, one line: `Class: message` of the last failed daily digest write (paths `<path>`, privacy hits masked, max 200 chars) | `fleet.py collect`, atomic replace; removed by the next successful daily digest step | `digest.err_path`, `digest.notice` (`fleet.py report`/`digest`, dashboard) |
@@ -287,6 +288,25 @@ a lock older than 10 s is broken). The hook waits up to 2 s, then opens the box 
 nothing; `answer` waits 5 s, then fails with "queue busy ...; try again" (exit 4, nothing written). The
 hook starts a new queue only when the file is missing: an unreadable or malformed file
 also opens the box and writes nothing. `load()` reads without the lock.
+
+## GrantQueue (`grants.json`)
+
+`{"grants": [Grant, ...]}`. Grant: `id` (`g-` + 8 hex), `kind` (`allow` = a
+`permissions.allow` rule, `note` = an `autoMode.environment` line), `value`, `reason`,
+`project`, `created_at` (UTC), `status` (`pending` / `applied` / `dropped`), `applied_at`.
+`grant add` (Claude, after a denial the user agreed to grant) refuses blanket rules
+(`Bash(*)`, a shell rule starting with `*`, `Edit(**)`), interpreter rules whose wildcard
+or inline code (`-c`, `-e`, `-m`, `-Command`) is not behind a script path, and anything
+reaching `settings.json`, `fleet.py grant`, `--force`, `reset --hard`, `filter-repo` or
+`rm -r`; an identical pending grant is reused. `grant apply` (the user, one `!` line per
+batch: Claude cannot write settings.json) re-checks every pending grant, backs up
+`settings.json` as `settings.json.bak-<YYYYmmdd-HHMMSS>-grants` (Eastern time), appends new
+rules and notes (`**Standing authorization (granted <date>)**: <note>`), keeps every other
+key and the file's EOL, and marks them `applied`. `denials [--project NAME] [--since DAYS]
+[--json]` reads `~/.claude/projects/**/*.jsonl` (subagents included): every `is_error`
+tool result carrying the classifier, permission-prompt or deny-rule text, paired with its
+tool call; rejected question boxes are not denials. Commands are shown with key/token
+values, long tokens and privacy-guard hits masked.
 
 ## AuditEvent (`audit.jsonl`)
 

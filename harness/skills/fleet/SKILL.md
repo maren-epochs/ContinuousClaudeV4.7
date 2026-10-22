@@ -1,6 +1,6 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary", "denials", "what got blocked", "grant permission", "standing authorization"
 user-invocable: true
 allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
@@ -179,6 +179,22 @@ name (`--suppressApplicationTitle` keeps it).
    the last tab is requested; the new sessions are independent of this one. Exit 1 = unknown name, missing folder or no `wt.exe`. `--all` without a terminal only
    lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
    them. In the user's own terminal, `open --all` lists them and asks which to open.
+
+## /fleet denials
+
+`denials [--project NAME] [--since DAYS]` lists tool calls the permission system or the
+auto-mode classifier refused, per project and (tool, reason), commands masked. For each
+recurring, low-risk group (not credentials, live money, production data, force-push or
+history rewrites) ask with AskUserQuestion whether to grant it, naming the exact rule.
+
+## /fleet grant
+
+`grant add '<exact rule>' --reason '...'` (or `--note '...'` for an auto-mode note) queues an
+agreed grant; refusals (blanket, interpreter wildcard, settings.json, destructive git) are
+final - narrow the rule instead. `grant list` shows the queue, `grant drop <id>` removes one.
+Claude cannot write `~/.claude/settings.json`: end the reply with the one batch line
+`! py -3.13 ~/.claude/tools/fleet/fleet.py grant apply` for the user; never run `grant apply`
+yourself.
 
 ## /fleet dashboard
 

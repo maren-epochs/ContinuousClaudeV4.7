@@ -17,7 +17,7 @@ Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-
 | `/resume-handoff` | Session start | Resume from handoff document |
 | `/upgrade-harness` | Extend Ouros | Add new external functions to Ouros sandbox |
 | `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
-| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), `digest` (plain-language daily summary), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
+| `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), `digest` (plain-language daily summary), `denials` (permission/classifier denials across every project) + `grant add|list|drop|apply` (standing-permission queue; the user runs `apply`), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
 
 ## Agents
 
@@ -95,7 +95,7 @@ Consumers import `from ccv_viz import ...` after the one-line PRELUDE in `/visua
 
 ## Fleet (tools/fleet)
 
-Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|handoffs|away|questions|answer|open|digest|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
+Cross-session view and harness inbox for every Claude Code session on this machine. Stdlib Python (`py -3.13 tools/fleet/fleet.py collect|report|json|inbox|show|apply|reject|lessons|handoffs|away|questions|answer|open|digest|denials|grant|dashboard`), driven by `/fleet`. Data lives only under `~/.claude`, never in a repo:
 
 | Path | What |
 |------|------|
@@ -103,6 +103,7 @@ Cross-session view and harness inbox for every Claude Code session on this machi
 | `~/.claude/fleet/audit.jsonl` | fleet-audit events |
 | `~/.claude/fleet/digests/YYYY-MM-DD.md` | Masked daily digest (sessions needing attention, machine, sync, inbox, 24 h audit count); `fleet.py digest --write`, and `collect` writes it once per local day when absent (a failure never changes collect's exit code or output: masked reason in `~/.claude/fleet/digest.err`, deleted by the next successful run; `report`/`digest` and the dashboard show `digest: last daily write failed (<reason>)` while it exists) |
 | `~/.claude/fleet/away`, `~/.claude/fleet/questions/<session_id>.json` | Away flag; per-session question queue written by ask-queue while away |
+| `~/.claude/fleet/grants.json` | Standing-permission queue: `grant add` (Claude, after the user agrees), `grant apply` (the user) writes `~/.claude/settings.json` with a backup |
 | `~/.claude/harness-inbox/<id>.json` | Proposals: edits harness-guard redirected, plus lessons; `apply` writes into the repo file, never `~/.claude` |
 | `~/.claude/.ccv47-manifest.json` | Install manifest written by `sync_global.py --apply`; no manifest = guard allows everything |
 
@@ -146,7 +147,7 @@ Registries: `npm`, `py_pi`, `crates_io`, `go_modules`.
 
 Claude runs every command, push, sync and install itself (git push, `install/sync_global.py --apply`, `install/register_hooks.py`, tests, fleet commands). Never tell the user to run something Claude can run. Only when Claude's own attempt is denied (permission or auto-mode classifier) or needs the user's credentials or interactive input, hand over one `! ...` line naming the denial. Next-step lists name what Claude will do, not chores for the user.
 
-After each denial or hand-over, propose a narrow standing authorization (exact command, repo, task or path) for the `autoMode.environment` "Standing authorizations" entries in `~/.claude/settings.json`, asked with AskUserQuestion. Credentials, live money, production data, force-push and history rewrites stay with the user. Claude cannot write that file; on denial hand over one `! ...` line that appends the entry with a backup.
+After each denial or hand-over, propose a narrow standing authorization (exact command, repo, task or path) for the `autoMode.environment` "Standing authorizations" entries in `~/.claude/settings.json`, asked with AskUserQuestion. Credentials, live money, production data, force-push and history rewrites stay with the user. Queue each agreed grant with `fleet.py grant add '<exact rule>' --reason '...'` (`--note` for a checker note) and end that reply with the one batch line `! py -3.13 ~/.claude/tools/fleet/fleet.py grant apply` (Claude cannot write settings.json). A new project's first session runs `fleet.py denials --project <folder>` and proposes grants for its recurring low-risk denials.
 
 ## Architecture
 
