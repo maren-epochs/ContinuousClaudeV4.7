@@ -158,16 +158,26 @@ function getContinuityInfo(dir) {
 // low memory), severity warn/error only (info = post-sync drift, question turns);
 // Ask = alive sessions with a pending_ask object (checks.record_pending_ask), the current
 // session (status input session_id vs sessions[].session_id) excluded.
-// '?' = older than 15 min or unknown age. Empty string when the file is absent/unreadable or all counts are 0.
+// Grant = pending standing-permission grants in ~/.claude/fleet/grants.json (fleet.py grant
+// add; the user runs `grant apply`), read live, shown even without state.json.
+// '?' = older than 15 min or unknown age. Empty string when nothing to show.
 const FLEET_STALE_MS = 15 * 60 * 1000;
 const COUNTED = new Set(['warn', 'error']);
 function countAlerts(list) {
   return Array.isArray(list) ? list.filter(a => a && typeof a === 'object' && COUNTED.has(a.severity)).length : 0;
 }
+function pendingGrants() {
+  try {
+    const q = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'grants.json'), 'utf-8'));
+    const list = q && Array.isArray(q.grants) ? q.grants : [];
+    return list.filter(g => g && typeof g === 'object' && g.status === 'pending').length;
+  } catch { return 0; }
+}
 function getFleetInfo(selfId) {
+  const grants = pendingGrants();
   let s;
-  try { s = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'state.json'), 'utf-8')); } catch { return ''; }
-  if (!s || typeof s !== 'object' || Array.isArray(s)) return '';
+  try { s = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'state.json'), 'utf-8')); } catch { s = null; }
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return grants ? `fleet ${grants} grant` : '';
   const sessions = Array.isArray(s.sessions) ? s.sessions : [];
   const me = typeof selfId === 'string' && selfId ? selfId : null;
   let live = 0, alerts = 0, asks = 0;
@@ -183,6 +193,7 @@ function getFleetInfo(selfId) {
   const counts = [];
   if (live) counts.push(`${live} live`);
   if (inbox) counts.push(`${inbox} inbox`);
+  if (grants) counts.push(`${grants} grant`);
   if (asks) counts.push(`${asks} ask`);
   if (alerts) counts.push(`${alerts} alert`);
   if (!counts.length) return '';

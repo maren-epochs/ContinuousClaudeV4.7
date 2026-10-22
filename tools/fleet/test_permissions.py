@@ -268,6 +268,17 @@ class GrantQueue(Home):
         self.assertIn(b"\r\n", raw)
         self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
 
+    def test_report_shows_pending_grants(self):
+        from tools.fleet.model import FleetState
+
+        self.assertNotIn("grants:", fleet.report(FleetState(), []))
+        self.cli("grant", "add", "Bash(git push)", "--reason", "x")
+        text = fleet.report(FleetState(), [])
+        self.assertIn("grants: 1 pending, user runs: ", text)
+        self.assertIn("grant apply", text)
+        permissions.grants_path().write_text("not json", encoding="utf-8")
+        self.assertEqual(permissions.pending_count(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

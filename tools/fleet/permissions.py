@@ -354,6 +354,14 @@ def add(
     return f"queued {gid} ({n} pending): {value}\napply: {APPLY_HINT}"
 
 
+def pending_count() -> int:
+    """Pending grants on disk; 0 when the queue is absent or unreadable."""
+    try:
+        return len(_pending(_load()))
+    except GrantError:
+        return 0
+
+
 def list_grants(show_all: bool = False) -> str:
     """Pending (or every) grant, one block each, plus the apply line."""
     data = _load()

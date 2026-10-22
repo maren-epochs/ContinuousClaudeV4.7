@@ -381,6 +381,9 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
     notice = digest.notice()
     if notice:
         lines.append(notice)
+    grants = permissions.pending_count()
+    if grants:
+        lines.append(f"grants: {grants} pending, user runs: {permissions.APPLY_HINT}")
     for section in (
         _session_lines(state),
         _alert_lines(state),

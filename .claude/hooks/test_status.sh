@@ -250,6 +250,20 @@ mkstate "\"$(iso_ago 30)\"" 0 0 0 0
 run_hook "$(fpay)"
 [ "$OUT" = "$BASE" ]; check "h8 stale all-zero state -> no segment ('?' only marks shown counts) (got: ${OUT:0:160})" $?
 
+printf '{"grants":[{"status":"pending"},{"status":"pending"},{"status":"applied"},null]}' > "$FLEETDIR/grants.json"
+mkstate "\"$(iso_ago 1)\"" 1 0 0 0
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 1 live | 2 grant') r=0;; *) r=1;; esac
+check "h8b pending grants counted after inbox, applied/null skipped (got: ${OUT:0:160})" $r
+rm -f "$FLEETDIR/state.json"
+run_hook "$(fpay)"
+case "$OUT" in *' | fleet 2 grant') r=0;; *) r=1;; esac
+check "h8c grants shown without state.json (got: ${OUT:0:160})" $r
+printf 'not json' > "$FLEETDIR/grants.json"
+run_hook "$(fpay)"
+[ "$OUT" = "$BASE" ]; check "h8d unreadable grants.json and no state -> no segment (got: ${OUT:0:160})" $?
+rm -f "$FLEETDIR/grants.json"
+
 for g in null '"not-a-date"' 42; do
   mkstate "$g" 1 0 0 0
   run_hook "$(fpay)"
