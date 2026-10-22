@@ -146,6 +146,8 @@ Registries: `npm`, `py_pi`, `crates_io`, `go_modules`.
 
 Claude runs every command, push, sync and install itself (git push, `install/sync_global.py --apply`, `install/register_hooks.py`, tests, fleet commands). Never tell the user to run something Claude can run. Only when Claude's own attempt is denied (permission or auto-mode classifier) or needs the user's credentials or interactive input, hand over one `! ...` line naming the denial. Next-step lists name what Claude will do, not chores for the user.
 
+After each denial or hand-over, propose a narrow standing authorization (exact command, repo, task or path) for the `autoMode.environment` "Standing authorizations" entries in `~/.claude/settings.json`, asked with AskUserQuestion. Credentials, live money, production data, force-push and history rewrites stay with the user. Claude cannot write that file; on denial hand over one `! ...` line that appends the entry with a backup.
+
 ## Architecture
 
 Skills orchestrate — they never implement directly. Workers build. Bloks cards carry knowledge between sessions. Handoffs carry session state.
