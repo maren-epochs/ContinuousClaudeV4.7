@@ -268,6 +268,40 @@ class GrantQueue(Home):
         self.assertIn(b"\r\n", raw)
         self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
 
+    def test_revoke_removes_rule(self):
+        self.cli("grant", "add", "Bash(git push)", "--reason", "x")
+        self.cli("grant", "apply")
+        code, out, _ = self.cli(
+            "grant",
+            "add",
+            "--revoke",
+            "Edit(~/.claude/projects/*/memory/**)",
+            "--reason",
+            "y",
+        )
+        self.assertEqual(code, 0, out)
+        self.cli("grant", "add", "--revoke", "Bash(git push)", "--reason", "z")
+        self.assertEqual(
+            self.cli("grant", "add", "--revoke", "junk", "--reason", "z")[0], 1
+        )
+        self.assertEqual(
+            self.cli(
+                "grant",
+                "add",
+                "Bash(git status)",
+                "--revoke",
+                "Bash(x)",
+                "--reason",
+                "z",
+            )[0],
+            1,
+        )
+        code, out, _ = self.cli("grant", "apply")
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 changed", out)
+        data = json.loads(self.settings.read_text(encoding="utf-8"))
+        self.assertEqual(data["permissions"]["allow"], [])
+
     def test_report_shows_pending_grants(self):
         from tools.fleet.model import FleetState
 

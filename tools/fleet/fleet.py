@@ -1319,6 +1319,7 @@ def _parser() -> argparse.ArgumentParser:
         "rule", nargs="?", help="exact permission rule, e.g. 'Bash(git push)'"
     )
     g.add_argument("--note", help="auto-mode environment note instead of a rule")
+    g.add_argument("--revoke", metavar="RULE", help="remove this allow rule instead")
     g.add_argument(
         "--reason", required=True, help="what was denied, why it is low-risk"
     )
@@ -1359,7 +1360,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
 
 def _grant_cmd(a: argparse.Namespace) -> str:
     if a.grant_cmd == "add":
-        return permissions.add(a.rule, a.note, a.reason, a.project)
+        return permissions.add(a.rule, a.note, a.reason, a.project, a.revoke)
     if a.grant_cmd == "list":
         return permissions.list_grants(a.all)
     if a.grant_cmd == "drop":

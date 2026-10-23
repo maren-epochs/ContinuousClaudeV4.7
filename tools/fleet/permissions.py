@@ -27,7 +27,7 @@ from typing import Any
 from . import lessons, model, questions
 
 GRANT_ID = re.compile(r"g-[0-9a-f]{8}")
-KINDS = ("allow", "note")
+KINDS = ("allow", "note", "revoke")
 APPLY_HINT = "py -3.13 ~/.claude/tools/fleet/fleet.py grant apply"
 NOTE_PREFIX = "**Standing authorization (granted {date})**: "
 CMD_SHOWN = 110
@@ -312,15 +312,29 @@ def _pending(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [g for g in data["grants"] if g.get("status") == "pending"]
 
 
+def check_revoke(rule: str) -> str:
+    """A rule to remove: any well-formed rule (removing only narrows)."""
+    rule = rule.strip()
+    if not _RULE.fullmatch(rule):
+        raise GrantError(f"not a permission rule (Tool(spec) or mcp__name): {rule!r}")
+    return rule
+
+
 def add(
-    rule: str | None, note: str | None, reason: str, project: str | None = None
+    rule: str | None,
+    note: str | None,
+    reason: str,
+    project: str | None = None,
+    revoke: str | None = None,
 ) -> str:
     """Queue one grant; the confirmation line. An identical pending grant is reused."""
-    if (rule is None) == (note is None):
-        raise GrantError("give exactly one of a rule or --note")
-    kind, value = ("allow", check_rule(rule)) if rule is not None else ("note", "")
-    if note is not None:
-        value = check_note(note)
+    options = (("allow", rule), ("note", note), ("revoke", revoke))
+    given = [(k, v) for k, v in options if v is not None]
+    if len(given) != 1:
+        raise GrantError("give exactly one of a rule, --note or --revoke")
+    kind, raw = given[0]
+    check = {"allow": check_rule, "note": check_note, "revoke": check_revoke}[kind]
+    value = check(raw)
     reason = " ".join(reason.split())
     if not reason:
         raise GrantError(
@@ -397,12 +411,17 @@ def drop(gid: str) -> str:
 
 
 def merge(settings: dict[str, Any], grants: list[dict[str, Any]], date: str) -> int:
-    """Add grants to a settings dict in place; the number of entries added."""
+    """Apply grants to a settings dict in place; the number of entries changed."""
     allow = settings.setdefault("permissions", {}).setdefault("allow", [])
     env = settings.setdefault("autoMode", {}).setdefault("environment", [])
     added = 0
     for g in grants:
-        if g["kind"] == "allow":
+        if g["kind"] == "revoke":
+            rule = check_revoke(g["value"])
+            if rule in allow:
+                allow.remove(rule)
+                added += 1
+        elif g["kind"] == "allow":
             rule = check_rule(g["value"])
             if rule not in allow:
                 allow.append(rule)
@@ -448,6 +467,6 @@ def apply(dry_run: bool = False) -> str:
             _save(data)
     except questions.QuestionError as exc:
         raise GrantError(str(exc)) from exc
-    head = f"applied {len(pending)} grant(s), {added} new in {path.name}"
+    head = f"applied {len(pending)} grant(s), {added} changed in {path.name}"
     tail = f"; backup {backup.name}" if added else ""
     return head + tail + ":\n  " + "\n  ".join(lines)

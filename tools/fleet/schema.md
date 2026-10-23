@@ -291,7 +291,7 @@ also opens the box and writes nothing. `load()` reads without the lock.
 
 ## GrantQueue (`grants.json`)
 
-`{"grants": [Grant, ...]}`. Grant: `id` (`g-` + 8 hex), `kind` (`allow` = a
+`{"grants": [Grant, ...]}`. Grant: `id` (`g-` + 8 hex), `kind` (`revoke` = remove that `permissions.allow` rule, `allow` = a
 `permissions.allow` rule, `note` = an `autoMode.environment` line), `value`, `reason`,
 `project`, `created_at` (UTC), `status` (`pending` / `applied` / `dropped`), `applied_at`.
 `grant add` (Claude, after a denial the user agreed to grant) refuses blanket rules

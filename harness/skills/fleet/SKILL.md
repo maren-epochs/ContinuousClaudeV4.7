@@ -189,7 +189,7 @@ history rewrites) ask with AskUserQuestion whether to grant it, naming the exact
 
 ## /fleet grant
 
-`grant add '<exact rule>' --reason '...'` (or `--note '...'` for an auto-mode note) queues an
+`grant add '<exact rule>' --reason '...'` (or `--note '...'` for an auto-mode note, `--revoke '<rule>'` to remove an allow rule) queues an
 agreed grant; refusals (blanket, interpreter wildcard, settings.json, destructive git) are
 final - narrow the rule instead. `grant list` shows the queue, `grant drop <id>` removes one.
 Claude cannot write `~/.claude/settings.json`: end the reply with the one batch line
