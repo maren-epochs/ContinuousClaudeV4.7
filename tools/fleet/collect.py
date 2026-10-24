@@ -168,6 +168,10 @@ if sys.platform == "win32":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _kernel32.OpenProcess.restype = wintypes.HANDLE
     _kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    # Declared so the 64-bit HANDLE is not passed as a 32-bit C int.
+    _kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, wintypes.LPDWORD)
+    _kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE, *(wintypes.LPFILETIME,) * 4)
+    _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     _QUERY_LIMITED = 0x1000
     _STILL_ACTIVE = 259
 

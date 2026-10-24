@@ -382,6 +382,15 @@ class ApplyRefusalTests(CliHome):
         self.assert_refused(needle=".key")
         self.assertEqual(key.read_text(), "SECRET")
 
+    def test_target_inside_dot_git_is_refused(self):
+        for rel in (".git/hooks/pre-commit", ".GIT/config"):
+            self.proposal(
+                target={"installed_path": "x", "repo_path": rel},
+                change={"tool": "Write", "content": "#!/bin/sh\necho pwned\n"},
+            )
+            self.assert_refused(needle=".git")
+        self.assertFalse((self.repo / ".git" / "hooks" / "pre-commit").exists())
+
     def test_repo_without_git_is_refused(self):
         shutil.rmtree(self.repo / ".git")
         self.proposal()

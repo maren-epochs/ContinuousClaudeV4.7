@@ -597,6 +597,8 @@ def _checked(root: Path, path: Path, label: str) -> Path:
         )
     if path.suffix.lower() == ".key":
         raise Refused(f"refusing to open a .key file: {path}")
+    if any(part.lower() == ".git" for part in path.relative_to(root).parts):
+        raise Refused(f"refusing to write inside .git (hooks run on commit): {path}")
     return path
 
 
