@@ -57,11 +57,20 @@ from types import ModuleType
 from typing import Any
 
 if __package__:
-    from . import collect, digest, launch, lessons, model, permissions, questions
+    from . import boxes, collect, digest, launch, lessons, model, permissions, questions
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from fleet import collect, digest, launch, lessons, model, permissions, questions
+    from fleet import (
+        boxes,
+        collect,
+        digest,
+        launch,
+        lessons,
+        model,
+        permissions,
+        questions,
+    )
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
 LESSONS_MAX = 10
@@ -1329,6 +1338,12 @@ def _parser() -> argparse.ArgumentParser:
     gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
     g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
     g.add_argument("--dry-run", action="store_true", help="print what would be added")
+    p = sub.add_parser(
+        "answer-box", help="type an answer into a session's open question box (Windows)"
+    )
+    p.add_argument("tab", help="Windows Terminal tab title (the project folder name)")
+    p.add_argument("text", nargs="?", default=boxes.HANDOFF_ANSWER, help="one line")
+    p.add_argument("--dry-run", action="store_true", help="read the box, type nothing")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1352,6 +1367,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
         permissions.scan(a.project, a.since), a.json
     ),
     "grant": lambda a: _grant_cmd(a),
+    "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
     "open": lambda a: open_sessions(
         a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
     ),
@@ -1383,7 +1399,7 @@ def main(argv: list[str] | None = None) -> int:
     except Busy as exc:
         print(f"busy: {exc}", file=sys.stderr)
         return QUEUE_BUSY
-    except (Refused, permissions.GrantError) as exc:
+    except (Refused, permissions.GrantError, boxes.BoxError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
     return 0

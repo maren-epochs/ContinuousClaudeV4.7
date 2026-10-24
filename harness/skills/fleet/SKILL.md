@@ -121,6 +121,15 @@ SendMessage from this session.
    inside the handoff, then carry on as before. Do not tell sessions to stop or pause unless
    the user asked for that.
    Pass `notify_when_idle: true` so an idle notice arrives when each one finishes its turn.
+   Sessions with status `waiting` are stopped on their own question box and will not read
+   the message until it is answered. Answer the box yourself (do not hand it to the user):
+   `answer-box <tab> --dry-run` (tab = the Windows Terminal tab title, the project folder
+   name) confirms a box is open, then `answer-box <tab>` types the default answer into its
+   "Type something." option and submits it: write a handoff now with /create-handoff and put
+   that question and every other open question in it as A-D options. Every key is sent only
+   with the tab's window in front and each step read back from the screen; the user's
+   previous tab and window are restored. Refusal (no box, tab not found or not unique, focus
+   lost, screen mismatch) = nothing more typed; report it.
 4. After the idle notices (or when the user asks), `handoffs --since <epoch>`: `landed` means
    the session's own transcript wrote (a `file_path` tool input) a handoff newer than the
    baseline, so sessions sharing a project root are told apart; `prior` means an ended
