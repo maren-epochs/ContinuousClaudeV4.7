@@ -166,7 +166,7 @@ class RuleCheck(unittest.TestCase):
             "Bash(py -3.13 tools/fleet/fleet.py handoffs --fresh *)",
             "mcp__render__list_services",
             "Edit(**/install/settings.template.json)",
-            "Edit(**/.claude/settings.local.json)",
+            "Edit(~/Documents/*/.claude/settings.local.json)",
             'PowerShell(Start-ScheduledTask "Amber Gateway watchdog")',
         ):
             self.assertEqual(permissions.check_rule(f"  {rule} "), rule)
@@ -186,6 +186,17 @@ class RuleCheck(unittest.TestCase):
             "Bash(py -3.13 ~/.claude/tools/fleet/fleet.py grant apply)",
             "Bash(rm -rf build)",
             "not a rule",
+            "Edit(**/.claude/settings.local.json)",
+            "Edit(~/.claude/**)",
+            "Write(~/.claude/*)",
+            "Edit(**/*.json)",
+            "Edit(**/settings*)",
+            "Bash(py -3.13 ~/.claude/tools/fleet/fleet.py *)",
+            "Bash(py -3.13 tools/fleet/fleet.py:*)",
+            "Bash(git push *)",
+            "Bash(git push origin *)",
+            "Bash(cp *)",
+            "PowerShell(Set-Content *)",
         ):
             with self.subTest(rule=rule), self.assertRaises(permissions.GrantError):
                 permissions.check_rule(rule)

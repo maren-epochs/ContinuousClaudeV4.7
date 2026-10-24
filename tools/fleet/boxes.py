@@ -55,8 +55,11 @@ def plan(screen: str) -> Plan:
     lines = [ln for ln in screen.splitlines() if ln.strip()]
     if not any(BOX_FOOTER in ln for ln in lines[-4:]):
         raise BoxError("no open question box on screen")
+    # Only the open box: from its last "☐" header (or the last 40 lines) to the footer, so a
+    # numbered list in the scrollback cannot steer the keys.
+    start = max((i for i, ln in enumerate(lines) if "☐" in ln), default=len(lines) - 40)
     current = target = None
-    for ln in lines:
+    for ln in lines[max(start, 0) :]:
         m = _OPTION.match(ln)
         if not m:
             continue

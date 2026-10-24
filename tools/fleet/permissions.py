@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as _dt
 import json
+import os
 import re
 import secrets
 import shutil
@@ -54,8 +55,40 @@ _ESCALATION = re.compile(
     r"|--force|\bpush\s+-f\b|reset\s+--hard|filter-(?:repo|branch)|\brm\s+-\w*r",
     re.IGNORECASE,
 )
+# A wildcard rule is refused when its pattern matches any of these (what a narrow grant
+# must never reach: Claude's own settings/instructions/hooks, the grant queue, destructive git).
+_SENSITIVE_PATHS = tuple(
+    prefix + rel
+    for rel in (
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/CLAUDE.md",
+        ".claude/hooks/x.mjs",
+        ".claude/tools/fleet/fleet.py",
+        ".claude/fleet/grants.json",
+        ".claude/projects/p/memory/m.md",
+        ".claude/skills/s/SKILL.md",
+        ".claude/agents/a.md",
+    )
+    for prefix in ("~/", "")
+)
+_SENSITIVE_COMMANDS = (
+    "py -3.13 ~/.claude/tools/fleet/fleet.py grant apply",
+    "py -3.13 tools/fleet/fleet.py grant apply",
+    "git push --force",
+    "git push -f origin main",
+    "git push origin --force main",
+    "git push origin +main",
+    "git reset --hard",
+    "git filter-repo",
+    "rm -rf ~",
+    "cp x ~/.claude/settings.json",
+    "Set-Content ~/.claude/settings.json x",
+)
+_FILE_TOOLS = frozenset({"edit", "write", "multiedit", "notebookedit"})
 _SECRET = re.compile(
-    r"(?i)((?:key|token|secret|password|passwd|client_id|code_challenge|auth)\w*[=:]\s*)\S+"
+    r"(?i)((?:key|token|secret|password|passwd|client_id|code_challenge|auth)\w*[=:]\s*"
+    r"(?:bearer\s+|basic\s+)?)\S+"
     r"|\b[A-Za-z0-9_\-]{32,}\b"
 )
 
@@ -254,6 +287,49 @@ def _open_interpreter(words: list[str]) -> bool:
     return False
 
 
+def _glob_regex(spec: str) -> re.Pattern[str]:
+    """gitignore-style path glob (``**``, ``*``, ``?``) as an anchored regex."""
+    out, i = [], 0
+    while i < len(spec):
+        if spec.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif spec.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif spec[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif spec[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(spec[i]))
+            i += 1
+    return re.compile("".join(out), re.IGNORECASE)
+
+
+def _command_regex(spec: str) -> re.Pattern[str]:
+    """Shell rule pattern (``*`` anywhere, ``:*`` prefix form) as an anchored regex."""
+    if spec.endswith(":*"):
+        spec = spec[:-2] + "*"
+    return re.compile(".*".join(re.escape(p) for p in spec.split("*")), re.IGNORECASE)
+
+
+def _reaches_sensitive(tool: str, spec: str) -> str | None:
+    """The first sensitive path or command the rule's pattern matches, else None."""
+    if "*" not in spec and "?" not in spec:
+        return None
+    tool = tool.lower()
+    if tool in _FILE_TOOLS:
+        rx = _glob_regex(spec.replace("\\", "/"))
+        return next((p for p in _SENSITIVE_PATHS if rx.fullmatch(p)), None)
+    if tool in ("bash", "powershell"):
+        rx = _command_regex(spec)
+        return next((c for c in _SENSITIVE_COMMANDS if rx.fullmatch(c)), None)
+    return None
+
+
 def check_rule(rule: str) -> str:
     """The stripped rule; GrantError for a malformed, blanket or self-escalating one."""
     rule = rule.strip()
@@ -272,9 +348,11 @@ def check_rule(rule: str) -> str:
         raise GrantError(
             f"interpreter rule refused: {rule!r}; a wildcard must follow a script path"
         )
-    if _ESCALATION.search(rule):
+    hit = _reaches_sensitive(m.group("tool") or "", spec)
+    if _ESCALATION.search(rule) or hit:
         raise GrantError(
             f"refused: {rule!r} reaches settings.json, the grant queue or destructive git"
+            + (f" (matches {hit!r})" if hit else "")
         )
     return rule
 
@@ -461,7 +539,9 @@ def apply(dry_run: bool = False) -> str:
                 shutil.copy2(path, backup)
                 eol = "\r\n" if "\r\n" in raw else "\n"
                 text = json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
-                path.write_bytes(text.replace("\n", eol).encode("utf-8"))
+                tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+                tmp.write_bytes(text.replace("\n", eol).encode("utf-8"))
+                os.replace(tmp, path)
             for g in pending:
                 g["status"], g["applied_at"] = "applied", model.now_iso()
             _save(data)

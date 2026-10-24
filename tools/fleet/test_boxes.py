@@ -46,6 +46,11 @@ class Plan(unittest.TestCase):
         with self.assertRaises(boxes.BoxError):
             boxes.plan("● working...\n❯ \n  status line")
 
+    def test_scrollback_list_ignored(self):
+        old = "❯ 1. stale item\n  7. Type something.\n" * 3
+        p = boxes.plan(old + BOX)
+        self.assertEqual((p.current, p.target), (1, 4))
+
     def test_box_without_type_option_refused(self):
         with self.assertRaises(boxes.BoxError):
             boxes.plan(BOX.replace("Type something.", "Other"))
