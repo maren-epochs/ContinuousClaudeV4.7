@@ -1,6 +1,6 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary", "denials", "what got blocked", "grant permission", "standing authorization"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary", "denials", "what got blocked", "grant permission", "standing authorization", "fleet resume", "session limit", "resume after limit"
 user-invocable: true
 allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
@@ -188,6 +188,18 @@ name (`--suppressApplicationTitle` keeps it).
    the last tab is requested; the new sessions are independent of this one. Exit 1 = unknown name, missing folder or no `wt.exe`. `--all` without a terminal only
    lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
    them. In the user's own terminal, `open --all` lists them and asks which to open.
+
+## /fleet resume
+
+Restarts sessions the usage limit stopped ("You've hit your session limit · resets ...").
+1. `limits --fresh --json`: every live session whose transcript ends on the limit message,
+   with `resets` (Eastern) and `ready` (reset time passed). None -> say so and stop.
+2. For each `ready` row: `SendMessage` to its `name` with the message `resume` (an idle
+   session takes a message as its next turn), `notify_when_idle: true`. Do it yourself;
+   never hand the user the typing.
+3. Rows not yet ready: one `CronCreate` (recurring: false) at the earliest `resets` time +
+   2 min with the prompt `/fleet resume`, so this session sends the rest when they reset.
+4. Report who was resumed and when the rest will be.
 
 ## /fleet denials
 

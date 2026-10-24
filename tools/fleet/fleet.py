@@ -52,12 +52,23 @@ import secrets
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import ModuleType
 from typing import Any
 
 if __package__:
-    from . import boxes, collect, digest, launch, lessons, model, permissions, questions
+    from . import (
+        boxes,
+        collect,
+        digest,
+        launch,
+        lessons,
+        limits,
+        model,
+        permissions,
+        questions,
+    )
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,6 +78,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
         digest,
         launch,
         lessons,
+        limits,
         model,
         permissions,
         questions,
@@ -1338,6 +1350,9 @@ def _parser() -> argparse.ArgumentParser:
     gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
     g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
     g.add_argument("--dry-run", action="store_true", help="print what would be added")
+    p = sub.add_parser("limits", help="live sessions stopped on the usage limit")
+    p.add_argument("--fresh", action="store_true", help="collect first")
+    p.add_argument("--json", action="store_true", help="rows as JSON for /fleet resume")
     p = sub.add_parser(
         "answer-box", help="type an answer into a session's open question box (Windows)"
     )
@@ -1368,6 +1383,9 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     ),
     "grant": lambda a: _grant_cmd(a),
     "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
+    "limits": lambda a: limits.report(
+        limits.stopped(_state(a.fresh)), time.time(), a.json
+    ),
     "open": lambda a: open_sessions(
         a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
     ),
