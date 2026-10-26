@@ -138,6 +138,10 @@ Reviewed false positives go in `.privacy-allow` (one regex per line, full match 
 
 ### One-step install (Windows)
 
+Easiest: double-click `Install-Epoch-Harness.cmd` (send it on its own; it needs read access to this repo). It installs git if missing, clones the repo to `%USERPROFILE%\epoch-harness` (GitHub may open a browser sign-in once), runs the installer below with every prompt answered, and says when to restart Claude Code. Double-click it again later to update.
+
+Or by hand:
+
 Download the repo (Code > Download ZIP), unzip it, open PowerShell in the unzipped folder and run:
 
 ```powershell
