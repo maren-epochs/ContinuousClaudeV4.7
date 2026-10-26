@@ -180,6 +180,14 @@ class WtArgsTests(unittest.TestCase):
             ],
         )
 
+    def test_semicolons_escaped_so_wt_does_not_split_the_tab(self):
+        t = launch.Target("a;b", r"C:\p\a;b")
+        args = launch.wt_args([t], profile="x;y")
+        self.assertNotIn(";", args)  # the only bare ";" would be a tab separator
+        self.assertIn("a\\;b", args)
+        self.assertIn(r"C:\p\a\;b", args)
+        self.assertIn("x\\;y", args)
+
     def test_profile_on_every_tab(self):
         targets = [launch.Target("a", r"C:\p\a"), launch.Target("b", r"C:\p\b")]
         args = launch.wt_args(targets, profile="epoch harness")

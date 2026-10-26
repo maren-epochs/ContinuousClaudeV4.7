@@ -166,12 +166,17 @@ def choose(listed: list[Target], answer: str) -> list[Target]:
     return list(chosen.values())
 
 
+def _wt_literal(value: str) -> str:
+    """value with ``;`` escaped: wt splits its command line on ``;`` even inside an argument."""
+    return value.replace(";", "\\;")
+
+
 def _tab_args(t: Target, shell: str, profile: str | None) -> list[str]:
     args = ["new-tab"]
     if profile:
-        args += ["-p", profile]
-    args += ["--title", t.title, "--suppressApplicationTitle"]
-    return args + ["-d", t.cwd, shell, "-NoExit", "-Command", TAB_PROMPT]
+        args += ["-p", _wt_literal(profile)]
+    args += ["--title", _wt_literal(t.title), "--suppressApplicationTitle"]
+    return args + ["-d", _wt_literal(t.cwd), shell, "-NoExit", "-Command", TAB_PROMPT]
 
 
 def wt_args(

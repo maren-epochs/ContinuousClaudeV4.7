@@ -1612,7 +1612,9 @@ class DigestErrTests(CollectDigestCase):
         self.assertNotIn("Quentin", text)
 
     def test_reason_is_clipped(self):
-        self.fail_write(RuntimeError("x" * 1000))
+        self.fail_write(
+            RuntimeError("bad value " * 100)
+        )  # spaced: a 32+ char run is masked as a token
         text = self.err.read_text(encoding="utf-8").strip()
         self.assertEqual(len(text), fleet.DIGEST_ERR_MAX)
 

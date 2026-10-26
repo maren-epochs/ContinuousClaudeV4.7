@@ -374,6 +374,18 @@ class Masking(LessonsTestCase):
         self.assertIsNone(lessons.clone_terms_file(self.claude))
         self.cwd_terms.assert_not_called()
 
+    def test_mask_redacts_credentials(self):
+        guard = lessons.privacy_guard.Guard([], [], [])
+        text = (
+            "use API_KEY=abc123def and Authorization: Bearer tok999"
+            " or sk_live_ABCDEFGH1234 then " + "x" * 40
+        )
+        out = lessons.mask(text, guard)
+        for secret in ("abc123def", "tok999", "sk_live_ABCDEFGH1234", "x" * 40):
+            self.assertNotIn(secret, out)
+        self.assertIn("API_KEY=" + lessons.MASK, out)
+        self.assertEqual(lessons.mask("plain lesson text", guard), "plain lesson text")
+
     def test_mask_uses_privacy_guard(self):
         guard = lessons.privacy_guard.Guard([], [("Wombat", "t")], [])
         self.assertEqual(

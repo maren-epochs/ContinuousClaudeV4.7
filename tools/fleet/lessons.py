@@ -40,6 +40,13 @@ if _TOOLS_DIR not in sys.path:
 import privacy_guard
 
 MASK = "<redacted>"
+# Credentials a memory note may quote (key=value / Bearer forms, known prefixes, long tokens).
+SECRET = re.compile(
+    r"(?i)((?:api[_-]?key|token|secret|password|passwd|client_id|auth)\w*[=:]\s*"
+    r"(?:bearer\s+|basic\s+)?)\S+"
+    r"|\b(?:sk|pk|rk|whsec|ghp|gho|github_pat|xox[abp])_[A-Za-z0-9_\-]{8,}"
+    r"|\b[A-Za-z0-9_\-]{32,}\b"
+)
 MEMORY_TYPES = ("feedback", "reference")
 BLOKS_KINDS = ("rules", "tastes")
 BLOKS_TIMEOUT = 30
@@ -116,8 +123,9 @@ def default_guard(home: Path) -> privacy_guard.Guard:
 
 
 def mask(text: str, guard: privacy_guard.Guard) -> str:
-    """Replace every privacy-guard hit in text with MASK, line by line."""
+    """Replace credentials and every privacy-guard hit in text with MASK, line by line."""
     out = []
+    text = SECRET.sub(lambda m: (m.group(1) or "") + MASK, text)
     for line in text.split("\n"):
         hits = sorted({h.text for h in guard.scan(line)}, key=len, reverse=True)
         for hit in hits:
