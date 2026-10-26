@@ -1221,7 +1221,7 @@ class OpenStaggerParseTests(unittest.TestCase):
                 fleet._parser().parse_args(["open", "--stagger", bad])
 
     def test_open_command_passes_the_stagger_through(self):
-        args = fleet._parser().parse_args(["open", "amber", "--stagger", "2"])
+        args = fleet._parser().parse_args(["open", "acorn", "--stagger", "2"])
         with mock.patch.object(fleet, "open_sessions", return_value="") as opened:
             fleet._COMMANDS["open"](args)
         self.assertEqual(opened.call_args.kwargs["stagger"], 2.0)

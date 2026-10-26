@@ -136,6 +136,16 @@ Reviewed false positives go in `.privacy-allow` (one regex per line, full match 
 
 ## Quick start
 
+### One-step install (Windows)
+
+Download the repo (Code > Download ZIP), unzip it, open PowerShell in the unzipped folder and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install\quick_install.ps1
+```
+
+It checks Python 3.13 and Node.js 18+ (offers a winget install for either), installs the Python packages and Playwright Chromium, copies skills, agents, hooks, scripts and tools into `~/.claude` (backing up anything it replaces), and registers every hook plus the status line in `~/.claude/settings.json` (backup first, nothing duplicated, the rest of the file kept). Re-running is safe. Then restart Claude Code and run `/bootup`. `-SkipDeps` skips the package and browser steps; `-Yes` answers the winget prompts.
+
 ### Option A: Add to an existing project
 
 Copy `harness/skills/` to `.claude/skills/` and `harness/agents/` to `.claude/agents/` in your project root, plus this repo's `.claude/hooks/`, `scripts/`, and `tools/`, and use `install/settings.template.json` as the project's `.claude/settings.json` (its hook commands are project-relative). Skills, hooks, and agents are then available immediately. (Skills and agents live under `harness/` in this repo so a checkout doesn't double-register them alongside a global install.)
@@ -158,7 +168,7 @@ py -3.13 install/register_hooks.py --dry-run   # show the settings.json diff
 py -3.13 install/register_hooks.py             # back up and write ~/.claude/settings.json
 ```
 
-It needs Node 18+, never duplicates entries and keeps everything else in `settings.json`. Restart running sessions afterwards.
+It needs Node 18+, never duplicates entries and keeps everything else in `settings.json`. Restart running sessions afterwards. `register_hooks.py --all` registers every hook from `install/settings.template.json` the same way (what the one-step installer runs).
 
 ### Then
 

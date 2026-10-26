@@ -322,6 +322,74 @@ class Register(unittest.TestCase):
             self.assertEqual(list(env.load()), ["model", "env", "hooks"])
 
 
+class RegisterAll(unittest.TestCase):
+    """--all: every template hook, absolute commands, nothing duplicated."""
+
+    def env(self, td: str, data: object) -> Env:
+        env = Env(td, data)
+        _, names = _reg.template_hooks()
+        for name in names:
+            (env.hooks / name).write_text("// stub\n", encoding="utf-8")
+        return env
+
+    def test_fresh_settings_get_every_template_hook(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-reg-") as td:
+            env = self.env(td, None)
+            code, _, err = env.run("--all")
+            self.assertEqual(code, 0, err)
+            cfg = env.load()
+            self.assertEqual(cfg["statusLine"]["command"], env.cmd("status.mjs"))
+            _, names = _reg.template_hooks()
+            every = [c for ev in cfg["hooks"] for c in commands(cfg, ev)]
+            for name in names:
+                if name != "status.mjs":
+                    self.assertIn(env.cmd(name), every, name)
+            self.assertTrue(all(c.startswith('node "') for c in every))
+            reads = [
+                h for g in cfg["hooks"]["PreToolUse"] for h in g["hooks"] if "if" in h
+            ]
+            self.assertIn("Read(*.py)", [h["if"] for h in reads])
+            self.assertNotIn("env", cfg)
+            self.assertNotIn("permissions", cfg)
+
+    def test_existing_hooks_and_status_line_not_duplicated(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-reg-") as td:
+            env = self.env(td, EXISTING)
+            code, _, err = env.run("--all")
+            self.assertEqual(code, 0, err)
+            cfg = env.load()
+            self.assertEqual(cfg["statusLine"], EXISTING["statusLine"])
+            for event, name in (
+                ("PreToolUse", "tldr-read.mjs"),
+                ("PostToolUse", "worker-report-check.mjs"),
+                ("Stop", "auto-handoff-stop.mjs"),
+            ):
+                hits = [c for c in commands(cfg, event) if name in c]
+                self.assertEqual(len(hits), 1, (event, hits))
+            self.assertIn(env.cmd("pre-compact.mjs"), commands(cfg, "PreCompact"))
+            self.assertIn(env.cmd("session-start.mjs"), commands(cfg, "SessionStart"))
+            self.assertEqual(cfg["env"], EXISTING["env"])
+
+    def test_all_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-reg-") as td:
+            env = self.env(td, None)
+            env.run("--all")
+            first = env.settings.read_bytes()
+            code, out, _ = env.run("--all")
+            self.assertEqual(code, 0)
+            self.assertEqual(env.settings.read_bytes(), first)
+            self.assertIn("nothing to do", out)
+
+    def test_missing_template_hook_file_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ccv47-reg-") as td:
+            env = self.env(td, None)
+            (env.hooks / "pre-compact.mjs").unlink()
+            code, _, err = env.run("--all")
+            self.assertEqual(code, 1)
+            self.assertIn("pre-compact.mjs", err)
+            self.assertFalse(env.settings.exists())
+
+
 class StopTrigger(unittest.TestCase):
     def test_stop_hook_never_added(self) -> None:
         with tempfile.TemporaryDirectory(prefix="ccv47-reg-") as td:

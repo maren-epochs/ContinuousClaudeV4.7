@@ -342,12 +342,16 @@ def actionable(plan):
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(REPO), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
+    """git output in the repo; '' without git or outside a checkout (zip download)."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(REPO), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    except OSError:
+        return ""
 
 
 def apply_plan(target: Path, plan) -> None:

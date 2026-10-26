@@ -19,8 +19,11 @@ htmlcov/
 # Runtime state (session data, not source) — handoffs are kept: they carry session state across machines
 continuum/*
 !continuum/research/
-thoughts/shared/*
-!thoughts/shared/handoffs/
+# research outputs stay local; only the dataviz example (read by tools/viz tests) is shared
+continuum/research/*
+!continuum/research/dataviz-suite/
+# session handoffs stay local (they describe this machine's sessions)
+thoughts/
 backups/
 cache/
 file-history/

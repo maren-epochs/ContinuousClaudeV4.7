@@ -92,7 +92,7 @@ class DenialScan(Home):
 
     def test_classifier_denial_found_rejection_skipped(self):
         self.write_transcript(
-            "C--Users-x-Documents-amber",
+            "C--Users-x-Documents-acorn",
             "aaaaaaaa-1.jsonl",
             [
                 _use("t1", "Bash", "git push origin main"),
@@ -105,13 +105,13 @@ class DenialScan(Home):
         self.assertEqual(len(rows), 1)
         d = rows[0]
         self.assertEqual(
-            (d.project, d.tool, d.reason), ("amber", "Bash", "[Self-Modification]")
+            (d.project, d.tool, d.reason), ("acorn", "Bash", "[Self-Modification]")
         )
         self.assertEqual(d.command, "git push origin main")
 
     def test_subagent_transcripts_and_project_filter(self):
         self.write_transcript(
-            "C--Users-x-Documents-amber/sess/subagents",
+            "C--Users-x-Documents-acorn/sess/subagents",
             "agent-1.jsonl",
             [
                 _use("s1", "PowerShell", "Stop-ScheduledTask x"),
@@ -124,11 +124,11 @@ class DenialScan(Home):
             [_use("o1", "Bash", "git push"), _result("o1", CLASSIFIER)],
         )
         self.assertEqual(len(permissions.scan()), 2)
-        self.assertEqual([d.project for d in permissions.scan("amber")], ["amber"])
+        self.assertEqual([d.project for d in permissions.scan("acorn")], ["acorn"])
 
     def test_since_drops_old_rows(self):
         self.write_transcript(
-            "C--Users-x-Documents-amber",
+            "C--Users-x-Documents-acorn",
             "a.jsonl",
             [
                 _use("t1", "Bash", "old", ts="2020-01-01T00:00:00Z"),
@@ -140,7 +140,7 @@ class DenialScan(Home):
 
     def test_report_masks_secrets(self):
         self.write_transcript(
-            "C--Users-x-Documents-amber",
+            "C--Users-x-Documents-acorn",
             "a.jsonl",
             [
                 _use(
@@ -151,7 +151,7 @@ class DenialScan(Home):
         )
         code, out, _ = self.cli("denials")
         self.assertEqual(code, 0)
-        self.assertIn("amber (1)", out)
+        self.assertIn("acorn (1)", out)
         self.assertNotIn("sk_live_abcdefghijklmnop", out)
         code, out, _ = self.cli("denials", "--json")
         self.assertNotIn("sk_live_abcdefghijklmnop", out)
@@ -167,7 +167,7 @@ class RuleCheck(unittest.TestCase):
             "mcp__render__list_services",
             "Edit(**/install/settings.template.json)",
             "Edit(~/Documents/*/.claude/settings.local.json)",
-            'PowerShell(Start-ScheduledTask "Amber Gateway watchdog")',
+            'PowerShell(Start-ScheduledTask "Nightly watchdog")',
         ):
             self.assertEqual(permissions.check_rule(f"  {rule} "), rule)
 

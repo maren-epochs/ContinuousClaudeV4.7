@@ -21,6 +21,13 @@ with forward slashes. Every other key, value, key order, indent and EOL is kept.
 A changed file is backed up to <settings>.bak-<timestamp>-register-hooks first and
 replaced atomically. --dry-run prints the unified diff and writes nothing.
 
+--all (fresh installs, used by install/quick_install.ps1) registers every hook in
+install/settings.template.json the same way - status line (only when none is set),
+tldr-read, post-edit-diagnostics, pre-compact, worker-report-check, auto-handoff-stop,
+session-start and the fleet hooks - keeping each template group's matcher and `if`
+filters, skipping any hook already referenced under its event. Template `env` and
+permissions are never copied.
+
 Requires Node 18+ on PATH and the hook files installed (`py -3.13 install/sync_global.py
 --apply` first). Exit codes: 0 registered or already registered, 1 refused, 2 usage.
 """
@@ -64,6 +71,8 @@ ENTRIES = (
     ("PreToolUse", "AskUserQuestion", ASK),
 )
 TIMEOUT = 15
+TEMPLATE = Path(__file__).resolve().parent / "settings.template.json"
+_TEMPLATE_CMD = re.compile(r"^node \.claude/hooks/([\w.-]+\.mjs)$")
 
 
 class Refused(Exception):
@@ -88,6 +97,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--dry-run", action="store_true", help="print the diff, write nothing"
+    )
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="every hook in install/settings.template.json (fresh install)",
     )
     return ap.parse_args(argv)
 
@@ -177,6 +191,74 @@ def register(cfg: dict, hooks_dir: str) -> tuple[dict, list[str]]:
     return new, notes
 
 
+def template_hooks() -> tuple[dict, list[str]]:
+    """(template config, every hook file it names); Refused when unreadable."""
+    try:
+        tpl = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Refused(f"cannot read {TEMPLATE}: {exc}") from None
+    names: list[str] = []
+    status = (tpl.get("statusLine") or {}).get("command", "")
+    for cmd in [status] + [
+        h.get("command", "")
+        for groups in (tpl.get("hooks") or {}).values()
+        for g in groups
+        for h in g.get("hooks", [])
+    ]:
+        m = _TEMPLATE_CMD.match(cmd)
+        if m and m.group(1) not in names:
+            names.append(m.group(1))
+    return tpl, names
+
+
+def _hook_name(cmd: str) -> str:
+    """``<x>.mjs`` of a template command; Refused when not ``node .claude/hooks/<x>.mjs``."""
+    m = _TEMPLATE_CMD.match(cmd)
+    if not m:
+        raise Refused(
+            f"template command not in the `node .claude/hooks/<x>.mjs` form: {cmd}"
+        )
+    return m.group(1)
+
+
+def register_all(cfg: dict, hooks_dir: str, tpl: dict) -> tuple[dict, list[str]]:
+    """Copy of cfg with every template hook (and status line) not yet referenced added."""
+    new = json.loads(json.dumps(cfg))
+    notes: list[str] = []
+    status = tpl.get("statusLine")
+    if isinstance(status, dict) and "statusLine" not in new:
+        name = _hook_name(status["command"])
+        new["statusLine"] = {**status, "command": f'node "{hooks_dir}/{name}"'}
+        notes.append(f"added statusLine -> {name}")
+    elif isinstance(status, dict):
+        notes.append("statusLine already set, kept")
+    hooks = new.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise Refused("settings key 'hooks' is not an object")
+    for event, tgroups in (tpl.get("hooks") or {}).items():
+        groups = hooks.setdefault(event, [])
+        if not isinstance(groups, list):
+            raise Refused(f"settings hooks.{event} is not a list")
+        names = {_hook_name(h["command"]) for g in tgroups for h in g["hooks"]}
+        present = {n for n in names if referenced(groups, n)}
+        notes += [f"{n} already registered under {event}" for n in sorted(present)]
+        for tg in tgroups:
+            add = []
+            for h in tg["hooks"]:
+                name = _hook_name(h["command"])
+                if name not in present:
+                    add.append({**h, "command": f'node "{hooks_dir}/{name}"'})
+            if add:
+                groups.append({**tg, "hooks": add})
+                added = sorted({_hook_name(h["command"]) for h in tg["hooks"]})
+                notes.append(
+                    f"added {event} {tg.get('matcher') or '*'} -> {', '.join(added)}"
+                )
+        if not groups:
+            del hooks[event]
+    return new, notes
+
+
 def backup_path(path: Path) -> Path:
     """Unused <name>.bak-<timestamp>[-N]-register-hooks sibling of path."""
     stamp = _harness_now().strftime("%Y%m%d-%H%M%S")
@@ -200,7 +282,8 @@ def run(args: argparse.Namespace) -> int:
             f"Node {major} found; the hooks need Node {MIN_NODE}+ (upgrade, then rerun)"
         )
     hooks_dir = Path(os.path.abspath(args.hooks_dir))
-    missing = [n for n in HOOK_FILES if not (hooks_dir / n).is_file()]
+    tpl, tpl_names = template_hooks() if args.all else ({}, [])
+    missing = [n for n in (tpl_names or HOOK_FILES) if not (hooks_dir / n).is_file()]
     if missing:
         raise Refused(
             f"{', '.join(missing)} not found in {hooks_dir}; install first:"
@@ -208,7 +291,10 @@ def run(args: argparse.Namespace) -> int:
         )
     settings = Path(args.settings)
     cfg, eol, indent, trailing = read_settings(settings)
-    new, notes = register(cfg, hooks_dir.as_posix())
+    if args.all:
+        new, notes = register_all(cfg, hooks_dir.as_posix(), tpl)
+    else:
+        new, notes = register(cfg, hooks_dir.as_posix())
     for note in notes:
         print(note)
     if new == cfg:

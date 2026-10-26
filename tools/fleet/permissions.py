@@ -113,7 +113,7 @@ class Denial:
 
 
 def project_name(slug: str) -> str:
-    """``C--Users-x-Documents-amber`` -> ``amber``; other slugs unchanged."""
+    """``C--Users-x-Documents-acorn`` -> ``acorn``; other slugs unchanged."""
     _, sep, tail = slug.partition("-Documents-")
     return tail if sep and tail else slug
 

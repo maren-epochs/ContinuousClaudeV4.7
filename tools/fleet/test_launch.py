@@ -116,29 +116,29 @@ class CandidateTests(LaunchHome):
         self.assertEqual(launch.candidates(), [])
 
     def test_newest_stub_transcript_without_cwd_falls_back_to_older(self):
-        cwd = self.project("amber", mtime=1_000)
+        cwd = self.project("acorn", mtime=1_000)
         folder = self.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
         stub = folder / "stub.jsonl"
         stub.write_text('{"type":"ai-title","aiTitle":"t"}\n', encoding="utf-8")
         os.utime(stub, (2_000, 2_000))
         (found,) = launch.candidates()
-        self.assertEqual((found.title, found.last), ("amber", 2_000))
+        self.assertEqual((found.title, found.last), ("acorn", 2_000))
 
 
 class SelectTests(LaunchHome):
     def setUp(self):
         super().setUp()
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         self.found = launch.candidates()
 
     def test_number_name_and_case_insensitive_name(self):
-        picked = launch.select(self.found, ["2", "AMBER"])
-        self.assertEqual([t.title for t in picked], ["myrtle", "amber"])
+        picked = launch.select(self.found, ["2", "ACORN"])
+        self.assertEqual([t.title for t in picked], ["myrtle", "acorn"])
 
     def test_duplicates_collapse(self):
-        picked = launch.select(self.found, ["1", "amber"])
-        self.assertEqual([t.title for t in picked], ["amber"])
+        picked = launch.select(self.found, ["1", "acorn"])
+        self.assertEqual([t.title for t in picked], ["acorn"])
 
     def test_directory_pick_opens_an_unlisted_folder(self):
         extra = self.root / "docs" / "epoch_harness"
@@ -333,12 +333,12 @@ class OpenCommandTests(LaunchHome):
         return code, out.getvalue(), err.getvalue()
 
     def test_no_picks_lists_numbered_projects(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         code, out, _ = self.run_cli()
         self.assertEqual(code, 0)
         self.assertIn("projects (2):", out)
-        self.assertRegex(out, r"\n\s+1\s+amber ")
+        self.assertRegex(out, r"\n\s+1\s+acorn ")
         self.assertRegex(out, r"\n\s+2\s+myrtle ")
 
     def test_empty_list_says_so(self):
@@ -347,45 +347,45 @@ class OpenCommandTests(LaunchHome):
         self.assertIn("no projects to open", out)
 
     def test_dry_run_prints_wt_command_and_starts_nothing(self):
-        self.project("amber")
+        self.project("acorn")
         with mock.patch.object(launch.subprocess, "Popen") as popen:
-            code, out, _ = self.run_cli("amber", "--dry-run")
+            code, out, _ = self.run_cli("acorn", "--dry-run")
         self.assertEqual(code, 0)
         popen.assert_not_called()
-        self.assertRegex(out, r"^wt -w fleet-\d+ new-tab --title amber")
+        self.assertRegex(out, r"^wt -w fleet-\d+ new-tab --title acorn")
         self.assertIn("\"claude '/resume-handoff'\"", out)
 
     def test_dry_run_prints_every_staggered_call_with_its_delay(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         with mock.patch.object(launch.subprocess, "Popen") as popen:
             code, out, _ = self.run_cli("--all", "--yes", "--dry-run")
         self.assertEqual(code, 0)
         popen.assert_not_called()
         first, second = out.strip().splitlines()
-        name = re.match(r"wt -w (fleet-\d+) new-tab --title amber ", first).group(1)
+        name = re.match(r"wt -w (fleet-\d+) new-tab --title acorn ", first).group(1)
         self.assertTrue(
             second.startswith(f"(after 3 s) wt -w {name} new-tab --title myrtle ")
         )
         self.assertNotIn(" ; ", out)
 
     def test_stagger_option_sets_the_delay_and_zero_keeps_one_command(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         _, out, _ = self.run_cli("--all", "--yes", "--dry-run", "--stagger", "1.5")
         self.assertIn("(after 1.5 s) wt -w fleet-", out)
         _, out, _ = self.run_cli("--all", "--yes", "--dry-run", "--stagger", "0")
         self.assertEqual(len(out.strip().splitlines()), 1)
-        self.assertTrue(out.startswith("wt -w new new-tab --title amber"))
+        self.assertTrue(out.startswith("wt -w new new-tab --title acorn"))
         self.assertIn(" ; new-tab --title myrtle", out)
 
     def test_negative_stagger_is_a_usage_error(self):
         with self.assertRaises(SystemExit) as exit_:
-            self.run_cli("amber", "--stagger", "-1")
+            self.run_cli("acorn", "--stagger", "-1")
         self.assertEqual(exit_.exception.code, 2)
 
     def test_all_yes_opens_every_project(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         with (
             mock.patch.object(launch.shutil, "which", return_value="C:\\wt.exe"),
@@ -394,14 +394,14 @@ class OpenCommandTests(LaunchHome):
         ):
             code, out, _ = self.run_cli("--all", "--yes")
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "opened 2 tab(s): amber, myrtle")
+        self.assertEqual(out.strip(), "opened 2 tab(s): acorn, myrtle")
         self.assertEqual(popen.call_count, 2)
         sleep.assert_called_once_with(3.0)
         for call in popen.call_args_list:
             self.assertEqual(call.args[0].count("new-tab"), 1)
 
     def test_all_with_a_directory_pick_adds_it(self):
-        self.project("amber")
+        self.project("acorn")
         extra = self.root / "docs" / "epoch_harness"
         extra.mkdir()
         code, out, _ = self.run_cli("--all", "--yes", str(extra), "--dry-run")
@@ -410,7 +410,7 @@ class OpenCommandTests(LaunchHome):
         self.assertIn("--title epoch_harness", out)
 
     def test_all_without_a_terminal_lists_and_opens_nothing(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         with mock.patch.object(launch.subprocess, "Popen") as popen:
             code, out, _ = self.run_cli("--all")
@@ -425,17 +425,17 @@ class OpenCommandTests(LaunchHome):
         return (*result, ask)
 
     def test_all_in_a_terminal_asks_and_opens_only_the_chosen(self):
-        for name in ("amber", "massave", "myrtle", "privacy"):
+        for name in ("acorn", "birch", "myrtle", "privacy"):
             self.project(name)
         code, out, _, ask = self.run_interactive("1 3-4", "--all", "--dry-run")
         self.assertEqual(code, 0)
         ask.assert_called_once()
         self.assertIn("projects (4):", out)
         self.assertEqual(out.count("new-tab"), 3)
-        self.assertNotIn("--title massave", out)
+        self.assertNotIn("--title birch", out)
 
     def test_all_in_a_terminal_accepts_names_and_a_for_all(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         _, out, _, _ = self.run_interactive("myrtle", "--all", "--dry-run")
         self.assertEqual(out.count("new-tab"), 1)
@@ -444,16 +444,16 @@ class OpenCommandTests(LaunchHome):
         self.assertEqual(out.count("new-tab"), 2)
 
     def test_all_in_a_terminal_lists_an_extra_directory_pick(self):
-        self.project("amber")
+        self.project("acorn")
         extra = self.root / "docs" / "epoch_harness"
         extra.mkdir()
         _, out, _, _ = self.run_interactive("2", "--all", str(extra), "--dry-run")
         self.assertRegex(out, r"\n\s+2\s+epoch_harness ")
         self.assertIn("--title epoch_harness", out)
-        self.assertNotIn("--title amber", out)
+        self.assertNotIn("--title acorn", out)
 
     def test_all_in_a_terminal_enter_cancels(self):
-        self.project("amber")
+        self.project("acorn")
         with mock.patch.object(launch.subprocess, "Popen") as popen:
             code, out, _, _ = self.run_interactive("", "--all")
         self.assertEqual(code, 0)
@@ -461,13 +461,13 @@ class OpenCommandTests(LaunchHome):
         self.assertIn("cancelled: nothing opened", out)
 
     def test_all_in_a_terminal_bad_answer_refuses(self):
-        self.project("amber")
+        self.project("acorn")
         code, _, err, _ = self.run_interactive("5-9", "--all", "--dry-run")
         self.assertEqual(code, 1)
         self.assertIn("range out of 1-1: 5-9", err)
 
     def test_yes_skips_the_question(self):
-        self.project("amber")
+        self.project("acorn")
         self.project("myrtle")
         with mock.patch("builtins.input") as ask:
             code, out, _ = self.run_cli("--all", "--yes", "--dry-run", interactive=True)
@@ -476,7 +476,7 @@ class OpenCommandTests(LaunchHome):
         self.assertEqual(out.count("new-tab"), 2)
 
     def test_unknown_pick_refuses_with_exit_1(self):
-        self.project("amber")
+        self.project("acorn")
         code, _, err = self.run_cli("nope")
         self.assertEqual(code, 1)
         self.assertIn("refused: no project named 'nope'", err)
