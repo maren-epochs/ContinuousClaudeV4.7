@@ -31,7 +31,7 @@ Autonomous SDLC pipeline for Claude Code. 13 skills, 2 agents, 10 hooks (+ tldr-
 
 | Hook | Event | What it does |
 |------|-------|-------------|
-| `status.mjs` | statusLine | Context % (Claude Code's `used_percentage`, no added overhead), git info, goal from handoffs |
+| `status.mjs` | statusLine | Context % (Claude Code's `used_percentage`, no added overhead), 5-hour usage (`5h N%`, yellow from 75%, red at the `/fleet prepare` threshold; saved to `~/.claude/fleet/usage.json`), git info, goal from handoffs |
 | `tldr-read.mjs` | PreToolUse:Read | Injects structural nav map for large code files, truncates (mtime cache; `tldr-shim.mjs` serves cold reads, autostart via `TLDR_READ_SHIM_AUTOSTART=1`) |
 | `post-edit-diagnostics.mjs` | PostToolUse:Edit\|Write\|MultiEdit\|Update | Lint after edits; Python via ruff direct (E9/F63/F7/F82/syntax = error), others via tldr |
 | `pre-compact.mjs` | PreCompact | Auto-handoff before context compaction; redacted before writing (home -> `~`, private terms -> reversible `<private:XXXXXXXX>` placeholders keyed by `~/.claude/privacy-key`) via the shared library `privacy-redact.mjs` (port of `privacy_guard.redact`) |

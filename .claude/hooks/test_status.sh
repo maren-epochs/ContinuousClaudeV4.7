@@ -269,9 +269,16 @@ rm -f "$FLEETDIR/usage.json"
 run_hook "$(printf '{"session_id":"sttstU1x-0000-4000-8000-tail","workspace":{"current_dir":"%s"},"rate_limits":{"five_hour":{"used_percentage":91.5,"resets_at":1900000000},"seven_day":{"used_percentage":40,"resets_at":1900500000}}}' "$PROJ0")"
 node -e "const u=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.exit(u.five_hour_pct===91.5&&u.five_hour_resets_at===1900000000&&u.seven_day_pct===40&&Date.now()-u.at<60000?0:1)" "$FLEETDIR/usage.json" 2>/dev/null
 check "u1 rate_limits.five_hour/seven_day saved to ~/.claude/fleet/usage.json" $?
+case "$OUT" in *'! 5h 91%'*) r=0;; *) r=1;; esac
+check "u1b 91% shows red '! 5h 91%' segment (got: ${OUT:0:120})" $r
+run_hook "$(printf '{"session_id":"sttstU1x-0000-4000-8000-tail","workspace":{"current_dir":"%s"},"rate_limits":{"five_hour":{"used_percentage":29.4,"resets_at":1900000000}}}' "$PROJ0")"
+case "$OUT" in *'5h 29%'*) case "$OUT" in *'! 5h'*) r=1;; *) r=0;; esac;; *) r=1;; esac
+check "u1c 29% shows plain '5h 29%' (got: ${OUT:0:120})" $r
 rm -f "$FLEETDIR/usage.json"
 run_hook "$(payload sttstU1x '')"
 [ ! -f "$FLEETDIR/usage.json" ] && [ "$RC" -eq 0 ]; check "u2 no rate_limits -> no usage.json, exit 0" $?
+case "$OUT" in *'5h '*) r=1;; *) r=0;; esac
+check "u2b no rate_limits -> no 5h segment" $r
 
 for g in null '"not-a-date"' 42; do
   mkstate "$g" 1 0 0 0

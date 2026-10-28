@@ -197,6 +197,19 @@ function writeUsage(data) {
   } catch {}
 }
 
+// "5h 29%" from rate_limits.five_hour: yellow from 75%, red with "!" from the /fleet
+// prepare threshold (FLEET_PREPARE_PCT, default 90). Empty when Claude Code sends none.
+function usageSegment(data) {
+  const five = data && data.rate_limits && data.rate_limits.five_hour;
+  const pct = Number(five && five.used_percentage);
+  if (!five || !Number.isFinite(pct)) return '';
+  const p = Math.floor(pct);
+  const prepare = Number(process.env.FLEET_PREPARE_PCT) || 90;
+  if (p >= prepare) return `\x1b[31m! 5h ${p}%\x1b[0m`;
+  if (p >= 75) return `\x1b[33m5h ${p}%\x1b[0m`;
+  return `\x1b[32m5h ${p}%\x1b[0m`;
+}
+
 function getFleetInfo(selfId) {
   const grants = pendingGrants();
   let s;
@@ -262,6 +275,8 @@ function main() {
   else ctx = `\x1b[32m${display} ${pct}%\x1b[0m`;
 
   const parts = [ctx];
+  const usage = usageSegment(data);
+  if (usage) parts.push(usage);
   if (git) parts.push(git);
   if (pct >= 80 && now) parts.push(now);
   else if (continuity) parts.push(continuity);
