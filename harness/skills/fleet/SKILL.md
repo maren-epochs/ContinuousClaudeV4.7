@@ -191,15 +191,26 @@ name (`--suppressApplicationTitle` keeps it).
 
 ## /fleet resume
 
-Restarts sessions the usage limit stopped ("You've hit your session limit · resets ...").
+Restarts sessions the usage limit stopped ("You've hit your session limit · resets ..."),
+plus any other live session the user picks.
 1. `limits --fresh --json`: every live session whose transcript ends on the limit message,
-   with `resets` (Eastern) and `ready` (reset time passed). None -> say so and stop.
-2. For each `ready` row: `SendMessage` to its `name` with the message `resume` (an idle
-   session takes a message as its next turn), `notify_when_idle: true`. Do it yourself;
-   never hand the user the typing.
-3. Rows not yet ready: one `CronCreate` (recurring: false) at the earliest `resets` time +
-   2 min with the prompt `/fleet resume`, so this session sends the rest when they reset.
-4. Report who was resumed and when the rest will be.
+   with `resets` (Eastern) and `ready` (reset time passed). Then `ListAgents` for every
+   other live session on this machine (skip this session, `cloud` and `offline` rows).
+2. Pick: with session names in the request (e.g. the scheduled re-run in step 4), use them
+   and skip the box. Otherwise ask with AskUserQuestion, `multiSelect: true`, one option per
+   project (label = project or session name), 4 per question and up to 4 questions (header
+   `Resume 1/2` ...), in this order: stopped and ready (label ends "(Recommended)", description
+   "stopped on the limit, ready now"), stopped and waiting ("stopped on the limit, resets
+   <time>"), then the other live sessions ("running, not stopped; sends resume anyway").
+   More than 16: list the rest in prose and let the user name them via Other. No live
+   session at all -> say so and stop. Nothing picked -> stop.
+3. For each picked session that is ready or not stopped: `SendMessage` to its `name` with
+   the message `resume` (an idle session takes a message as its next turn),
+   `notify_when_idle: true`. Do it yourself; never hand the user the typing.
+4. Picked sessions not yet ready: one `CronCreate` (recurring: false) at the earliest of
+   their `resets` times + 2 min with the prompt `/fleet resume <their names>`, so this
+   session sends them `resume` when they reset without asking again.
+5. Report who was resumed and when the rest will be.
 
 ## /fleet denials
 
