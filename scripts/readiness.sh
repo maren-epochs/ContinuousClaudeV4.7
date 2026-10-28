@@ -488,19 +488,30 @@ print(pct, 1 if pct < 10 else 0)
     record "security_scan" "skip" "Skipped (READINESS_SKIP_SECURE=1)" "$CAT"
   else
     await_job "$PID_SEC" || true
-    SEC_JSON=$(cat "$WORK_DIR/secure.json" 2>/dev/null || true)
-    SEC_N=$(echo "$SEC_JSON" | python3 -c "
+    # Taint + resource-leak findings, minus reviewed false positives listed in the
+    # project's .security-reviewed (tools/security_reviewed.py; sibling of scripts/
+    # in the repo and in ~/.claude). Without the helper, every finding counts.
+    SEC_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/security_reviewed.py"
+    # Windows Python cannot open MSYS paths (/tmp/..., /c/...): convert when cygpath exists.
+    native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi; }
+    if [[ -f "$SEC_HELPER" ]]; then
+      SEC_COUNTS=$(python3 "$(native "$SEC_HELPER")" "$(native "$WORK_DIR/secure.json")" "$(native "$TARGET/.security-reviewed")" 2>/dev/null || echo ERR)
+    else
+      SEC_COUNTS=$(python3 -c "
 import json,sys
-d=json.load(sys.stdin)
-s=d.get('summary',{})
-print(s.get('taint_count',0) + s.get('leak_count',0))
-" 2>/dev/null || echo ERR)
+s=json.load(sys.stdin).get('summary',{})
+print(s.get('taint_count',0) + s.get('leak_count',0), 0)
+" < "$WORK_DIR/secure.json" 2>/dev/null || echo ERR)
+    fi
+    read -r SEC_N SEC_REVIEWED <<< "$SEC_COUNTS"
+    SEC_NOTE=""
+    [[ "${SEC_REVIEWED:-0}" =~ ^[1-9] ]] && SEC_NOTE=" ($SEC_REVIEWED reviewed in .security-reviewed)"
     if [[ "$SEC_N" == ERR ]]; then
       analysis_failed "security_scan" "tldr secure"
     elif [[ "$SEC_N" -eq 0 ]]; then
-      record "security_scan" "pass" "No security issues found" "$CAT"
+      record "security_scan" "pass" "No security issues found$SEC_NOTE" "$CAT"
     else
-      record "security_scan" "fail" "$SEC_N security issues" "$CAT"
+      record "security_scan" "fail" "$SEC_N security issues$SEC_NOTE" "$CAT"
     fi
   fi
 

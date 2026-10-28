@@ -1,0 +1,7 @@
+# Reviewed `tldr secure` false positives (scripts/readiness.sh, tools/security_reviewed.py).
+# <path> | <text the finding's description contains> | <code on the flagged line> | <why it is safe>
+# A finding is discounted only while the flagged line still contains that code; any other
+# finding in the same file, or an edit to that line, counts again. Re-review on change.
+
+tools/fleet/launch.py | CommandInjection | subprocess.Popen(command, close_fds=True, env=env) | wt.exe is started with an argv list (no shell); the environment is only passed through to the new tabs, never parsed as a command
+tools/privacy_guard.py | PathTraversal | return Path(override) | CCV_PRIVACY_KEY_FILE is the user's documented override for the redaction key location; choosing that path is the feature

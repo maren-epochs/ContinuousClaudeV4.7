@@ -33,20 +33,8 @@ def _now() -> _dt.datetime:
     return _dt.datetime.now(_dt.UTC)
 
 
-def _epoch(stamp: Any) -> float | None:
-    if not isinstance(stamp, str) or not stamp:
-        return None
-    try:
-        value = _dt.datetime.fromisoformat(stamp)
-    except ValueError:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=_dt.UTC)
-    return value.timestamp()
-
-
 def _age_s(stamp: Any, now: float) -> int | None:
-    then = _epoch(stamp)
+    then = model.parse_epoch(stamp)
     return None if then is None else max(0, round(now - then))
 
 
@@ -88,7 +76,7 @@ def audit_count(now: float, window_s: float = AUDIT_WINDOW_S) -> int:
     text = collect.read_tail(model.audit_path(), collect.AUDIT_TAIL_BYTES)
     count = 0
     for event in model.parse_audit_lines(text):
-        then = _epoch(event.ts)
+        then = model.parse_epoch(event.ts)
         if then is not None and 0 <= now - then <= window_s:
             count += 1
     return count

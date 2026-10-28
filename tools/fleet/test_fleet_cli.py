@@ -1021,7 +1021,7 @@ class HandoffsTests(CliHome):
         self.assertEqual(code, 0)
         rows = self.rows(out)
         self.assertTrue(rows["proj-1"].endswith("prior"), out)
-        self.assertIn(fleet._when(3500), rows["proj-1"])
+        self.assertIn(model.local_time(3500), rows["proj-1"])
         self.assertIn("0/3 landed, 2 by an ended earlier session", out)
 
     def test_handoff_by_another_live_session_is_not_prior(self):
@@ -1104,8 +1104,8 @@ class HandoffsTests(CliHome):
     def test_times_show_in_eastern_whatever_the_machine_zone(self):
         if model.harness_tz() is None:
             self.skipTest("no tz data")
-        self.assertEqual(fleet._when(1792387370), "2026-10-19 01:22")  # EDT
-        self.assertEqual(fleet._when(1768478400), "2026-01-15 07:00")  # EST
+        self.assertEqual(model.local_time(1792387370), "2026-10-19 01:22")  # EDT
+        self.assertEqual(model.local_time(1768478400), "2026-01-15 07:00")  # EST
 
     def test_since_accepts_iso_and_rejects_garbage(self):
         code, out, _ = self.run_main("handoffs", "--since", "2026-10-08T08:00:00")

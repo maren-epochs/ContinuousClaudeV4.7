@@ -118,14 +118,6 @@ def project_name(slug: str) -> str:
     return tail if sep and tail else slug
 
 
-def _text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
-    return ""
-
-
 def _brief(inp: Any) -> str:
     if not isinstance(inp, dict):
         return ""
@@ -173,7 +165,7 @@ def _scan_file(path: Path, project: str, cutoff: str) -> list[Denial]:
                 continue
             if c.get("type") != "tool_result" or not c.get("is_error"):
                 continue
-            text = _text(c.get("content"))
+            text = model.content_text(c.get("content"))
             use_id = str(c.get("tool_use_id"))
             if not _DENIED.search(text) or use_id in seen or stamp[:10] < cutoff:
                 continue
@@ -330,6 +322,12 @@ def _reaches_sensitive(tool: str, spec: str) -> str | None:
     return None
 
 
+def _blanket(tool: str | None, spec: str) -> bool:
+    """A spec of only wildcards/separators, or a shell rule that starts with ``*``."""
+    shell = (tool or "").lower() in ("bash", "powershell")
+    return not spec.strip("*:/\\. ") or (shell and spec.startswith("*"))
+
+
 def check_rule(rule: str) -> str:
     """The stripped rule; GrantError for a malformed, blanket or self-escalating one."""
     rule = rule.strip()
@@ -337,10 +335,7 @@ def check_rule(rule: str) -> str:
     if not m:
         raise GrantError(f"not a permission rule (Tool(spec) or mcp__name): {rule!r}")
     spec = (m.group("spec") or "").strip()
-    shell = (m.group("tool") or "").lower() in ("bash", "powershell")
-    if m.group("spec") is not None and (
-        not spec.strip("*:/\\. ") or (shell and spec.startswith("*"))
-    ):
+    if m.group("spec") is not None and _blanket(m.group("tool"), spec):
         raise GrantError(
             f"blanket rule refused: {rule!r}; name the exact command or path"
         )

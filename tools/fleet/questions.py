@@ -107,14 +107,13 @@ def _locked(path: Path, wait: float | None = None) -> Iterator[None]:
     deadline = time.monotonic() + (LOCK_WAIT_S if wait is None else wait)
     while True:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except (FileExistsError, PermissionError):
-            pass  # PermissionError: Windows reports a lock file being deleted this way
-        else:
-            stamp = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            # "x": create exclusively (O_CREAT | O_EXCL); fails when another writer holds it
+            with open(lock, "x", encoding="utf-8") as fh:
+                stamp = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
                 fh.write(f"{os.getpid()} {stamp}\n")
             break
+        except (FileExistsError, PermissionError):
+            pass  # PermissionError: Windows reports a lock file being deleted this way
         try:
             if time.time() - lock.stat().st_mtime > LOCK_STALE_S:
                 lock.unlink(missing_ok=True)  # holder died; a hold lasts milliseconds

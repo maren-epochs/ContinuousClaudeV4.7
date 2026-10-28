@@ -919,20 +919,12 @@ HANDOFF_COLUMNS = (
 )
 
 
-def _when(epoch: float) -> str:
-    return (
-        _dt.datetime.fromtimestamp(epoch, _dt.UTC)
-        .astimezone(model.harness_tz())
-        .strftime("%Y-%m-%d %H:%M")
-    )
-
-
 def _new_handoffs(root: Path, since: float) -> list[tuple[float, str]]:
     """(mtime, file name) of handoff files under root modified at or after since."""
     found = []
     for dirpath, _dirs, files in os.walk(root):
         for name in files:
-            mtime = _mtime(Path(dirpath) / name)
+            mtime = model.mtime(Path(dirpath) / name)
             if (
                 name.endswith(collect.HANDOFF_SUFFIXES)
                 and mtime is not None
@@ -940,13 +932,6 @@ def _new_handoffs(root: Path, since: float) -> list[tuple[float, str]]:
             ):
                 found.append((mtime, name))
     return found
-
-
-def _mtime(path: Path) -> float | None:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
 
 
 _COMMAND = re.compile(r'"command":\s*"((?:[^"\\]|\\.)*)"')
@@ -1034,7 +1019,7 @@ def _own_handoff(
     theirs = [
         m
         for other in transcript.parent.glob("*.jsonl")
-        if other.stem not in live_ids and (_mtime(other) or 0) >= oldest
+        if other.stem not in live_ids and (model.mtime(other) or 0) >= oldest
         for m in _written_by(other, new)
     ]
     return ("prior", max(theirs)) if theirs else ("waiting", None)
@@ -1052,7 +1037,7 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
     """
     stamp = _dt.datetime.now(_dt.UTC).timestamp() if now is None else now
     base = stamp if since is None else since
-    lines = [f"since: {base:.0f} ({_when(base)})"]
+    lines = [f"since: {base:.0f} ({model.local_time(base)})"]
     live = [s for s in state.sessions if s.alive and s.cwd]
     if not live:
         return "\n".join([*lines, "no live sessions"])
@@ -1074,7 +1059,7 @@ def handoffs(state: FleetState, since: float | None, now: float | None = None) -
             s.project,
             s.kind,
             s.status,
-            _when(when) if when is not None else None,
+            model.local_time(when) if when is not None else None,
             mark,
         )
         row = " ".join(
@@ -1159,7 +1144,7 @@ def answer_question(qid: str, text: str, via: str) -> str:
 
 def _project_lines(found: list[launch.Target]) -> list[str]:
     return [f"projects ({len(found)}):"] + [
-        f"  {i:>2}  {_cell(t.title, 24)} {_when(t.last) if t.last else '-':16}  {t.cwd}"
+        f"  {i:>2}  {_cell(t.title, 24)} {model.local_time(t.last) if t.last else '-':16}  {t.cwd}"
         for i, t in enumerate(found, 1)
     ]
 
@@ -1263,6 +1248,44 @@ def _positive(value: str) -> int:
     return n
 
 
+def _add_permission_parsers(sub: Any) -> None:
+    """denials, grant, limits and answer-box subcommands."""
+    p = sub.add_parser("denials", help="permission denials across every project")
+    p.add_argument("--project", help="one project (folder name)")
+    p.add_argument(
+        "--since", type=float, metavar="DAYS", help="only the last DAYS days"
+    )
+    p.add_argument("--json", action="store_true", help="masked rows as JSON")
+    p = sub.add_parser(
+        "grant", help="queue of standing permissions for the user to apply"
+    )
+    gsub = p.add_subparsers(dest="grant_cmd", required=True)
+    g = gsub.add_parser("add", help="queue an allow rule or an auto-mode note")
+    g.add_argument(
+        "rule", nargs="?", help="exact permission rule, e.g. 'Bash(git push)'"
+    )
+    g.add_argument("--note", help="auto-mode environment note instead of a rule")
+    g.add_argument("--revoke", metavar="RULE", help="remove this allow rule instead")
+    g.add_argument(
+        "--reason", required=True, help="what was denied, why it is low-risk"
+    )
+    g.add_argument("--project", help="default: current folder name")
+    g = gsub.add_parser("list", help="pending grants")
+    g.add_argument("--all", action="store_true", help="applied and dropped too")
+    gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
+    g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
+    g.add_argument("--dry-run", action="store_true", help="print what would be added")
+    p = sub.add_parser("limits", help="live sessions stopped on the usage limit")
+    p.add_argument("--fresh", action="store_true", help="collect first")
+    p.add_argument("--json", action="store_true", help="rows as JSON for /fleet resume")
+    p = sub.add_parser(
+        "answer-box", help="type an answer into a session's open question box (Windows)"
+    )
+    p.add_argument("tab", help="Windows Terminal tab title (the project folder name)")
+    p.add_argument("text", nargs="?", default=boxes.HANDOFF_ANSWER, help="one line")
+    p.add_argument("--dry-run", action="store_true", help="read the box, type nothing")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fleet.py", description=(__doc__ or "").split("\n")[0]
@@ -1327,40 +1350,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="save ~/.claude/fleet/digests/YYYY-MM-DD.md, print the path",
     )
-    p = sub.add_parser("denials", help="permission denials across every project")
-    p.add_argument("--project", help="one project (folder name)")
-    p.add_argument(
-        "--since", type=float, metavar="DAYS", help="only the last DAYS days"
-    )
-    p.add_argument("--json", action="store_true", help="masked rows as JSON")
-    p = sub.add_parser(
-        "grant", help="queue of standing permissions for the user to apply"
-    )
-    gsub = p.add_subparsers(dest="grant_cmd", required=True)
-    g = gsub.add_parser("add", help="queue an allow rule or an auto-mode note")
-    g.add_argument(
-        "rule", nargs="?", help="exact permission rule, e.g. 'Bash(git push)'"
-    )
-    g.add_argument("--note", help="auto-mode environment note instead of a rule")
-    g.add_argument("--revoke", metavar="RULE", help="remove this allow rule instead")
-    g.add_argument(
-        "--reason", required=True, help="what was denied, why it is low-risk"
-    )
-    g.add_argument("--project", help="default: current folder name")
-    g = gsub.add_parser("list", help="pending grants")
-    g.add_argument("--all", action="store_true", help="applied and dropped too")
-    gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
-    g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
-    g.add_argument("--dry-run", action="store_true", help="print what would be added")
-    p = sub.add_parser("limits", help="live sessions stopped on the usage limit")
-    p.add_argument("--fresh", action="store_true", help="collect first")
-    p.add_argument("--json", action="store_true", help="rows as JSON for /fleet resume")
-    p = sub.add_parser(
-        "answer-box", help="type an answer into a session's open question box (Windows)"
-    )
-    p.add_argument("tab", help="Windows Terminal tab title (the project folder name)")
-    p.add_argument("text", nargs="?", default=boxes.HANDOFF_ANSWER, help="one line")
-    p.add_argument("--dry-run", action="store_true", help="read the box, type nothing")
+    _add_permission_parsers(sub)
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")

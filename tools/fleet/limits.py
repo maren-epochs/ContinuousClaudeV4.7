@@ -9,7 +9,6 @@ session wrote after it (a user turn, an assistant reply) means it already resume
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,9 +104,7 @@ def stopped(state: model.FleetState, projects: Path | None = None) -> list[Stopp
 def _when(epoch: float | None) -> str:
     if epoch is None:
         return "unknown"
-    return _dt.datetime.fromtimestamp(epoch, model.harness_tz()).strftime(
-        "%Y-%m-%d %H:%M"
-    )
+    return model.local_time(epoch)
 
 
 def report(rows: list[Stopped], now: float, as_json: bool = False) -> str:

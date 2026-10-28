@@ -504,7 +504,7 @@ def newest_handoff_file(root: Path) -> tuple[float, Path] | None:
     for dirpath, _dirs, files in os.walk(root):
         for name in files:
             path = Path(dirpath) / name
-            mtime = _mtime(path) if name.endswith(HANDOFF_SUFFIXES) else None
+            mtime = model.mtime(path) if name.endswith(HANDOFF_SUFFIXES) else None
             if mtime is not None and (best is None or mtime > best[0]):
                 best = (mtime, path)
     return best
@@ -651,15 +651,6 @@ def _session_from_file(path: Path, data: Mapping[str, Any]) -> Session:
     return session
 
 
-def _mtime(path: Path | None) -> float | None:
-    if path is None:
-        return None
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
-
-
 def _add_transcript(session: Session, transcript: Path, live_pct: Any) -> None:
     """Model, transcript context % (when no live reading), activity, agents, issues."""
     # Empty env: CLAUDE_CONTEXT_WINDOW here belongs to whichever session's Stop
@@ -700,7 +691,9 @@ def build_session(path: Path, data: Mapping[str, Any], where: _Where) -> Session
     session = _session_from_file(path, data)
     sid = session.session_id
     transcript = transcript_path(where.projects, session.cwd, sid)
-    reading = statusline_reading(sid, where.now, transcript_mtime=_mtime(transcript))
+    reading = statusline_reading(
+        sid, where.now, transcript_mtime=model.mtime(transcript)
+    )
     live_pct = reading[0] if reading else None
     if reading is not None:
         session.context_pct, session.extra["context_source"] = reading

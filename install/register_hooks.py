@@ -42,21 +42,12 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
-
-def _harness_now() -> datetime:
-    """Now in America/New_York (EST/EDT) for backup names; local without tz data."""
-    try:
-        from zoneinfo import ZoneInfo
-
-        return datetime.now(ZoneInfo("America/New_York"))
-    except Exception:  # noqa: BLE001 - no tzdata
-        return datetime.now().astimezone()
-
-
-from sync_global import write_atomic  # sibling script: install/ is sys.path[0]
+from sync_global import (  # sibling script: install/ is sys.path[0]
+    _harness_now,
+    write_atomic,
+)
 
 MIN_NODE = 18
 GUARD, AUDIT, STOP = "harness-guard.mjs", "fleet-audit.mjs", "auto-handoff-stop.mjs"
@@ -221,17 +212,45 @@ def _hook_name(cmd: str) -> str:
     return m.group(1)
 
 
+def _add_status_line(new: dict, tpl: dict, hooks_dir: str, notes: list[str]) -> None:
+    """Set the template status line when the settings have none."""
+    status = tpl.get("statusLine")
+    if not isinstance(status, dict):
+        return
+    if "statusLine" in new:
+        notes.append("statusLine already set, kept")
+        return
+    name = _hook_name(status["command"])
+    new["statusLine"] = {**status, "command": f'node "{hooks_dir}/{name}"'}
+    notes.append(f"added statusLine -> {name}")
+
+
+def _add_event(
+    event: str, groups: list, tgroups: list, hooks_dir: str, notes: list[str]
+) -> None:
+    """Append each template group's hooks not yet referenced under event."""
+    names = {_hook_name(h["command"]) for g in tgroups for h in g["hooks"]}
+    present = {n for n in names if referenced(groups, n)}
+    notes += [f"{n} already registered under {event}" for n in sorted(present)]
+    for tg in tgroups:
+        add = [
+            {**h, "command": f'node "{hooks_dir}/{_hook_name(h["command"])}"'}
+            for h in tg["hooks"]
+            if _hook_name(h["command"]) not in present
+        ]
+        if add:
+            groups.append({**tg, "hooks": add})
+            added = sorted({_hook_name(h["command"]) for h in tg["hooks"]})
+            notes.append(
+                f"added {event} {tg.get('matcher') or '*'} -> {', '.join(added)}"
+            )
+
+
 def register_all(cfg: dict, hooks_dir: str, tpl: dict) -> tuple[dict, list[str]]:
     """Copy of cfg with every template hook (and status line) not yet referenced added."""
     new = json.loads(json.dumps(cfg))
     notes: list[str] = []
-    status = tpl.get("statusLine")
-    if isinstance(status, dict) and "statusLine" not in new:
-        name = _hook_name(status["command"])
-        new["statusLine"] = {**status, "command": f'node "{hooks_dir}/{name}"'}
-        notes.append(f"added statusLine -> {name}")
-    elif isinstance(status, dict):
-        notes.append("statusLine already set, kept")
+    _add_status_line(new, tpl, hooks_dir, notes)
     hooks = new.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise Refused("settings key 'hooks' is not an object")
@@ -239,21 +258,7 @@ def register_all(cfg: dict, hooks_dir: str, tpl: dict) -> tuple[dict, list[str]]
         groups = hooks.setdefault(event, [])
         if not isinstance(groups, list):
             raise Refused(f"settings hooks.{event} is not a list")
-        names = {_hook_name(h["command"]) for g in tgroups for h in g["hooks"]}
-        present = {n for n in names if referenced(groups, n)}
-        notes += [f"{n} already registered under {event}" for n in sorted(present)]
-        for tg in tgroups:
-            add = []
-            for h in tg["hooks"]:
-                name = _hook_name(h["command"])
-                if name not in present:
-                    add.append({**h, "command": f'node "{hooks_dir}/{name}"'})
-            if add:
-                groups.append({**tg, "hooks": add})
-                added = sorted({_hook_name(h["command"]) for h in tg["hooks"]})
-                notes.append(
-                    f"added {event} {tg.get('matcher') or '*'} -> {', '.join(added)}"
-                )
+        _add_event(event, groups, tgroups, hooks_dir, notes)
         if not groups:
             del hooks[event]
     return new, notes

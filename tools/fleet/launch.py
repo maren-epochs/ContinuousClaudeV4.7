@@ -51,13 +51,6 @@ def path_key(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
 
 
-def _mtime(path: Path) -> float:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return 0.0
-
-
 def transcript_cwd(path: Path) -> str | None:
     """The first ``cwd`` recorded in a transcript's head."""
     match = _CWD.search(collect.read_text(path, CWD_HEAD_BYTES))
@@ -103,7 +96,7 @@ def candidates() -> list[Target]:
         transcripts = list(folder.glob("*.jsonl")) if folder.is_dir() else []
         if not transcripts:
             continue
-        transcripts.sort(key=_mtime, reverse=True)
+        transcripts.sort(key=lambda p: model.mtime(p) or 0.0, reverse=True)
         newest = transcripts[0]
         # A metadata-only stub (title/name lines, no cwd) can be the newest file.
         cwd = next(filter(None, map(transcript_cwd, transcripts)), None)
@@ -113,7 +106,7 @@ def candidates() -> list[Target]:
             continue
         if collect.newest_handoff_file(collect.handoff_root(cwd, claude)) is None:
             continue
-        key, last = path_key(cwd), _mtime(newest)
+        key, last = path_key(cwd), (model.mtime(newest) or 0.0)
         if key not in found or last > found[key].last:
             cwd = os.path.normpath(cwd)
             found[key] = Target(title=Path(cwd).name, cwd=cwd, last=last)

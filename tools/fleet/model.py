@@ -442,6 +442,51 @@ def harness_tz() -> _dt.tzinfo | None:
         return None
 
 
+def mtime(path: Path | None) -> float | None:
+    """File modification time, None when path is None or unreadable."""
+    if path is None:
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def parse_epoch(stamp: Any) -> float | None:
+    """ISO timestamp string -> epoch seconds (naive = UTC); None when not parseable."""
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        value = _dt.datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=_dt.UTC)
+    return value.timestamp()
+
+
+def local_time(epoch: float) -> str:
+    """Epoch seconds as ``YYYY-MM-DD HH:MM`` in HARNESS_TZ (machine zone without tz data)."""
+    return (
+        _dt.datetime.fromtimestamp(epoch, _dt.UTC)
+        .astimezone(harness_tz())
+        .strftime("%Y-%m-%d %H:%M")
+    )
+
+
+def content_text(content: Any) -> str:
+    """Text of a message ``content``: the string itself, or its text blocks joined."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            b["text"]
+            for b in content
+            if isinstance(b, Mapping) and isinstance(b.get("text"), str)
+        )
+    return ""
+
+
 def now_iso() -> str:
     """Current UTC time as ``YYYY-MM-DDTHH:MM:SSZ``."""
     return _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -124,30 +124,6 @@ def tail_lines(path: Path, max_bytes: int) -> list[tuple[int, str]]:
     return out
 
 
-def _epoch(stamp: Any) -> float | None:
-    if not isinstance(stamp, str) or not stamp:
-        return None
-    try:
-        value = _dt.datetime.fromisoformat(stamp)
-    except ValueError:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=_dt.UTC)
-    return value.timestamp()
-
-
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(
-            b["text"]
-            for b in content
-            if isinstance(b, Mapping) and isinstance(b.get("text"), str)
-        )
-    return ""
-
-
 def _blocks(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     message = record.get("message")
     content = message.get("content") if isinstance(message, Mapping) else None
@@ -256,7 +232,7 @@ def _model_name(record: Mapping[str, Any]) -> str | None:
 def _names_model(record: Mapping[str, Any]) -> bool:
     """True when a user prompt (system reminders removed) names another model."""
     message = record.get("message")
-    text = _content_text(
+    text = model.content_text(
         message.get("content") if isinstance(message, Mapping) else None
     )
     return bool(_OTHER_MODEL.search(_REMINDER.sub("", text)))
@@ -279,7 +255,7 @@ def _scan_record(
     scan: _Scan, record: Mapping[str, Any], line: int, turn: _Turn | None
 ) -> _Turn | None:
     """Fold one record into scan; returns the open main-chain turn afterwards."""
-    ts = _epoch(record.get("timestamp"))
+    ts = model.parse_epoch(record.get("timestamp"))
     if ts is not None and (scan.first_ts is None or ts < scan.first_ts):
         scan.first_ts = ts
     kind = record.get("type")
@@ -306,7 +282,7 @@ def _scan_results(scan: _Scan, record: Mapping[str, Any], line: int) -> None:
         if block.get("type") == "tool_result" and isinstance(tool_id, str):
             scan.results[tool_id] = _Result(
                 is_error=block.get("is_error") is True,
-                text=_content_text(block.get("content"))[:2000],
+                text=model.content_text(block.get("content"))[:2000],
                 meta=meta if isinstance(meta, Mapping) else None,
                 line=line,
             )
@@ -539,7 +515,7 @@ def _active_root(session: Session, roots: _Roots, now: float) -> str | None:
     """Git root of an alive session active inside the collision window."""
     if not session.alive or not session.cwd:
         return None
-    active = _epoch(session.last_activity)
+    active = model.parse_epoch(session.last_activity)
     if active is None or now - active > COLLISION_WINDOW_S:
         return None
     cwd = _norm(session.cwd, None)
@@ -687,9 +663,9 @@ def _ask_wait(ask: _Call | None, now: float) -> _Finding | None:
 
 
 def _status_wait(session: Session, ask: _Call | None, now: float) -> _Finding | None:
-    status_at = _epoch(session.extra.get("status_updated_at")) or _epoch(
-        session.updated_at
-    )
+    status_at = model.parse_epoch(
+        session.extra.get("status_updated_at")
+    ) or model.parse_epoch(session.updated_at)
     if session.status != "waiting" or status_at is None:
         return None
     if now - status_at <= STUCK_WAIT_S:
@@ -934,7 +910,7 @@ def _stale_reason(
     head = data.get("head_sha") if isinstance(data.get("head_sha"), str) else None
     if marker_sha is not None and marker_sha != head:
         return f"head_sha {head} != installed marker {marker_sha}"
-    generated = _epoch(data.get("generated_at"))
+    generated = model.parse_epoch(data.get("generated_at"))
     if marker_at is None or generated is None:
         return None
     if marker_at > generated + STALE_SLACK_S:
@@ -975,7 +951,7 @@ def check_drift(state: FleetState, now: float) -> float | None:
         return None
     target = manifest_file.parent
     marker_sha, marker_at = _read_marker(target / INSTALLED_MARKER)
-    generated = _epoch(data.get("generated_at"))
+    generated = model.parse_epoch(data.get("generated_at"))
     last_sync = max((t for t in (generated, marker_at) if t is not None), default=None)
     stale_reason = _stale_reason(data, marker_sha, marker_at)
     if stale_reason:
@@ -1000,7 +976,7 @@ def check_session_sync(
     session: Session, scan: _Scan | None, last_sync: float | None
 ) -> None:
     """Alive session started before the last harness sync runs older harness files."""
-    started = _epoch(session.started_at)
+    started = model.parse_epoch(session.started_at)
     if not session.alive or last_sync is None or started is None:
         return
     if started < last_sync:
