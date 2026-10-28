@@ -7,7 +7,7 @@
  *
  * Writes context percentage to temp file for auto-handoff-stop.mjs.
  */
-import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, unlinkSync, mkdirSync, renameSync } from 'fs';
 import { execSync } from 'child_process';
 import { join, resolve, basename } from 'path';
 import { tmpdir, homedir } from 'os';
@@ -173,6 +173,30 @@ function pendingGrants() {
     return list.filter(g => g && typeof g === 'object' && g.status === 'pending').length;
   } catch { return 0; }
 }
+// Account-wide usage for the auto-handoff-stop prepare check (/fleet prepare): the
+// rate_limits.five_hour / seven_day reading Claude Code passes (Pro/Max, after the first
+// response). Written atomically to ~/.claude/fleet/usage.json; any failure is ignored.
+function writeUsage(data) {
+  const rl = data && data.rate_limits;
+  const five = rl && rl.five_hour;
+  if (!five || !Number.isFinite(Number(five.used_percentage))) return;
+  const seven = rl.seven_day || {};
+  const out = {
+    five_hour_pct: Number(five.used_percentage),
+    five_hour_resets_at: Number(five.resets_at) || null,
+    seven_day_pct: Number.isFinite(Number(seven.used_percentage)) ? Number(seven.used_percentage) : null,
+    seven_day_resets_at: Number(seven.resets_at) || null,
+    at: Date.now(),
+  };
+  try {
+    const dir = join(homedir(), '.claude', 'fleet');
+    mkdirSync(dir, { recursive: true });
+    const tmp = join(dir, `.usage.json.${process.pid}.tmp`);
+    writeFileSync(tmp, JSON.stringify(out));
+    renameSync(tmp, join(dir, 'usage.json'));
+  } catch {}
+}
+
 function getFleetInfo(selfId) {
   const grants = pendingGrants();
   let s;
@@ -225,6 +249,7 @@ function main() {
 
   const { pct, display, known } = getContextInfo(data);
   if (known && Number.isFinite(pct)) writeContextPct(pct, data);
+  writeUsage(data);
   const git = getGitInfo(cwd);
   // Handoffs key on the launch dir (same as pre-compact's CLAUDE_PROJECT_DIR), not a cd'd subdir.
   const pd = (data.workspace || {}).project_dir;

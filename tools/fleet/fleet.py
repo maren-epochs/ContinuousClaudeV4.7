@@ -1275,6 +1275,8 @@ def _add_permission_parsers(sub: Any) -> None:
     gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
     g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
     g.add_argument("--dry-run", action="store_true", help="print what would be added")
+    p = sub.add_parser("usage", help="5-hour / 7-day usage from the status line")
+    p.add_argument("--json", action="store_true", help="the saved reading as JSON")
     p = sub.add_parser("limits", help="live sessions stopped on the usage limit")
     p.add_argument("--fresh", action="store_true", help="collect first")
     p.add_argument("--json", action="store_true", help="rows as JSON for /fleet resume")
@@ -1375,6 +1377,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     ),
     "grant": lambda a: _grant_cmd(a),
     "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
+    "usage": lambda a: limits.usage_report(time.time(), a.json),
     "limits": lambda a: limits.report(
         limits.stopped(_state(a.fresh)), time.time(), a.json
     ),

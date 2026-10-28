@@ -264,6 +264,15 @@ run_hook "$(fpay)"
 [ "$OUT" = "$BASE" ]; check "h8d unreadable grants.json and no state -> no segment (got: ${OUT:0:160})" $?
 rm -f "$FLEETDIR/grants.json"
 
+# --- usage.json for the Stop-hook prepare check (/fleet prepare) ---
+rm -f "$FLEETDIR/usage.json"
+run_hook "$(printf '{"session_id":"sttstU1x-0000-4000-8000-tail","workspace":{"current_dir":"%s"},"rate_limits":{"five_hour":{"used_percentage":91.5,"resets_at":1900000000},"seven_day":{"used_percentage":40,"resets_at":1900500000}}}' "$PROJ0")"
+node -e "const u=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.exit(u.five_hour_pct===91.5&&u.five_hour_resets_at===1900000000&&u.seven_day_pct===40&&Date.now()-u.at<60000?0:1)" "$FLEETDIR/usage.json" 2>/dev/null
+check "u1 rate_limits.five_hour/seven_day saved to ~/.claude/fleet/usage.json" $?
+rm -f "$FLEETDIR/usage.json"
+run_hook "$(payload sttstU1x '')"
+[ ! -f "$FLEETDIR/usage.json" ] && [ "$RC" -eq 0 ]; check "u2 no rate_limits -> no usage.json, exit 0" $?
+
 for g in null '"not-a-date"' 42; do
   mkstate "$g" 1 0 0 0
   run_hook "$(fpay)"

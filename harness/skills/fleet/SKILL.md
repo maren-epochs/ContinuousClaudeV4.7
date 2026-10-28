@@ -1,6 +1,6 @@
 ---
 name: fleet
-description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary", "denials", "what got blocked", "grant permission", "standing authorization", "fleet resume", "session limit", "resume after limit"
+description: Fleet control - what every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox of redirected edits and shared lessons - "fleet", "what are other projects doing", "harness inbox", "fleet inbox", "apply proposal", "reject proposal", "handoff all", "every session write a handoff", "fleet questions", "pending questions", "away mode", "I'm away", "I'm back", "open sessions", "open tabs", "open all projects", "fleet digest", "daily summary", "denials", "what got blocked", "grant permission", "standing authorization", "fleet resume", "session limit", "resume after limit", "fleet prepare", "prepare for session end", "usage limit"
 user-invocable: true
 allowed-tools: [Bash, Read, AskUserQuestion, ListAgents, SendMessage]
 ---
@@ -211,6 +211,30 @@ plus any other live session the user picks.
    their `resets` times + 2 min with the prompt `/fleet resume <their names>`, so this
    session sends them `resume` when they reset without asking again.
 5. Report who was resumed and when the rest will be.
+
+## /fleet prepare
+
+Gets every session ready for the end of the 5-hour usage window: each finishes its step,
+writes a handoff and waits; `/fleet resume` restarts them at the reset. Runs by itself:
+the status line saves the usage reading (`~/.claude/fleet/usage.json`) and at 90%
+(`FLEET_PREPARE_PCT`) each busy session's Stop hook stops it once per window with the
+wrap-up instruction; the first one is told to run `/fleet prepare all`.
+1. `usage --json`: `five_hour_pct`, `five_hour_resets_at` (epoch s). `usage` prints them
+   readable. No reading -> continue; the reset time is unknown.
+2. `ListAgents`: every other live session on this machine (skip this session, `cloud`
+   and `offline` rows).
+3. Pick: `all` in the request (the automatic run) or session names -> those, no box.
+   Otherwise AskUserQuestion, `multiSelect: true`, one option per session, 4 per question
+   and up to 4 questions (header `Prepare 1/2` ...), every option "(Recommended)".
+4. `SendMessage` each picked session: first line `Usage at <pct>% of the 5-hour limit
+   (resets <time> ET): finish your current step at a clean stopping point.`, then: write a
+   handoff with /create-handoff (open questions as A-D options), then start nothing new
+   and wait for the next session; /fleet resume restarts you after the reset. Do it
+   yourself; never hand the user the typing.
+5. Reset time known: one `CronCreate` (recurring: false) at the reset + 2 min with the
+   prompt `/fleet resume <picked names>` (this session runs it after the reset).
+6. Write this session's own handoff (/create-handoff), report who was told and when the
+   resume is scheduled, then start nothing new.
 
 ## /fleet denials
 

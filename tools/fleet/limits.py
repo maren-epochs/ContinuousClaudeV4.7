@@ -101,6 +101,42 @@ def stopped(state: model.FleetState, projects: Path | None = None) -> list[Stopp
     return out
 
 
+def usage_path() -> Path:
+    """``~/.claude/fleet/usage.json``: the latest rate_limits reading saved by status.mjs."""
+    return model.fleet_dir() / "usage.json"
+
+
+def read_usage() -> dict[str, Any] | None:
+    """The saved usage reading, or None when absent or unreadable."""
+    try:
+        data = json.loads(usage_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def usage_report(now: float, as_json: bool = False) -> str:
+    """5-hour and 7-day usage with reset times (Eastern) and the reading's age."""
+    u = read_usage()
+    if as_json:
+        return json.dumps(u or {}, indent=2)
+    if not u:
+        return (
+            "no usage reading yet (the status line saves it after a session's first"
+            " response; Pro and Max plans only)"
+        )
+    out = []
+    for label, key in (("5-hour", "five_hour"), ("7-day", "seven_day")):
+        pct, resets = u.get(f"{key}_pct"), u.get(f"{key}_resets_at")
+        if isinstance(pct, (int, float)):
+            when = _when(resets) if isinstance(resets, (int, float)) else "unknown"
+            out.append(f"{label}: {pct:.0f}% used, resets {when}")
+    at = u.get("at")
+    if isinstance(at, (int, float)):
+        out.append(f"reading {max(0, now - at / 1000) / 60:.0f} min old")
+    return "\n".join(out) or "usage reading has no values"
+
+
 def _when(epoch: float | None) -> str:
     if epoch is None:
         return "unknown"

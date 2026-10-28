@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
@@ -92,6 +93,41 @@ class Stopped(unittest.TestCase):
         self.assertEqual(
             limits.report([], 0), "no live session is stopped on the usage limit"
         )
+
+
+class Usage(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        env = mock.patch.dict(
+            os.environ, {"HOME": self._tmp.name, "USERPROFILE": self._tmp.name}
+        )
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_no_reading(self):
+        self.assertIn("no usage reading yet", limits.usage_report(0))
+        self.assertEqual(json.loads(limits.usage_report(0, as_json=True)), {})
+
+    def test_reading_shown_with_age(self):
+        path = limits.usage_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "five_hour_pct": 91.6,
+                    "five_hour_resets_at": 1792755000,
+                    "seven_day_pct": 40,
+                    "seven_day_resets_at": None,
+                    "at": 1792750000 * 1000,
+                }
+            ),
+            encoding="utf-8",
+        )
+        text = limits.usage_report(1792750600)
+        self.assertIn("5-hour: 92% used, resets 20", text)
+        self.assertIn("7-day: 40% used, resets unknown", text)
+        self.assertIn("reading 10 min old", text)
 
 
 if __name__ == "__main__":

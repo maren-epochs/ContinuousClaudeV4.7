@@ -167,6 +167,44 @@ run_hook "$(trpayload sgtstJ1x)"
 [ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; check "T11g unusable transcript fails open" $?
 rm -f "$TR" "$(pctfile sgtstJ1x)"
 
+# --- T12: usage-limit prepare (/fleet prepare) ---
+USAGE="$FAKEHOME/.claude/fleet/usage.json"; PREP="$FAKEHOME/.claude/fleet/prepare"
+mkdir -p "$FAKEHOME/.claude/fleet"
+usage() { # <pct> <resets_in_s> <age_s>
+  node -e "const n=Date.now();console.log(JSON.stringify({five_hour_pct:+process.argv[1],five_hour_resets_at:Math.floor(n/1000)+(+process.argv[2]),at:n-(+process.argv[3])*1000}))" "$1" "$2" "$3" > "$USAGE"
+}
+for s in sgtstU1x sgtstU2x; do printf '10' > "$(pctfile $s)"; done
+rm -rf "$PREP"
+usage 85 3600 0
+run_hook "$(payload sgtstU1x)"
+[ "$OUT" = "{}" ]; check "T12a usage 85% under threshold -> allow (got: ${OUT:0:60})" $?
+usage 92 3600 0
+run_hook "$(payload sgtstU1x)"
+case "$OUT" in *'"decision":"block"'*'92%'*'/fleet prepare all'*'/create-handoff'*) r=0;; *) r=1;; esac
+check "T12b first session at 92% blocks and is told to run /fleet prepare all (got: ${OUT:0:120})" $r
+run_hook "$(payload sgtstU1x)"
+[ "$OUT" = "{}" ]; check "T12c same session, same window -> told once only" $?
+run_hook "$(payload sgtstU2x)"
+case "$OUT" in *'"decision":"block"'*) case "$OUT" in *'/fleet prepare all'*) r=1;; *) r=0;; esac;; *) r=1;; esac
+check "T12d second session blocks without the /fleet prepare instruction (got: ${OUT:0:120})" $r
+rm -rf "$PREP"; usage 95 3600 3600
+run_hook "$(payload sgtstU1x)"
+[ "$OUT" = "{}" ]; check "T12e reading older than 30 min ignored" $?
+usage 95 -60 0
+run_hook "$(payload sgtstU1x)"
+[ "$OUT" = "{}" ]; check "T12f window already reset ignored" $?
+FLEET_PREPARE_PCT=96 bash -c 'true'; usage 95 3600 0
+OUT=$(printf '%s' "$(payload sgtstU1x)" | FLEET_PREPARE_PCT=96 node "$HOOK" 2>/dev/null)
+[ "$OUT" = "{}" ]; check "T12g FLEET_PREPARE_PCT=96 raises the threshold" $?
+printf 'not json' > "$USAGE"
+run_hook "$(payload sgtstU1x)"
+[ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; check "T12h corrupt usage.json fails open" $?
+printf '95' > "$(pctfile sgtstU1x)"; usage 99 3600 0; rm -rf "$PREP"
+run_hook "$(payload sgtstU1x)"
+case "$OUT" in *'Context at 95%'*) r=0;; *) r=1;; esac
+check "T12i context block takes precedence over usage" $r
+rm -rf "$PREP" "$USAGE"; for s in sgtstU1x sgtstU2x; do rm -f "$(pctfile $s)"; done
+
 rm -f "$ERRFILE"
 
 echo

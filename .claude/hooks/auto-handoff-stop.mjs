@@ -15,6 +15,15 @@
  * after 20 s (watchdog hard exit 5 s later), so reclaimed locks never pile up hung
  * collectors. FLEET_COLLECT=0 disables; FLEET_PYTHON / FLEET_PY override the
  * interpreter / script (tests).
+ *
+ * Usage-limit prepare (/fleet prepare): status.mjs saves Claude Code's
+ * rate_limits.five_hour reading to ~/.claude/fleet/usage.json. When no context block
+ * applies and that reading (at most USAGE_MAX_AGE_MS old, window not yet reset) is at
+ * or above FLEET_PREPARE_PCT (default 90), each session is blocked ONCE per usage window
+ * (marker ~/.claude/fleet/prepare/<sid>-<resets_at>) and told to finish its step, write
+ * a handoff and start nothing new. The first session to cross (exclusive marker
+ * fleet-<resets_at>) is also told to run `/fleet prepare all`, which messages the other
+ * sessions (idle ones never reach this hook) and schedules /fleet resume for the reset.
  */
 import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, writeSync, mkdirSync, renameSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
@@ -26,6 +35,41 @@ const CONTEXT_THRESHOLD = 85;
 const MAX_PCT_AGE_MS = 2 * 60 * 60 * 1000; // ignore pct files older than 2h (crashed/stale sessions)
 
 const TAIL_BYTES = 512 * 1024;
+const USAGE_MAX_AGE_MS = 30 * 60 * 1000;
+
+// {pct, resetsAt} of a fresh five_hour reading at or above the prepare threshold, else null.
+function usageOverThreshold() {
+  const threshold = Number(process.env.FLEET_PREPARE_PCT) || 90;
+  let u;
+  try { u = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'usage.json'), 'utf-8')); } catch { return null; }
+  const pct = Number(u && u.five_hour_pct);
+  const resetsAt = Number(u && u.five_hour_resets_at);
+  const at = Number(u && u.at);
+  if (!Number.isFinite(pct) || !Number.isFinite(resetsAt) || !Number.isFinite(at)) return null;
+  const now = Date.now();
+  if (now - at > USAGE_MAX_AGE_MS || resetsAt * 1000 <= now || pct < threshold) return null;
+  return { pct: Math.floor(pct), resetsAt: Math.floor(resetsAt) };
+}
+
+// Exclusive-create a marker; true only for the caller that created it.
+function claim(path) {
+  try { closeSync(openSync(path, 'wx')); return true; } catch { return false; }
+}
+
+// Block reason for this session's first stop past the threshold in this window, else null.
+function prepareReason(sid) {
+  const u = usageOverThreshold();
+  if (!u) return null;
+  const dir = join(homedir(), '.claude', 'fleet', 'prepare');
+  try { mkdirSync(dir, { recursive: true }); } catch { return null; }
+  if (!claim(join(dir, `${sid}-${u.resetsAt}`))) return null;
+  const first = claim(join(dir, `fleet-${u.resetsAt}`));
+  const resets = new Date(u.resetsAt * 1000).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+  return `Usage at ${u.pct}% of the 5-hour limit (resets ${resets} ET). `
+    + (first ? 'First run /fleet prepare all (tells every other session and schedules /fleet resume for the reset). ' : '')
+    + 'Then finish the current step at a clean stopping point, write a handoff with /create-handoff '
+    + '(open questions as A-D options), and start nothing new: wait for the next session.';
+}
 
 // Context % from the newest non-sidechain assistant usage in the transcript
 // tail; null when unavailable. Input-only, same formula as used_percentage.
@@ -83,7 +127,9 @@ function main() {
   } catch {}
 
   if (pct == null || pct < CONTEXT_THRESHOLD) {
-    console.log('{}');
+    let reason = null;
+    try { reason = prepareReason(sid); } catch {}
+    console.log(reason ? JSON.stringify({ decision: 'block', reason }) : '{}');
   } else {
     console.log(JSON.stringify({
       decision: 'block',
