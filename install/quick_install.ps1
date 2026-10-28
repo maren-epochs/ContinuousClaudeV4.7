@@ -14,6 +14,8 @@
      (install/sync_global.py --apply; files it replaces are backed up first).
   4. Registers every hook and the status line in ~/.claude/settings.json
      (install/register_hooks.py --all; backup first, never duplicates, keeps the rest).
+  5. Adds the "epoch harness" desktop shortcut (install/desktop_launcher.ps1): opens a
+     Windows Terminal window that asks which projects to open as tabs. -NoShortcut skips it.
   Then restart Claude Code and run /bootup.
 
   Safe to re-run: every step skips what is already in place.
@@ -22,7 +24,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipDeps,   # skip pip packages and Playwright Chromium
-    [switch]$Yes         # answer yes to the winget install prompts
+    [switch]$Yes,        # answer yes to the winget install prompts
+    [switch]$NoShortcut  # skip the desktop shortcut
 )
 
 $ErrorActionPreference = 'Stop'
@@ -88,9 +91,18 @@ Run-Py install/sync_global.py --apply
 Step 'Register hooks and status line in ~/.claude/settings.json'
 Run-Py install/register_hooks.py --all
 
+if ($NoShortcut) {
+    Step 'Desktop shortcut: skipped (-NoShortcut)'
+} else {
+    Step 'Desktop shortcut "epoch harness"'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'desktop_launcher.ps1')
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'Desktop shortcut not created; the harness itself is installed.' }
+}
+
 Step 'Done'
 Write-Host @'
-Restart Claude Code (close every session), then run /bootup in any project.
+Restart Claude Code (close every session), then run /bootup in any project,
+or double-click "epoch harness" on your desktop to pick projects to open.
 Optional extras (see README.md "Dependencies"): tldr, ouros and bloks on PATH;
 EXA_API_KEY / NIA_API_KEY in a .env for web and docs search.
 '@ -ForegroundColor Green

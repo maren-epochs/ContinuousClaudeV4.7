@@ -149,7 +149,7 @@ Download the repo (Code > Download ZIP), unzip it, open PowerShell in the unzipp
 powershell -ExecutionPolicy Bypass -File install\quick_install.ps1
 ```
 
-It checks Python 3.13 and Node.js 18+ (offers a winget install for either), installs the Python packages and Playwright Chromium, copies skills, agents, hooks, scripts and tools into `~/.claude` (backing up anything it replaces), and registers every hook plus the status line in `~/.claude/settings.json` (backup first, nothing duplicated, the rest of the file kept). Re-running is safe. Then restart Claude Code and run `/bootup`. `-SkipDeps` skips the package and browser steps; `-Yes` answers the winget prompts.
+It checks Python 3.13 and Node.js 18+ (offers a winget install for either), installs the Python packages and Playwright Chromium, copies skills, agents, hooks, scripts and tools into `~/.claude` (backing up anything it replaces), and registers every hook plus the status line in `~/.claude/settings.json` (backup first, nothing duplicated, the rest of the file kept). It also adds an **epoch harness** desktop shortcut that asks which projects to open as Windows Terminal tabs (`-NoShortcut` skips it; `Create-Epoch-Shortcut.cmd` adds it to an existing install). Re-running is safe. Then restart Claude Code and run `/bootup`. `-SkipDeps` skips the package and browser steps; `-Yes` answers the winget prompts.
 
 ### Option A: Add to an existing project
 
