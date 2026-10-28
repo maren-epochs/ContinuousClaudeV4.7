@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-shim helper, privacy-redact.mjs shared library).
+Autonomous SDLC pipeline for Claude Code. 13 skills, 2 agents, 10 hooks (+ tldr-shim helper, privacy-redact.mjs shared library).
 
 ## Skills
 
@@ -18,6 +18,7 @@ Autonomous SDLC pipeline for Claude Code. 12 skills, 2 agents, 10 hooks (+ tldr-
 | `/upgrade-harness` | Extend Ouros | Add new external functions to Ouros sandbox |
 | `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
 | `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), `digest` (plain-language daily summary), `denials` (permission/classifier denials across every project) + `limits` (sessions stopped on the usage limit; `/fleet resume` sends them `resume` once reset) + `answer-box <tab>` (types the handoff request into a stuck session's question box, Windows Terminal + UI Automation) + `grant add|list|drop|apply` (standing-permission queue; the user runs `apply`; pending count in `report` and the statusline `N grant`), HTML dashboard (pending-questions notice); all via `tools/fleet/fleet.py` |
+| `/changelog` | "changelog", "release notes", "what changed since" | `git log --no-merges` between two refs (named ref/date, else newest tag, else the share snapshot `source_sha`) -> markdown grouped by conventional-commit type, one plain line per change with its short sha; stdout or a named file |
 
 ## Agents
 

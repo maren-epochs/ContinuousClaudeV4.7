@@ -47,6 +47,7 @@ install/
 | `/analyze-data` | Load, explore, transform, visualize and report on a dataset via Ouros sessions and the host Python bridge |
 | `/visualize` | Chart procedure on `tools/viz`: form, color, validated palette, house style, render, then inspect the image |
 | `/fleet` | What every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox: show, apply, reject proposals; file cross-project lessons; HTML dashboard |
+| `/changelog` | Release notes from `git log` between two refs, grouped by commit type, one plain line per change |
 
 ## Hooks
 
