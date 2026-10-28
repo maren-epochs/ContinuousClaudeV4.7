@@ -10,17 +10,18 @@
 
 Continuous Claude v4.7 is a harness for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Anthropic's agentic coding command-line tool. It adds three layers on top of a plain Claude Code session: workflow skills that run a structured software lifecycle (assess, plan, failure analysis, prepare, execute, validate, evolve), lifecycle hooks that enforce rules the model cannot be trusted to follow on its own (context budgets, lint after edits, write protection for installed files, an audit trail of risky shell commands), and a set of stdlib Python tools (a sandboxed research REPL bridge, report and contract validators, a privacy guard, a context-token ledger, a charting toolkit and a cross-session "fleet" monitor).
 
-The upstream project, written by parcadei, shipped on 2026-04-21 as a single release commit: nine skills, two agents, five hooks, a readiness scorer and the Ouros sandbox bridge. The pipeline design described in section 2 (orchestrator and workers, validation contract, premortem, knowledge cards, handoffs) is upstream's. As of commit `24837f0` (2026-10-07), this fork adds 160 commits (152 excluding merges) made between 2026-09-20 and 2026-10-07; against the upstream release it changes 166 files (47,041 lines added, 2,068 removed). The fork's work falls into four groups: fixing defects in the upstream harness, so that pieces which looked like they worked actually did; hardening the sandbox and hooks for Windows and for adversarial input; adding a test, lint, type-check and CI layer the upstream release did not have; and building two new subsystems, a visualization toolkit and fleet control.
+The upstream project, written by parcadei, shipped on 2026-04-21 as a single release commit: nine skills, two agents, five hooks, a readiness scorer and the Ouros sandbox bridge. The pipeline design described in section 2 (orchestrator and workers, validation contract, premortem, knowledge cards, handoffs) is upstream's. As of commit `069401d` (2026-10-27), this fork adds 247 commits (239 excluding merges) made between 2026-09-20 and 2026-10-27; against the upstream release it changes 167 files (54,387 lines added, 2,114 removed). The fork's work falls into five groups: fixing defects in the upstream harness, so that pieces which looked like they worked actually did; hardening the sandbox and hooks for Windows and for adversarial input; adding a test, lint, type-check and CI layer the upstream release did not have; building two new subsystems, a visualization toolkit and fleet control; and making the whole harness installable by someone else with one double-click.
 
-**Role and how it was built.** maren-epochs chose what to change, made the trade-off decisions, approved each checkpoint, and ran the installs into the live Claude Code configuration (`install/sync_global.py --apply`, `install/register_hooks.py`), which the agents here are not permitted to write; line-level review was delegated to separate review agents. Most of the code was written by Claude agents running inside this same harness: 151 of the 152 non-merge fork commits carry a `Co-Authored-By: Claude ...` trailer (the remaining one is a hand-made settings change). The division of labor is visible in tracked files: `continuum/research/harness-review-2026-10-05/decision-queue.md` shows agents queuing options with a recommendation; the 2026-10-05 decisions-applied handoff records the maintainer's choices; commit messages mark choices as "user decision"; and the seven upstream pull requests (section 8) are opened under the maintainer's handle. This is stated plainly because it is part of what the project demonstrates: a way of directing AI coding agents so that their output is tested and reviewed rather than taken on trust.
+**Role and how it was built.** maren-epochs chose what to change, made the trade-off decisions and approved each checkpoint. Agents run installs and syncs themselves; changes to the live Claude Code permissions go through only after the maintainer clicks yes in a question box (section 6.9). Line-level review was delegated to separate review agents. Most of the code was written by Claude agents running inside this same harness: 238 of the 239 non-merge fork commits carry a `Co-Authored-By: Claude ...` trailer (the remaining one is a hand-made settings change). The division of labor is visible in the history: the 2026-10-05 review's `decision-queue.md` shows agents queuing options with a recommendation, the decisions-applied handoff records the maintainer's choices (both are local-only since 2026-10-26 and remain readable in git history before commit `33463a9`), commit messages mark choices as "user decision", and the seven upstream pull requests (section 8) were opened under the maintainer's handle. This is stated plainly because it is part of what the project demonstrates: a way of directing AI coding agents so that their output is tested and reviewed rather than taken on trust.
 
 **My role (maren-epochs), in specifics:**
 
-- Scoped fleet control: chose the feature set (session view, write guard with a proposal inbox, one-command apply, risky-command audit log, lesson sharing, dashboard) and deferred four extras (usage per project, a daily digest, broadcast notices, per-project policy). When the plan turned out larger than its summary, I asked for a manageable scope, then kept the full plan on the condition that nothing in it could harm the monitored projects, and kept the audit log. The choices are recorded in the 2026-10-07 handoffs under `thoughts/shared/handoffs/general/`.
+- Scoped fleet control: chose the feature set (session view, write guard with a proposal inbox, one-command apply, risky-command audit log, lesson sharing, dashboard) and deferred four extras (usage per project, a daily digest, broadcast notices, per-project policy); the daily digest was built later. When the plan turned out larger than its summary, I asked for a manageable scope, then kept the full plan on the condition that nothing in it could harm the monitored projects, and kept the audit log. The choices are recorded in the 2026-10-07 handoffs (local-only now, in git history before `33463a9`).
 - Decided the eight items D1 to D8 that agents queued with options and a recommendation in `decision-queue.md`: four applied, three deferred, one judged unnecessary, with D5 later settled by a token measurement. Outcomes are in the 2026-10-05 decisions-applied handoff.
 - Set the write guard's policy: it blocks rather than warns. When an agent added a rule I had not made ("never interrupt projects"), I had it reverted, and the guard now denies the write even when it cannot save its proposal (commit `24191a8`).
 - Ran the build through checkpoints rather than reading every diff myself: milestones m1 to m3 each got a review pass by a separate agent, and the fix commits (`647e80a`, `24191a8`, `ed41847`) address its findings, among them false denies in the guard, an audit-redaction regex measured at 46 s on a 100,000-character command, and a collector context reading about 5x too high for 1M-window sessions. I approved proceeding at each checkpoint.
-- Made the publishing decisions: commissioned this explainer and had an independent senior-engineer agent review it, chose handle-only attribution and a git history rewrite to the handle, and kept other projects out of the public repo, a rule the pre-commit privacy guard (`tools/privacy_guard.py`) enforces.
+- Made the publishing decisions: commissioned this explainer and had an independent senior-engineer agent review it, chose handle-only attribution and a git history rewrite to the handle, and kept other projects out of the public repo, a rule the pre-commit privacy guard (`tools/privacy_guard.py`) enforces. Later I stopped tracking session handoffs and old research notes, and shared the harness through a separate history-free private repo rather than this one.
+- Set the permission model: agents run every command they can and never hand chores over; after a permission or classifier denial they ask "Run it?" in a question box and retry on a yes; narrow standing permissions are queued per denial and applied in one batch (section 6.9). I chose a local multi-pass review of the fleet code over a second cloud review, and removed an allow rule a side review showed was broader than what I had approved.
 
 **Skills exercised:** agent workflow design, hook and tooling engineering in Node.js and Python, sandbox security (command parsing, path containment, secret denylists), Windows path semantics, test design (characterization tests, contract tests, shell-level hook suites), CI on Linux and Windows, data-contract design, and measurement-driven decisions.
 
@@ -29,18 +30,19 @@ The upstream project, written by parcadei, shipped on 2026-04-21 as a single rel
 | Area | What the fork did | Where to check |
 |------|-------------------|----------------|
 | Defects in upstream hooks | Fixed a context meter off by about 22 points, a stop guard inactive in headless runs, auto-handoffs that were always empty, and a linter that reported undefined names as clean | section 3; `git log -- .claude/hooks` |
-| Sandbox security | Closed a shell-injection path and secret reads through allowed commands; policy pinned by 57 tests | section 4; `tools/test_ouros_*.py` |
-| Test and CI layer | 913 pytest tests, about 450 shell-level hook checks, ruff, mypy, a pre-commit privacy guard, CI on Linux and Windows | section 7 |
-| New subsystems | Visualization toolkit (305 tests); fleet control: cross-session monitor, write guard for installed files, risky-command audit (built in one day across 11 tracked assertions) | sections 5 and 6 |
+| Sandbox security | Closed a shell-injection path and secret reads through allowed commands; policy pinned by 77 tests | section 4; `tools/test_ouros_*.py` |
+| Test and CI layer | 1,154 pytest tests, 673 shell-level hook checks, ruff, mypy, a pre-commit privacy guard, CI on Linux and Windows | section 7 |
+| New subsystems | Visualization toolkit (305 tests); fleet control: cross-session monitor, write guard for installed files, risky-command audit, question queue, handoffs across all sessions, permission tooling (410 tests) | sections 5 and 6 |
+| Installing for others | One double-click installer plus `install/quick_install.ps1` and `register_hooks.py --all`, tested from a bare download into a throwaway home | section 10 |
 | Decisions | Measured before optimizing, verified platform behavior live and recorded the version, documented what is unsolved | section 8 |
 
 ### Status
 
 This block is the single place where current figures are kept; the rest of the document refers to it.
 
-- **Readiness score:** 27 of 27 criteria pass (level 5 of 5), from a run on 2026-10-07 after the fleet build and a clean-up pass. The fleet build had dropped it to 23/27 (11 clone pairs, 13 severe-complexity functions, a 14.6% tech-debt ratio, 3 security-scan findings); the clean-up brought these to 7 pairs, 2 severe functions (both outside the fleet code), 7.9% and 0 without changing behavior. Section 7.5 explains the scorer.
-- **CI:** green on commit `16e4577` (2026-10-07), the current history including the fleet-control build, on Linux (ubuntu-24.04) and Windows (windows-2025).
-- **Upstream pull requests:** seven (#13, #14, #16 to #20), open and unmerged when this was written.
+- **Readiness score:** 24 of 27 criteria pass (88.9%, still level 5 of 5), from a run on 2026-10-27 at commit `069401d`. The three failures are 16 code-clone pairs (threshold under 10), a tech-debt ratio of 10.0% (threshold under 10%) and 3 security-scan findings; complexity passes with 4 severe functions (threshold under 5). The score was 27/27 on 2026-10-07 after a clean-up pass; the fleet code has since roughly doubled (section 7.5). Section 7.5 explains the scorer.
+- **CI:** green on commit `e6704dc` (2026-10-26) on Linux (ubuntu-24.04) and Windows (windows-2025).
+- **Upstream pull requests:** seven (#13, #14, #16 to #20), none merged; the upstream repository has had no pushes since 2026-04-23. Their commits are part of this fork's `main`.
 
 ### Terms used
 
@@ -78,11 +80,11 @@ The design response is consistent: wherever possible, a rule moves from an instr
 
 | Layer | Contents | Origin |
 |-------|----------|--------|
-| Skills (12) | `/autonomous`, `/autonomous-research`, `/research`, `/premortem`, `/bootup`, `/review`, `/create-handoff`, `/resume-handoff`, `/upgrade-harness` | upstream; several revised in the fork |
-| | `/analyze-data`, `/visualize`, `/fleet` | fork |
+| Skills (13) | `/autonomous`, `/autonomous-research`, `/research`, `/premortem`, `/bootup`, `/review`, `/create-handoff`, `/resume-handoff`, `/upgrade-harness` | upstream; several revised in the fork |
+| | `/analyze-data`, `/visualize`, `/fleet`, `/changelog` | fork |
 | Agents (2) | `worker` (executes one bounded task), `oracle` (external research) | upstream; `worker` rewritten in the fork |
-| Hooks (9 + helper) | `status`, `tldr-read`, `post-edit-diagnostics`, `pre-compact`, `auto-handoff-stop` | upstream, substantially fixed in the fork |
-| | `session-start`, `worker-report-check`, `harness-guard`, `fleet-audit`, plus the `tldr-shim` helper | fork |
+| Hooks (10 + helper) | `status`, `tldr-read`, `post-edit-diagnostics`, `pre-compact`, `auto-handoff-stop` | upstream, substantially fixed in the fork |
+| | `session-start`, `worker-report-check`, `harness-guard`, `fleet-audit`, `ask-queue`, plus the `tldr-shim` helper and the shared `privacy-redact` library | fork |
 | Tools | `ouros_harness.py`, `exa_search.py`, `nia_docs.py`, `readiness.sh` | upstream, hardened in the fork |
 | | `validate_report.py`, `privacy_guard.py`, `context_ledger.py`, `api_common.py`, `lock_requirements.py`, `tools/viz/`, `tools/fleet/`, `install/` | fork |
 
@@ -123,7 +125,7 @@ EVOLVE also aggregates `conventions`, `corrections` and `issues` across reports.
 
 ### 2.4 Handoffs
 
-`/create-handoff` serializes session state (goal, current focus, decisions, open items, a context-cost summary) into a YAML file. `/resume-handoff` loads the newest one. Two hooks make this automatic (section 3). Handoffs go to the project's `thoughts/shared/handoffs/` if it already exists, else to `~/.claude/handoffs/<project>/`, so the harness never creates directories in a user's repository; the fork made every reader and writer resolve that root the same way.
+`/create-handoff` serializes session state (goal, current focus, decisions, open items, a context-cost summary) into a YAML file. `/resume-handoff` loads the newest one. Two hooks make this automatic (section 3). Handoffs go to the project's `thoughts/shared/handoffs/` if it already exists, else to `~/.claude/handoffs/<project>/`, so the harness never creates directories in a user's repository; the fork made every reader and writer resolve that root the same way. In this repository `thoughts/` is gitignored since 2026-10-26: handoffs describe the maintainer's own sessions, so they stay on the machine that wrote them.
 
 ---
 
@@ -134,7 +136,7 @@ Hooks are where the "deterministic over probabilistic" principle is implemented.
 | Hook | Event | Function |
 |------|-------|----------|
 | `status.mjs` | statusLine | context %, git branch and change counts, goal from the newest handoff, fleet summary |
-| `auto-handoff-stop.mjs` | Stop | blocks the session from stopping at 85% context so a handoff gets written; triggers the fleet collector |
+| `auto-handoff-stop.mjs` | Stop | blocks the session from stopping at 85% context so a handoff gets written; triggers the fleet collector (windowless, see section 8) |
 | `pre-compact.mjs` | PreCompact | writes an auto-handoff before compaction |
 | `session-start.mjs` | SessionStart (opt-in) | after compaction, injects the newest handoff in place of the lossy summary |
 | `tldr-read.mjs` | PreToolUse:Read | for large code files, injects a structural map (functions, classes, line numbers) and truncates the read |
@@ -142,6 +144,7 @@ Hooks are where the "deterministic over probabilistic" principle is implemented.
 | `worker-report-check.mjs` | PostToolUse + worker SubagentStop | validates report JSON while the worker is still running |
 | `harness-guard.mjs` | PreToolUse | denies writes to installed harness files and files the intended change as a proposal |
 | `fleet-audit.mjs` | PostToolUse:Bash\|PowerShell | logs risky shell commands, with secrets redacted |
+| `ask-queue.mjs` | PreToolUse:AskUserQuestion | in away mode, queues the question instead of opening a box, so the session keeps reading messages (section 6.9) |
 
 Several of the fork's most consequential changes fixed upstream hooks that appeared to work but did not (each is in the commit history):
 
@@ -171,7 +174,7 @@ Several of the fork's most consequential changes fixed upstream hooks that appea
 
 **The deliberate exception.** `run_python` runs arbitrary code on host CPython so pandas and matplotlib are usable from research sessions. CLAUDE.md records why this is not an escalation (the agent already has Bash) and how it is bounded: a per-session working directory, one concurrent run, and a timeout that kills the process tree.
 
-The policy is pinned by 57 tests in `tools/test_ouros_policy.py` and `tools/test_ouros_security_table.py`; the table test enumerates the policy so a refactor cannot loosen it silently, and later complexity refactors of the bridge left it unchanged.
+The policy is pinned by 77 tests in `tools/test_ouros_policy.py` and `tools/test_ouros_security_table.py`; the table test enumerates the policy so a refactor cannot loosen it silently, and later complexity refactors of the bridge left it unchanged.
 
 ---
 
@@ -276,9 +279,26 @@ Because the log stores commands, redaction is the core of the hook: credential s
 
 Each milestone was followed by a review round, with fixes as separate commits. m1 (data contract): safe ids, device names, strict JSON, atomic-write failure tests. m2 (guard and audit): PowerShell parameters and aliases, comment and `[[ ]]` parsing, `cd` tracking, a lexical check before any filesystem stat, the change cap, deny on failed proposal save, truncate-before-redact, linear regexes. m3 (collector): prefer the status line's fresh context percentage, active-only repo collisions, the deadline and watchdog. Much of section 6.3 exists because of m2.
 
+Two later rounds covered code written after the build. A cloud multi-agent review of the ten security-critical files (the sandbox bridge, privacy guard, report validator, redaction library, write guard, audit and pre-compact hooks, question queue and the two installers) returned ten findings, all fixed with tests: grep and rg secret filters placed after caller options, uncapped timeouts without process-tree kill, credentials copied into auto-handoffs, sequential term redaction, `>&file` and `sed -i`/`dd`/`bash -c` writes the guard missed, glob and directory copies, symlinked directories, and a lost-update race in the question queue. A local review of every fleet module then fixed: wildcard grant rules that could reach the agent's own settings or the grant command, a non-atomic settings write, partially masked Bearer tokens, the box-answering tool reading stale scrollback, `apply` writing inside `.git` (a planted hook would run on the next commit), 64-bit process handles passed to the Windows API as 32-bit integers, `;` in Windows Terminal tab names splitting the command, and lesson text reaching public docs with credentials unmasked.
+
 ### 6.8 Privacy rules for a public repo
 
-Fleet data describes the user's other projects, so all of it stays under `~/.claude/fleet/` and `~/.claude/harness-inbox/`; test fixtures use synthetic values (`project-A`, `sess-a1`), and the dashboard module states that its output must never be committed. `register_hooks.py` edits `settings.json` only when the user runs it, with a backup, preserving key order, indentation and line endings.
+Fleet data describes the user's other projects, so all of it stays under `~/.claude/fleet/` and `~/.claude/harness-inbox/`; test fixtures use synthetic values (`project-A`, `sess-a1`, neutral project names), and the dashboard module states that its output must never be committed. `register_hooks.py` edits `settings.json` with a backup, preserving key order, indentation and line endings.
+
+### 6.9 Later additions
+
+Fleet control kept growing after the first build, each piece driven by a concrete annoyance:
+
+| Command | What it does |
+|---------|--------------|
+| `away on\|off`, `questions`, `answer` | While away, the `ask-queue` hook queues every question box in `fleet/questions/<session>.json` instead of stopping the session; `/fleet questions` asks them later and relays each answer to its session. A shared lock with a 10-second stale limit serializes the hook and the CLI |
+| `handoff-all`, `handoffs --since` | Messages every live session to write a handoff, then checks which landed, crediting handoffs written through shell commands too. A session stuck on its own question box gets the request typed into the box's "Type something" option by `answer-box`, which checks the window is in front before every key and reads the screen back after every step |
+| `limits`, `resume` | Finds live sessions whose transcript ends on the usage-limit message, with the reset time from that entry, and sends them "resume" once it passes |
+| `open` | Opens chosen projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session |
+| `digest`, `dashboard` | A masked plain-language daily summary and a self-contained HTML page |
+| `denials`, `grant add\|list\|drop\|revoke\|apply` | Lists every permission or classifier denial across projects, then queues narrow standing permissions for the ones worth granting |
+
+The permission tooling encodes a working agreement rather than a security bypass. The agent runs everything it can; when a step is denied, it asks "Run it?" in a question box and retries on a yes, which the auto-mode classifier accepts as the user's approval. Grants are exact rules, never blanket ones: `grant add` refuses `Bash(*)`, interpreter wildcards not anchored to a script path, and any pattern that matches a list of sensitive sample paths and commands (the agent's own settings, hooks and instructions, the grant command itself, force-push, hard reset, recursive delete); `apply` re-checks the queue before writing. A live test showed the agent alone cannot add a rule (the classifier denies it as self-modification) but can remove one, and one allow rule was revoked after a side review found it reached further than the approval it came from.
 
 ---
 
@@ -290,14 +310,14 @@ All counts below are reproducible from the repository.
 
 | Suite | Count | How to reproduce |
 |-------|------:|------------------|
-| pytest, total | 913 tests | `py -3.13 -m pytest --collect-only -q` |
-| of which unit | 899 | `... -m "not integration"` |
-| of which integration | 14 | `... -m integration` (hook suites, simulated global install, report CLI) |
-| by area: `tools/` core / `tools/fleet` / `tools/viz` / `install/` | 284 / 246 / 305 / 64 | collect output grouped by directory |
-| Hook shell suites (9 files) | about 450 checks | `bash .claude/hooks/test_*.sh` (largest: harness-guard 137, fleet-audit 107, status 87) |
+| pytest, total | 1,154 tests | `py -3.13 -m pytest --collect-only -q` |
+| of which unit | 1,139 | `... -m "not integration"` |
+| of which integration | 15 | `... -m integration` (hook suites, simulated global install, report CLI) |
+| by area: `tools/` core / `tools/fleet` / `tools/viz` / `install/` | 355 / 410 / 305 / 69 | collect output grouped by directory |
+| Hook shell suites (10 files) | 673 checks | `bash .claude/hooks/test_*.sh` (largest: harness-guard 259, fleet-audit 113, status 111) |
 | Readiness scorer suite | 13 checks | `bash scripts/test_readiness.sh` |
 
-Tracked source is about 33,100 lines of Python, of which about 18,000 are tests, plus about 2,700 lines of Node hooks and 4,200 lines of shell (about 2,100 of them hook tests).
+Tracked source is about 40,000 lines of Python, of which about 21,500 are tests, plus about 3,900 lines of Node hooks, 5,100 lines of shell (about 3,300 of them hook tests) and 250 lines of PowerShell and batch for the installers.
 
 Three testing practices recur in the history:
 
@@ -311,7 +331,7 @@ Three testing practices recur in the history:
 
 ### 7.3 Pre-commit privacy guard
 
-The repo is public and is developed by agents that see local paths. `tools/privacy_guard.py` runs on every commit (39 tests) and rejects absolute user-home paths in four spellings, the OS username, session-UUID-shaped ids, and every term from three untracked private-term sources (an environment variable for CI, a user-level file, a per-clone file under `.git/info/`). Reviewed false positives go in a tracked `.privacy-allow`. Its output redacts what it found. CI supplies the terms from a repository secret; without it, paths, usernames and ids are still checked.
+The repo is public and is developed by agents that see local paths. `tools/privacy_guard.py` runs on every commit (76 tests) and rejects absolute user-home paths in four spellings, the OS username, session-UUID-shaped ids, and every term from three untracked private-term sources (an environment variable for CI, a user-level file, a per-clone file under `.git/info/`). Reviewed false positives go in a tracked `.privacy-allow`. Its output redacts what it found. CI supplies the terms from a repository secret; without it, paths, usernames and ids are still checked.
 
 ### 7.4 CI on Linux and Windows
 
@@ -330,7 +350,7 @@ The fork first fixed the scorer, because its results could not be trusted:
 - A stray `\r` from Windows Python output made every comparison in `readiness-fix.sh` miss, so the auto-fixer did nothing on Windows.
 - `file_grep` passed its flags in the wrong position, so the README build-command check could never pass.
 
-With the scorer fixed, the repo reached 27/27 at commit `f91eea8`, after refactors that took severe-complexity functions from 12 to 2 and clone pairs in the CLI tools from 15 to 0 (section 7.1). The current score and failing criteria are in the Status block at the top. Most code added since `f91eea8` is the fleet build (about 3,800 lines of non-test Python in one day), so any drop is attributed to it; that attribution is an inference, not a per-criterion measurement.
+With the scorer fixed, the repo reached 27/27 at commit `f91eea8`, after refactors that took severe-complexity functions from 12 to 2 and clone pairs in the CLI tools from 15 to 0 (section 7.1), and again on 2026-10-07 after the fleet build's clean-up pass. The current score and failing criteria are in the Status block at the top. Most code added since then is fleet control (now about 6,600 lines of non-test Python, up from about 3,800) and the install tooling, so the drop to 24/27 is attributed to that growth; the attribution is an inference, not a per-criterion measurement.
 
 ---
 
@@ -346,7 +366,11 @@ With the scorer fixed, the repo reached 27/27 at commit `f91eea8`, after refacto
 
 **Unfiltered hooks cost latency; the cost was measured.** Registering the fleet hooks without `if` filters adds a Node start (about 80-125 ms on the development machine) to every file and shell call. The alternative, a filter that a short-name path can bypass, would make the guard ineffective on exactly the platform it was written for.
 
-**Upstream-first fixes.** The early fixes were made on separate branches and submitted to upstream as seven pull requests (#13, #14, #16 through #20, listed in `install/README.md`; open, not merged, at the time of writing). The fork's `main` is upstream plus those branches, so each fix can be merged upstream independently.
+**Upstream-first fixes.** The early fixes were made on separate branches and submitted to upstream as seven pull requests (#13, #14, #16 through #20, listed in `install/README.md`). None was merged; upstream has had no pushes since 2026-04-23. The fixes are part of this fork's `main`.
+
+**Windows background processes need two separate fixes.** Two kinds of empty window kept flashing. The Stop hook started `py -3.13` detached: a detached `py.exe` has no console, so its `python.exe` child allocated a visible one on every refresh. The fix was `pyw` (no console) plus `CREATE_NO_WINDOW` on the collector's own `git` calls, which would otherwise each open a window under `pythonw`. Scheduled tasks that start `powershell.exe -WindowStyle Hidden` still flash a window before the flag takes effect; starting them through `conhost.exe --headless` creates none. A probe task showed that windows a task opens on purpose, such as a login dialog, still appear.
+
+**Share without history.** Removing files from a public repo hides them from a ZIP download, but a clone still carries every past version. To share the harness, the current tree goes into a separate repository with a single commit, and a weekly scheduled reminder notes when `main` has moved ahead of that snapshot.
 
 **What is not solved.** Any readiness criteria still failing (see Status). Single-run timing assertions that are sensitive to machine load. FastEdit is documented but not registered, because its hook denies all Edit calls in favor of an MCP server and its model targets Apple-Silicon MLX. The `/review` skill had zero measured spans, so the decision not to fork it is a default, not a measurement.
 
@@ -367,12 +391,17 @@ With the scorer fixed, the repo reached 27/27 at commit `f91eea8`, after refacto
 | Quality | ruff, mypy, pytest, coverage, pre-commit, custom privacy guard |
 | CI | GitHub Actions on ubuntu-24.04 and windows-2025; Dependabot |
 | Build | GNU make (Git Bash) with a PowerShell 7 equivalent, `install/setup.ps1` |
+| Install | `Install-Epoch-Harness.cmd` and `install/quick_install.ps1` (Windows PowerShell 5.1+, winget for missing prerequisites) |
 
 ---
 
 ## 10. How to try it
 
 Requirements: Claude Code, Python 3.13 (Ouros publishes wheels only up to CPython 3.13), Node 18+, Git Bash on Windows. tldr, ouros and bloks are recommended. The hooks that use tldr skip themselves without it.
+
+The quickest route on Windows is one double-click: `Install-Epoch-Harness.cmd` installs git if missing, clones the repository to `%USERPROFILE%\epoch-harness`, and runs `install/quick_install.ps1 -Yes`, which checks Python 3.13 and Node 18+ (offering winget installs), installs the packages and Playwright Chromium, syncs into `~/.claude` and registers every hook plus the status line with `register_hooks.py --all`. It is idempotent; running it again updates. From an existing checkout: `powershell -ExecutionPolicy Bypass -File install\quick_install.ps1`.
+
+By hand:
 
 ```bash
 git clone https://github.com/maren-epochs/ContinuousClaudeV4.7
@@ -383,12 +412,12 @@ make setup && make test        # or: pwsh install/setup.ps1 -Setup -Test
 py -3.13 install/sync_global.py --diff
 py -3.13 install/sync_global.py --apply
 
-# Optional: register the fleet hooks (prints the settings.json diff first)
-py -3.13 install/register_hooks.py --dry-run
-py -3.13 install/register_hooks.py
+# Register the hooks (prints the settings.json diff first; --all = every hook in the template)
+py -3.13 install/register_hooks.py --all --dry-run
+py -3.13 install/register_hooks.py --all
 ```
 
-Then, in a Claude Code session, run `/bootup` to assess the project and choose a workflow, `/autonomous <task>` to run the full pipeline, `/research` for exploration, or `/fleet` for the cross-session view. To check the claims in this document: `py -3.13 -m pytest -q` runs the Python suites, `bash .claude/hooks/test_harness_guard.sh` prints the guard's latency benchmark, `bash scripts/readiness.sh` (run it in the foreground) prints the current readiness score, and `git log --oneline` shows the assertion-numbered history behind each section.
+Then, in a Claude Code session, run `/bootup` to assess the project and choose a workflow, `/autonomous <task>` to run the full pipeline, `/research` for exploration, `/fleet` for the cross-session view, or `/changelog` for release notes between two refs. To check the claims in this document: `py -3.13 -m pytest -q` runs the Python suites, `bash .claude/hooks/test_harness_guard.sh` prints the guard's latency benchmark, `bash scripts/readiness.sh` (run it in the foreground) prints the current readiness score, and `git log --oneline` shows the assertion-numbered history behind each section.
 
 ---
 
