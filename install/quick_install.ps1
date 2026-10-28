@@ -14,7 +14,10 @@
      (install/sync_global.py --apply; files it replaces are backed up first).
   4. Registers every hook and the status line in ~/.claude/settings.json
      (install/register_hooks.py --all; backup first, never duplicates, keeps the rest).
-  5. Adds the "epoch harness" desktop shortcut (install/desktop_launcher.ps1): opens a
+  5. Applies the shared profile (install/apply_profile.py): auto mode, Opus, longer thinking,
+     auto-continue after a usage limit, and the working-style rules in ~/.claude/CLAUDE.md;
+     never overrides a setting already chosen. -SkipProfile skips it.
+  6. Adds the "epoch harness" desktop shortcut (install/desktop_launcher.ps1): opens a
      Windows Terminal window that asks which projects to open as tabs. -NoShortcut skips it.
   Then restart Claude Code and run /bootup.
 
@@ -25,7 +28,8 @@
 param(
     [switch]$SkipDeps,   # skip pip packages and Playwright Chromium
     [switch]$Yes,        # answer yes to the winget install prompts
-    [switch]$NoShortcut  # skip the desktop shortcut
+    [switch]$NoShortcut, # skip the desktop shortcut
+    [switch]$SkipProfile # skip the shared settings/working-style profile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,6 +94,13 @@ Run-Py install/sync_global.py --apply
 
 Step 'Register hooks and status line in ~/.claude/settings.json'
 Run-Py install/register_hooks.py --all
+
+if ($SkipProfile) {
+    Step 'Shared profile: skipped (-SkipProfile)'
+} else {
+    Step 'Shared profile (auto mode, Opus, working style)'
+    Run-Py install/apply_profile.py
+}
 
 if ($NoShortcut) {
     Step 'Desktop shortcut: skipped (-NoShortcut)'
