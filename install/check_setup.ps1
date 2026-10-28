@@ -91,9 +91,6 @@ else { Add-Row 'Chrome' 'Claude in Chrome extension' 'MISSING' '' "Install from 
 if ($connected) { Add-Row 'Chrome' 'Browser connected to Claude Code' 'OK' ($connected -join ', ') '' }
 else { Add-Row 'Chrome' 'Browser connected to Claude Code' 'MISSING' '' 'In Claude Code run: /chrome' }
 
-# --- Settings the plugins need ---
-if ([Environment]::GetEnvironmentVariable('GITHUB_PERSONAL_ACCESS_TOKEN', 'User') -or $env:GITHUB_PERSONAL_ACCESS_TOKEN) { Add-Row 'Plugins' 'GITHUB_PERSONAL_ACCESS_TOKEN' 'OK' 'set (value not shown)' '' }
-else { Add-Row 'Plugins' 'GITHUB_PERSONAL_ACCESS_TOKEN' 'MISSING' 'github plugin' "Create a token at https://github.com/settings/tokens, then: [Environment]::SetEnvironmentVariable('GITHUB_PERSONAL_ACCESS_TOKEN','<token>','User')" }
 
 # --- Harness ---
 if (Test-Path (Join-Path $claudeDir '.ccv47-manifest.json')) { Add-Row 'Harness' 'Harness installed' 'OK' '' '' } else { Add-Row 'Harness' 'Harness installed' 'MISSING' '' 'Double-click Install-Epoch-Harness.cmd' }
@@ -113,9 +110,16 @@ $enabled = @()
 if ($settings -and $settings.enabledPlugins) {
     $enabled = $settings.enabledPlugins.PSObject.Properties | Where-Object { $_.Value -eq $true } | ForEach-Object { $_.Name }
 }
-foreach ($p in 'github', 'commit-commands', 'context7', 'claude-md-management', 'chrome-devtools-mcp', 'browser-use', 'playwright', 'pyright-lsp', 'typescript-lsp') {
+foreach ($p in 'commit-commands', 'context7', 'claude-md-management', 'chrome-devtools-mcp', 'browser-use', 'playwright', 'pyright-lsp', 'typescript-lsp') {
     if ($enabled | Where-Object { $_ -like "$p@*" }) { Add-Row 'Plugins' $p 'OK' 'installed' '' }
     else { Add-Row 'Plugins' $p 'MISSING' '' "In Claude Code run: /plugin install $p@claude-plugins-official" }
+}
+# github plugin: optional (gh covers most of it) and it needs an access token readable by
+# every program, so the token is only asked for when the plugin is installed.
+if ($enabled | Where-Object { $_ -like 'github@*' }) {
+    Add-Row 'Plugins' 'github (optional)' 'OK' 'installed' ''
+    if ([Environment]::GetEnvironmentVariable('GITHUB_PERSONAL_ACCESS_TOKEN', 'User') -or $env:GITHUB_PERSONAL_ACCESS_TOKEN) { Add-Row 'Plugins' 'GITHUB_PERSONAL_ACCESS_TOKEN' 'OK' 'set (value not shown)' '' }
+    else { Add-Row 'Plugins' 'GITHUB_PERSONAL_ACCESS_TOKEN' 'MISSING' 'github plugin' "Make a FINE-GRAINED token limited to the repos you need, with an expiry date, at https://github.com/settings/personal-access-tokens/new, then: [Environment]::SetEnvironmentVariable('GITHUB_PERSONAL_ACCESS_TOKEN','<token>','User')" }
 }
 
 # --- Report ---
