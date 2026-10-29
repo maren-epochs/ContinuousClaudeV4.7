@@ -71,6 +71,49 @@ class SendKeys(unittest.TestCase):
         self.assertIn("/create-handoff", boxes.HANDOFF_ANSWER)
         boxes.sendkeys_literal(boxes.HANDOFF_ANSWER)
 
+    def test_away_answer_is_one_sendkeys_safe_line(self):
+        boxes.sendkeys_literal(boxes.AWAY_ANSWER)
+
+
+class ClearOpenBoxes(unittest.TestCase):
+    """away on answers boxes opened before it; no keys are sent (boxes.answer is stubbed)."""
+
+    def test_answers_only_live_waiting_sessions_and_reports_refusals(self):
+        from unittest import mock
+
+        from tools.fleet import fleet
+        from tools.fleet.model import FleetState, Session
+
+        state = FleetState(
+            sessions=[
+                Session(project="privacy", status="waiting", alive=True),
+                Session(project="oaken", status="waiting", alive=True),
+                Session(project="amber", status="idle", alive=True),
+                Session(project="gone", status="waiting", alive=False),
+            ]
+        )
+
+        def fake(tab, text):
+            self.assertEqual(text, boxes.AWAY_ANSWER)
+            if tab == "oaken":
+                raise boxes.BoxError("2 Windows Terminal tabs are named 'oaken'")
+            return "answered"
+
+        with mock.patch.object(boxes, "answer", side_effect=fake) as answer:
+            lines = fleet._clear_open_boxes(state)
+        self.assertEqual(
+            [c.args[0] for c in answer.call_args_list], ["privacy", "oaken"]
+        )
+        self.assertEqual(lines[0], "sessions already waiting on a box: 2")
+        self.assertIn("privacy: open box answered", lines[1])
+        self.assertIn("oaken: open box NOT answered: 2 Windows Terminal tabs", lines[2])
+
+    def test_no_waiting_session_adds_nothing(self):
+        from tools.fleet import fleet
+        from tools.fleet.model import FleetState
+
+        self.assertEqual(fleet._clear_open_boxes(FleetState()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

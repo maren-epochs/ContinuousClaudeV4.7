@@ -147,9 +147,13 @@ SendMessage from this session.
 While it is on, the ask-queue hook stops every session from opening a question box (a box
 stops the session, and a stopped session cannot read messages): the questions go to that
 session's queue, `~/.claude/fleet/questions/<session_id>.json`, and the session keeps
-working and lists them in its reply. With it off, boxes open as usual. Tell the user which
-mode is now set; on `on`, add that pending questions show on the dashboard and are answered
-with `/fleet questions`.
+working and lists them in its reply. With it off, boxes open as usual. The hook cannot catch
+a box that was already open, so `away on` also collects fresh state and runs `answer-box`
+on every live session already `waiting`, telling it to queue its questions and carry on; it
+prints one line per such session (answered, or NOT answered with the refusal). Relay the
+NOT-answered ones: they stay stopped until the user answers. Tell the user which mode is now
+set; on `on`, add that pending questions show on the dashboard and are answered with
+`/fleet questions`.
 
 ## /fleet questions
 

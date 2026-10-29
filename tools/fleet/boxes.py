@@ -31,6 +31,12 @@ HANDOFF_ANSWER = (
     "do not ask them now. Then carry on."
 )
 
+AWAY_ANSWER = (
+    "The user is away (fleet away mode is on). Do not wait for an answer: ask this and any "
+    "other question again with AskUserQuestion (it now goes to the fleet queue) or list them "
+    "as A-D options in your handoff, then carry on with work that needs no decision."
+)
+
 
 class BoxError(Exception):
     """The box cannot be answered safely; nothing (more) was typed."""
@@ -100,7 +106,8 @@ $cond = New-Object System.Windows.Automation.AndCondition(
   (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)),
   (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $req.tab)))
 $tabs = $A::RootElement.FindAll($S::Descendants, $cond)
-if ($tabs.Count -ne 1) { Fail "expected one Windows Terminal tab named '$($req.tab)', found $($tabs.Count)" }
+if ($tabs.Count -eq 0) { Fail "no Windows Terminal tab named '$($req.tab)'" }
+if ($tabs.Count -gt 1) { Fail "$($tabs.Count) Windows Terminal tabs are named '$($req.tab)'; close or rename the extra one (right-click the tab, Rename Tab) and run again" }
 $tab = $tabs[0]
 $win = $tab
 while ($win -and $win.Current.ClassName -ne 'CASCADIA_HOSTING_WINDOW_CLASS') {
@@ -132,6 +139,10 @@ foreach ($step in $req.steps) {
   [FleetFG]::SetForegroundWindow($hwnd) | Out-Null
   Start-Sleep -Milliseconds 300
   if ([FleetFG]::GetForegroundWindow() -ne $hwnd) { Restore; Out @{ ok = $false; error = 'could not bring the tab window to the front'; done = $done } }
+  # Selecting a tab through UI Automation does not move keyboard focus into its terminal,
+  # so keys went to the previously focused tab; focus the terminal control first.
+  try { $win.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl'))).SetFocus() } catch {}
+  Start-Sleep -Milliseconds 150
   $sh.SendKeys($step.keys)
   Start-Sleep -Milliseconds ([int]$step.wait_ms)
   $text = Screen

@@ -1120,11 +1120,35 @@ def away(mode: str | None) -> str:
     if mode is not None:
         questions.set_away(mode == "on")
     if questions.is_away():
-        return (
-            "away mode on: sessions queue their questions instead of opening a box and"
-            " keep reading messages; answer with /fleet questions"
-        )
+        lines = [
+            (
+                "away mode on: sessions queue their questions instead of opening a box and"
+                " keep reading messages; answer with /fleet questions"
+            )
+        ]
+        if mode == "on":
+            lines += _clear_open_boxes(_state(fresh=True))
+        return "\n".join(lines)
     return "away mode off: question boxes open as usual"
+
+
+def _clear_open_boxes(state: FleetState) -> list[str]:
+    """Answer boxes opened before away mode, which the ask-queue hook cannot catch."""
+    stuck = [
+        s for s in state.sessions if s.alive and s.status == "waiting" and s.project
+    ]
+    lines = []
+    for s in stuck:
+        try:
+            boxes.answer(s.project or "", boxes.AWAY_ANSWER)
+            lines.append(
+                f"  {s.project}: open box answered (queue questions, carry on)"
+            )
+        except boxes.BoxError as exc:
+            lines.append(f"  {s.project}: open box NOT answered: {exc}")
+    if lines:
+        lines.insert(0, f"sessions already waiting on a box: {len(stuck)}")
+    return lines
 
 
 def answer_question(qid: str, text: str, via: str) -> str:
