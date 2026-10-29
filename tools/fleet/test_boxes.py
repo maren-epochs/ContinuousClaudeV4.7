@@ -75,6 +75,30 @@ class SendKeys(unittest.TestCase):
         boxes.sendkeys_literal(boxes.AWAY_ANSWER)
 
 
+SUBMIT = """
+ │ ● Re-register the task?
+   → The user is away.
+Ready to submit your answers?
+❯ 1. Submit answers
+  2. Cancel
+"""
+
+
+class SubmitScreen(unittest.TestCase):
+    def test_review_screen_with_submit_highlighted(self):
+        self.assertTrue(boxes.submit_ready(SUBMIT))
+
+    def test_submit_not_highlighted_is_not_ready(self):
+        self.assertFalse(
+            boxes.submit_ready(
+                SUBMIT.replace("❯ 1.", "  1.").replace("  2. Cancel", "❯ 2. Cancel")
+            )
+        )
+
+    def test_question_box_is_not_a_submit_screen(self):
+        self.assertFalse(boxes.submit_ready(BOX))
+
+
 class ClearOpenBoxes(unittest.TestCase):
     """away on answers boxes opened before it; no keys are sent (boxes.answer is stubbed)."""
 

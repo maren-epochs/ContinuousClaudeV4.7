@@ -21,6 +21,9 @@ from dataclasses import dataclass
 POINTER = "❯"  # ❯ marks the highlighted option in Claude Code's question box
 TYPE_OPTION = "Type something."
 BOX_FOOTER = "Enter to select"
+SUBMIT_PROMPT = "Ready to submit your answers?"
+SUBMIT_OPTION = "Submit answers"
+MAX_QUESTIONS = 4  # AskUserQuestion takes at most 4 questions per box
 TIMEOUT_S = 60
 _OPTION = re.compile(r"^\s*(❯\s*)?(\d+)\.\s+(.*?)\s*$")
 _SENDKEYS_SPECIAL = re.compile(r"([+^%~(){}\[\]])")
@@ -197,18 +200,64 @@ def _tail(screen: object, n: int = 8) -> str:
     return "\n".join(lines[-n:])
 
 
+def submit_ready(screen: str) -> bool:
+    """True when a multi-question box shows its review screen with "Submit answers" highlighted."""
+    lines = [ln.strip() for ln in screen.splitlines() if ln.strip()]
+    tail = lines[-6:]
+    return any(SUBMIT_PROMPT in ln for ln in tail) and any(
+        ln.startswith(POINTER) and SUBMIT_OPTION in ln for ln in tail
+    )
+
+
 def answer(tab: str, text: str, dry_run: bool = False) -> str:
-    """Type text into the 'Type something.' option of the box open in tab and submit it."""
+    """Type text into the 'Type something.' option of the box open in tab and submit it.
+
+    A box holding several questions shows them one after another and ends on a review
+    screen; each question gets the same text and the review screen is submitted.
+    """
     keys_text = sendkeys_literal(text)
     read = _run({"mode": "read", "tab": tab})
     if not read.get("ok"):
         raise BoxError(str(read.get("error")))
-    p = plan(str(read.get("screen", "")))
+    screen = str(read.get("screen", ""))
+    if submit_ready(screen):
+        if dry_run:
+            return (
+                f"{tab}: answered box waiting on its submit screen; would press Enter"
+            )
+        return f"{tab}: submitted\n{_tail(_submit(tab))}"
+    p = plan(screen)
     if dry_run:
         return (
             f"{tab}: box open, pointer on {p.current}, 'Type something.' is {p.target}; "
             f"would type: {text}"
         )
+    screen = _answer_one(tab, p, text, keys_text)
+    for _ in range(MAX_QUESTIONS):
+        if submit_ready(screen):
+            screen = _submit(tab)
+            break
+        try:
+            p = plan(screen)
+        except BoxError:
+            break
+        screen = _answer_one(tab, p, text, keys_text)
+    return f"{tab}: answered '{text}'\n{_tail(screen)}"
+
+
+def _submit(tab: str) -> str:
+    """Press Enter on the review screen ("Submit answers" highlighted); returns the screen."""
+    step = {"keys": "{ENTER}", "expect": None, "wait_ms": 2000}
+    res = _run({"mode": "answer", "tab": tab, "steps": [step]})
+    if not res.get("ok"):
+        raise BoxError(
+            f"{res.get('error')} on the submit screen\n{_tail(res.get('screen'))}"
+        )
+    return str(res.get("screen", ""))
+
+
+def _answer_one(tab: str, p: Plan, text: str, keys_text: str) -> str:
+    """Move to "Type something.", type text and press Enter; returns the screen after."""
     steps = [
         {
             "keys": p.keys,
@@ -227,4 +276,4 @@ def answer(tab: str, text: str, dry_run: bool = False) -> str:
         raise BoxError(
             f"{res.get('error')} after {res.get('done', 0)} of 3 steps\n{_tail(res.get('screen'))}"
         )
-    return f"{tab}: answered '{text}'\n{_tail(res.get('screen'))}"
+    return str(res.get("screen", ""))
