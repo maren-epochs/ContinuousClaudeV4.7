@@ -19,7 +19,7 @@
  * Usage-limit prepare (/fleet prepare): status.mjs saves Claude Code's
  * rate_limits.five_hour reading to ~/.claude/fleet/usage.json. When no context block
  * applies and that reading (at most USAGE_MAX_AGE_MS old, window not yet reset) is at
- * or above FLEET_PREPARE_PCT (default 90), each session is blocked ONCE per usage window
+ * or above FLEET_PREPARE_PCT (default 85), each session is blocked ONCE per usage window
  * (marker ~/.claude/fleet/prepare/<sid>-<resets_at>) and told to finish its step, write
  * a handoff and start nothing new. The first session to cross (exclusive marker
  * fleet-<resets_at>) is also told to run `/fleet prepare all`, which messages the other
@@ -39,7 +39,7 @@ const USAGE_MAX_AGE_MS = 30 * 60 * 1000;
 
 // {pct, resetsAt} of a fresh five_hour reading at or above the prepare threshold, else null.
 function usageOverThreshold() {
-  const threshold = Number(process.env.FLEET_PREPARE_PCT) || 90;
+  const threshold = Number(process.env.FLEET_PREPARE_PCT) || 85;
   let u;
   try { u = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'usage.json'), 'utf-8')); } catch { return null; }
   const pct = Number(u && u.five_hour_pct);

@@ -220,7 +220,7 @@ plus any other live session the user picks.
 
 Gets every session ready for the end of the 5-hour usage window: each finishes its step,
 writes a handoff and waits; `/fleet resume` restarts them at the reset. Runs by itself:
-the status line saves the usage reading (`~/.claude/fleet/usage.json`) and at 90%
+the status line saves the usage reading (`~/.claude/fleet/usage.json`) and at 85%
 (`FLEET_PREPARE_PCT`) each busy session's Stop hook stops it once per window with the
 wrap-up instruction; the first one is told to run `/fleet prepare all`.
 1. `usage --json`: `five_hour_pct`, `five_hour_resets_at` (epoch s). `usage` prints them

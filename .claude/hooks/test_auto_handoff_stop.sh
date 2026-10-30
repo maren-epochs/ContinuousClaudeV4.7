@@ -175,13 +175,13 @@ usage() { # <pct> <resets_in_s> <age_s>
 }
 for s in sgtstU1x sgtstU2x; do printf '10' > "$(pctfile $s)"; done
 rm -rf "$PREP"
-usage 85 3600 0
+usage 80 3600 0
 run_hook "$(payload sgtstU1x)"
-[ "$OUT" = "{}" ]; check "T12a usage 85% under threshold -> allow (got: ${OUT:0:60})" $?
-usage 92 3600 0
+[ "$OUT" = "{}" ]; check "T12a usage 80% under threshold -> allow (got: ${OUT:0:60})" $?
+usage 87 3600 0
 run_hook "$(payload sgtstU1x)"
-case "$OUT" in *'"decision":"block"'*'92%'*'/fleet prepare all'*'/create-handoff'*) r=0;; *) r=1;; esac
-check "T12b first session at 92% blocks and is told to run /fleet prepare all (got: ${OUT:0:120})" $r
+case "$OUT" in *'"decision":"block"'*'87%'*'/fleet prepare all'*'/create-handoff'*) r=0;; *) r=1;; esac
+check "T12b first session at 87% blocks and is told to run /fleet prepare all (got: ${OUT:0:120})" $r
 run_hook "$(payload sgtstU1x)"
 [ "$OUT" = "{}" ]; check "T12c same session, same window -> told once only" $?
 run_hook "$(payload sgtstU2x)"
