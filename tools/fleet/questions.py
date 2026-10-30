@@ -86,11 +86,8 @@ def questions_dir() -> Path:
 
 
 def _read(path: Path) -> dict[str, Any] | None:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+    data = model.read_json_dict(path)
+    if data is None or not isinstance(data.get("questions"), list):
         return None
     return data
 

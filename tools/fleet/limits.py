@@ -108,11 +108,7 @@ def usage_path() -> Path:
 
 def read_usage() -> dict[str, Any] | None:
     """The saved usage reading, or None when absent or unreadable."""
-    try:
-        data = json.loads(usage_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    return model.read_json_dict(usage_path())
 
 
 def usage_report(now: float, as_json: bool = False) -> str:

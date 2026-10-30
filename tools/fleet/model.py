@@ -386,6 +386,15 @@ def fleet_dir() -> Path:
     return claude_dir() / "fleet"
 
 
+def read_json_dict(path: Path) -> dict[str, Any] | None:
+    """The JSON object in ``path``, or None when absent, unreadable or not an object."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def state_path() -> Path:
     """``~/.claude/fleet/state.json``."""
     return fleet_dir() / "state.json"
