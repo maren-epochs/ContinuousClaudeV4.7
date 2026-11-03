@@ -42,6 +42,7 @@ import argparse
 import contextlib
 import datetime as _dt
 import difflib
+import functools
 import importlib
 import io
 import json
@@ -962,13 +963,36 @@ _WRITE_TARGETS = (
 )
 _ASSIGN = re.compile(r"(?:^|[\s;&|])\$?(\w+)\s*=\s*" + _WORD)
 _VAR = re.compile(r"^\$\{?(\w+)\}?$")
+# ${x}, ${x%...}, $(cmd ...) or $x
+_EXPANSION = re.compile(r"\$\{\w+[^}]*\}|\$\([^)]*\)|\$\w+")
+# literal characters a target with unknown expansions must keep to count as a match
+_MIN_LITERAL = 8
+
+
+def _expand(m: re.Match[str], values: dict[str, str]) -> str:
+    """A plain ``$x`` / ``${x}`` with a known value becomes it; anything else stays."""
+    var = _VAR.match(m.group(0))
+    return values.get(var.group(1), m.group(0)) if var else m.group(0)
+
+
+def _target_matches(target: str, name: str) -> bool:
+    """name is the file target writes: equal, or target with each ``$x`` / ``${x%...}``
+    that could not be resolved standing for any text (``${ts}_notes.yaml``)."""
+    if target == name:
+        return True
+    parts = _EXPANSION.split(target)
+    if len(parts) < 2 or sum(map(len, parts)) < _MIN_LITERAL:
+        return False
+    return re.fullmatch(".+".join(map(re.escape, parts)), name) is not None
 
 
 def _shell_targets(tail: str) -> set[str]:
     """Base names of files the tail's Bash/PowerShell ``command`` inputs write.
 
     ``$f`` / ``${f}`` targets resolve through ``f=...`` assignments in the same
-    command (``f=h.yaml && cat > $f <<'EOF'``); reads (``cat f``) give nothing.
+    command (``f=h.yaml && cat > $f <<'EOF'``), and so do expansions inside the
+    value (``d=x; f="$d/a.yaml"``); one left unresolved (a ``$(date ...)`` result)
+    stays in the name for ``_target_matches``. Reads (``cat f``) give nothing.
     """
     names = set()
     for raw in _COMMAND.findall(tail):
@@ -976,13 +1000,21 @@ def _shell_targets(tail: str) -> set[str]:
             command = json.loads(f'"{raw}"')
         except json.JSONDecodeError:
             continue
-        values = {k: v.strip("\"'") for k, v in _ASSIGN.findall(command)}
+        # x=$(cmd ...) captures a bare "$": a run-time value, left unresolved
+        values = {
+            k: v.strip("\"'")
+            for k, v in _ASSIGN.findall(command)
+            if v.strip("\"'") not in ("", "$")
+        }
         for pattern in _WRITE_TARGETS:
             for target in pattern.findall(command):
                 target = target.strip("\"'")
                 var = _VAR.match(target)
                 if var:
                     target = values.get(var.group(1), "")
+                target = _EXPANSION.sub(
+                    functools.partial(_expand, values=values), target
+                )
                 if target:
                     names.add(re.split(r"[\\/]", target)[-1])
     return names
@@ -1000,7 +1032,7 @@ def _written_by(transcript: Path, new: list[tuple[float, str]]) -> list[float]:
         m
         for m, name in new
         if re.search(r'"file_path":\s*"(?:[^"]*[\\/])?' + re.escape(name) + '"', tail)
-        or name in targets
+        or any(_target_matches(target, name) for target in targets)
     ]
 
 

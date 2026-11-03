@@ -1078,6 +1078,34 @@ class HandoffsTests(CliHome):
         for command, name in writes.items():
             self.assertEqual(self.targets(command), {name}, command)
 
+    def test_run_time_names_from_shell_variables_are_landed(self):
+        # obin-prep and Documents wrote handoffs this way and read "waiting"
+        commands = {
+            "sess-p1": (
+                'cd h && T=$(py -3.13 -c "print(1)") && '
+                'N="${T}_deck-verified.yaml" && sed -e x old.yaml > "$N"'
+            ),
+            "sess-p4": (
+                "d=~/x/handoffs/3584177a; ts=$(date +%F); "
+                'n="$d/${ts}_algoval-pending.yaml"; sed -e x "$d/old.yaml" > "$n"'
+            ),
+        }
+        self.handoff(self.root, "2026-11-03_15-59_deck-verified.yaml", 3000)
+        self.handoff(self.root, "2026-11-03_15-58_algoval-pending.yaml", 3000)
+        for sid, command in commands.items():
+            self.transcript(self.proj, sid, self.shell_record(command))
+        _, out, _ = self.run_main("handoffs", "--since", "2000")
+        rows = self.rows(out)
+        self.assertTrue(rows["proj-1"].endswith("landed"), out)
+        self.assertTrue(rows["proj-4"].endswith("landed"), out)
+
+    def test_unresolved_name_needs_enough_literal_text(self):
+        self.assertTrue(fleet._target_matches("${ts}_notes.yaml", "2026_notes.yaml"))
+        self.assertFalse(fleet._target_matches("$f", "a.yaml"))
+        self.assertFalse(fleet._target_matches("${a}.md", "x.md"))
+        self.assertFalse(fleet._target_matches("${ts}_notes.yaml", "notes.yaml"))
+        self.assertEqual(self.targets('f=d/h.yaml; echo x > "$f"'), {"h.yaml"})
+
     def test_reads_copies_and_commits_are_not_writes(self):
         reads = [
             "cat d/h.yaml",

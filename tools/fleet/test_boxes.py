@@ -3,9 +3,12 @@ Run from the repo root:  py -3.13 -m pytest -q tools/fleet
 No keys are sent: only the pure planning and escaping are tested.
 """
 
+import base64
+import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
@@ -97,6 +100,30 @@ class SubmitScreen(unittest.TestCase):
 
     def test_question_box_is_not_a_submit_screen(self):
         self.assertFalse(boxes.submit_ready(BOX))
+
+
+class TabNames(unittest.TestCase):
+    def test_dashed_name_also_matches_spaced_title(self):
+        self.assertEqual(boxes.tab_names("obin-prep"), ["obin-prep", "obin prep"])
+
+    def test_plain_name_once(self):
+        self.assertEqual(boxes.tab_names("privacy"), ["privacy"])
+
+    def test_request_carries_names_and_box_markers(self):
+        out = "FLEETBOX " + base64.b64encode(b'{"ok": true}').decode()
+        done = mock.Mock(stdout=out, stderr="")
+        with (
+            mock.patch.object(boxes.sys, "platform", "win32"),
+            mock.patch.object(boxes.subprocess, "run", return_value=done) as run,
+        ):
+            self.assertEqual(
+                boxes._run({"mode": "read", "tab": "obin-prep"}), {"ok": True}
+            )
+        req = json.loads(run.call_args.kwargs["env"]["FLEET_BOX_REQ"])
+        self.assertEqual(req["names"], ["obin-prep", "obin prep"])
+        self.assertEqual(
+            (req["footer"], req["submit"]), (boxes.BOX_FOOTER, boxes.SUBMIT_PROMPT)
+        )
 
 
 class ClearOpenBoxes(unittest.TestCase):

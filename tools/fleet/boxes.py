@@ -105,28 +105,51 @@ $req = $env:FLEET_BOX_REQ | ConvertFrom-Json
 # base64 of UTF-8 JSON: the console code page would mangle the box's non-ASCII glyphs
 function Out($o) { 'FLEETBOX ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o | ConvertTo-Json -Compress -Depth 4))); exit 0 }
 function Fail($m) { Out @{ ok = $false; error = $m } }
-$cond = New-Object System.Windows.Automation.AndCondition(
-  (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)),
-  (New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $req.tab)))
-$tabs = $A::RootElement.FindAll($S::Descendants, $cond)
-if ($tabs.Count -eq 0) { Fail "no Windows Terminal tab named '$($req.tab)'" }
-if ($tabs.Count -gt 1) { Fail "$($tabs.Count) Windows Terminal tabs are named '$($req.tab)'; close or rename the extra one (right-click the tab, Rename Tab) and run again" }
-$tab = $tabs[0]
-$win = $tab
-while ($win -and $win.Current.ClassName -ne 'CASCADIA_HOSTING_WINDOW_CLASS') {
-  $win = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($win)
+$tabType = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+$names = @($req.names)
+$tabs = @($A::RootElement.FindAll($S::Descendants, $tabType) | Where-Object { $names -ccontains $_.Current.Name })
+function WinOf($t) {
+  $w = $t
+  while ($w -and $w.Current.ClassName -ne 'CASCADIA_HOSTING_WINDOW_CLASS') {
+    $w = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($w)
+  }
+  $w
 }
+function SelectedTab($w) {
+  foreach ($t in $w.FindAll($S::Descendants, $tabType)) {
+    if ($t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected) { return $t }
+  }
+}
+function ScreenOf($w) {
+  $term = $w.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl')))
+  $term.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
+}
+if ($tabs.Count -eq 0) { Fail "no Windows Terminal tab named '$($req.tab)'" }
+if ($tabs.Count -gt 1) {
+  # Same-named tabs (e.g. an old tab whose session ended): keep the one showing a box.
+  $withBox = @()
+  foreach ($t in $tabs) {
+    $w = WinOf $t
+    if (-not $w) { continue }
+    $sel = SelectedTab $w
+    $t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Start-Sleep -Milliseconds 400
+    $last = @((ScreenOf $w) -split "`n" | Where-Object { $_.Trim() }) | Select-Object -Last 6
+    if ($last | Where-Object { $_.Contains($req.footer) -or $_.Contains($req.submit) }) { $withBox += $t }
+    if ($sel -and -not [System.Windows.Automation.Automation]::Compare($sel, $t)) {
+      try { $sel.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() } catch {}
+    }
+  }
+  if ($withBox.Count -ne 1) { Fail "$($tabs.Count) Windows Terminal tabs are named '$($req.tab)' and $($withBox.Count) show a question box; close or rename the extra one (right-click the tab, Rename Tab) and run again" }
+  $tabs = $withBox
+}
+$tab = $tabs[0]
+$win = WinOf $tab
 if (-not $win) { Fail 'tab has no Windows Terminal window' }
 $hwnd = [IntPtr]$win.Current.NativeWindowHandle
 $prevFg = [FleetFG]::GetForegroundWindow()
-$prevTab = $null
-foreach ($t in $win.FindAll($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)))) {
-  if ($t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected) { $prevTab = $t }
-}
-function Screen {
-  $term = $win.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl')))
-  $term.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
-}
+$prevTab = SelectedTab $win
+function Screen { ScreenOf $win }
 function Restore {
   if ($prevTab -and -not [System.Windows.Automation.Automation]::Compare($prevTab, $tab)) {
     try { $prevTab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() } catch {}
@@ -159,9 +182,22 @@ Out @{ ok = $true; done = $done; screen = $text }
 """
 
 
+def tab_names(tab: str) -> list[str]:
+    """Titles that count as tab: the name, and with dashes as spaces ("obin-prep" also
+    matches a tab titled "obin prep", as a hand-opened tab is often named)."""
+    return list(dict.fromkeys([tab, tab.replace("-", " ")]))
+
+
 def _run(req: dict[str, object]) -> dict[str, object]:
     if sys.platform != "win32":
         raise BoxError("answer-box needs Windows Terminal (Windows only)")
+    tab = str(req.get("tab", ""))
+    req = {
+        **req,
+        "names": tab_names(tab),
+        "footer": BOX_FOOTER,
+        "submit": SUBMIT_PROMPT,
+    }
     env = {**os.environ, "FLEET_BOX_REQ": json.dumps(req)}
     try:
         done = subprocess.run(

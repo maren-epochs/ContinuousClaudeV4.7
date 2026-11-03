@@ -124,19 +124,22 @@ SendMessage from this session.
    Sessions with status `waiting` are stopped on their own question box and will not read
    the message until it is answered. Answer the box yourself (do not hand it to the user):
    `answer-box <tab> --dry-run` (tab = the Windows Terminal tab title, the project folder
-   name) confirms a box is open, then `answer-box <tab>` types the default answer into its
+   name; `obin-prep` also matches a tab titled `obin prep`) confirms a box is open, then `answer-box <tab>` types the default answer into its
    "Type something." option and submits it: write a handoff now with /create-handoff and put
    that question and every other open question in it as A-D options. Every key is sent only
    with the tab's window in front and each step read back from the screen; the user's
-   previous tab and window are restored. Refusal (no box, tab not found or not unique, focus
-   lost, screen mismatch) = nothing more typed; report it.
+   previous tab and window are restored. Several tabs with the name (an old tab whose
+   session ended): the one showing a question box is used. Refusal (no box, tab not found,
+   no or several same-named tabs showing a box, focus lost, screen mismatch) = nothing more
+   typed; report it.
 4. After the idle notices (or when the user asks), `handoffs --since <epoch>`: `landed` means
-   the session's own transcript wrote (a `file_path` tool input) a handoff newer than the
+   the session's own transcript wrote (a `file_path` tool input, or a shell redirect, tee or
+   writing cmdlet; a name built at run time like `"${ts}_x.yaml"` matches) a handoff newer than the
    baseline, so sessions sharing a project root are told apart; `prior` means an ended
    session of the same project wrote it (the session was restarted under a new id: its
    handoff exists, counted apart from landed); `shared` means the root has a
    new file but the session's transcript is missing (writer unknown); `waiting` means not
-   yet. A handoff written through a shell command is not seen and reads `waiting`.
+   yet. A handoff written by a script (python, node) is not seen and reads `waiting`.
    Sessions waiting on their own question may not read the request until the user answers
    it. Report `N/M landed` and the waiting session names.
    A delivery notice saying a session held or refused the message counts as not sent.
