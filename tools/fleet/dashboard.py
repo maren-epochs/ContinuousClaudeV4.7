@@ -467,6 +467,10 @@ def _warnings_section(state: FleetState) -> str:
     )
 
 
+# An open dashboard tab reloads itself; collect rewrites the file at most every 2 min.
+REFRESH_SECONDS = 120
+
+
 def build_page(state: FleetState) -> str:
     """Self-contained HTML dashboard for one FleetState."""
     took = state.extra.get("collect_s")
@@ -490,6 +494,7 @@ def build_page(state: FleetState) -> str:
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">\n'
         f"<title>{_e(TITLE)}</title>\n<style>{_css()}</style>\n</head>\n<body>\n"
         '<main class="page">\n<header class="page-head"><div>'
         f'<h1>{_e(TITLE)}</h1><p class="meta">{meta}</p></div>'

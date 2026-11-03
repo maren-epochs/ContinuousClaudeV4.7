@@ -1546,6 +1546,18 @@ class CollectDigestTests(CollectDigestCase):
                 self.assertFalse(self.path.exists())
                 self.assertFalse((model.fleet_dir() / "collect.err").exists())
 
+    def test_collect_rewrites_dashboard(self):
+        page = model.fleet_dir() / "dashboard.html"
+        code, _, err = self.collect()
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn('http-equiv="refresh"', page.read_text(encoding="utf-8"))
+
+    def test_dashboard_failure_never_fails_collect(self):
+        expected = fleet.summary(_digest_state()) + "\n"
+        with mock.patch.object(fleet, "_load_dashboard", side_effect=OSError("ro")):
+            code, out, err = self.collect()
+        self.assertEqual((code, out, err), (0, expected, ""))
+
     def test_failed_collect_writes_no_digest(self):
         with mock.patch.object(fleet.collect, "collect", side_effect=OSError("boom")):
             code, _, _ = self.run_main("collect")

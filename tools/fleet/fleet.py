@@ -168,7 +168,17 @@ def _collect_cmd() -> int:
         return COLLECT_FAILED
     print(summary(state))
     _daily_digest(state)
+    _refresh_dashboard(state)
     return 0
+
+
+def _refresh_dashboard(state: FleetState) -> None:
+    """Rewrite ~/.claude/fleet/dashboard.html from the state just collected, so an
+    open dashboard tab (it reloads itself) stays current. Never fails collect."""
+    with contextlib.suppress(Exception):
+        module = _load_dashboard()
+        if module is not None and hasattr(module, "write_page"):
+            module.write_page(state, model.fleet_dir() / "dashboard.html")
 
 
 def _daily_digest(state: FleetState) -> None:

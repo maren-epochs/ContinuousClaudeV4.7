@@ -260,4 +260,6 @@ yourself.
 
 `dashboard [out.html]` writes a self-contained HTML page (default
 `~/.claude/fleet/dashboard.html`). Pending queued questions show first, as a notice. It contains private project names: keep it under
-`~/.claude`, never write it into a repo. Open it for the user or Read the path back.
+`~/.claude`, never write it into a repo. Open it for the user or Read the path back. Every
+`collect` (also the Stop hook's background run, at most every 2 min) rewrites the default page,
+and the page reloads itself every 2 min, so an open tab stays current.
