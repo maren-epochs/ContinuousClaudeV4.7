@@ -79,7 +79,7 @@ Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `
 - `lock_requirements.py` — regenerates root `requirements.lock` (pyproject closure pinned to the installed env, no network); `--check` exits 1 when stale
 - `_testing.py` — shared unittest helpers (module loader, async runner, fake aiohttp); not collected
 
-Python checks (config in `pyproject.toml`; `tools/viz/validate_palette.py` is vendored and excluded): `ruff check .`, `ruff format --check .`, `py -3.13 -m mypy`, `py -3.13 -m pytest -q` (every `tools/**/test_*.py` + `install/test_*.py` unittest suite, plus `tests/integration/`, marker `integration`, ~50 s; skip with `-m "not integration"`), `py -3.13 -m coverage run -m pytest -q && py -3.13 -m coverage report`.
+Python checks (config in `pyproject.toml`; `tools/viz/validate_palette.py` is vendored and excluded): `ruff check .`, `ruff format --check .`, `py -3.13 -m mypy`, `py -3.13 -m pytest -q -n auto` (pytest-xdist, dev group; every `tools/**/test_*.py` + `install/test_*.py` unittest suite, plus `tests/integration/`, marker `integration`; ~3.5 min parallel on 8 cores, ~7.5 min without `-n`, the hook suites ~3 min of it; quick run `-m "not integration"`), `py -3.13 -m coverage run -m pytest -q && py -3.13 -m coverage report`.
 
 ## Visualization (tools/viz)
 

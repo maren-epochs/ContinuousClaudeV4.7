@@ -47,6 +47,9 @@ run_hook() { # $1=file_path -> sets OUT, ELAPSED_MS, RC
 # steady state (always the ruff path), but bare `node -e 0` startup alone swings
 # 70ms->140ms under concurrent load and isolated runs spiked to 0.5-2s, hitting
 # dirty and clean fixtures together — environment, not a code path.
+# Budget per check; the pytest wrapper raises it when test files run in parallel
+# (pytest -n), where other workers load the CPU.
+PED_BUDGET_MS="${PED_BUDGET_MS:-400}"
 TIMING_RUNS=5
 median_ms() { # $1=file_path -> sets MEDIAN_MS
   local i samples=()
@@ -70,10 +73,10 @@ case "$OUT" in
   *) bad "(a) dirty.py output missing F401 — got: $OUT";;
 esac
 median_ms "$DIRTY"
-if [ "$MEDIAN_MS" -lt 400 ]; then
-  ok "(a) dirty.py median wall time ${MEDIAN_MS}ms < 400ms (runs: $TIMING_SAMPLES)"
+if [ "$MEDIAN_MS" -lt "$PED_BUDGET_MS" ]; then
+  ok "(a) dirty.py median wall time ${MEDIAN_MS}ms < ${PED_BUDGET_MS}ms (runs: $TIMING_SAMPLES)"
 else
-  bad "(a) dirty.py median wall time ${MEDIAN_MS}ms >= 400ms (runs: $TIMING_SAMPLES)"
+  bad "(a) dirty.py median wall time ${MEDIAN_MS}ms >= ${PED_BUDGET_MS}ms (runs: $TIMING_SAMPLES)"
 fi
 
 # --- (b) clean .py: {} output, <400ms -------------------------------------
@@ -84,10 +87,10 @@ else
   bad "(b) clean.py output is not {} — got: $OUT"
 fi
 median_ms "$CLEAN"
-if [ "$MEDIAN_MS" -lt 400 ]; then
-  ok "(b) clean.py median wall time ${MEDIAN_MS}ms < 400ms (runs: $TIMING_SAMPLES)"
+if [ "$MEDIAN_MS" -lt "$PED_BUDGET_MS" ]; then
+  ok "(b) clean.py median wall time ${MEDIAN_MS}ms < ${PED_BUDGET_MS}ms (runs: $TIMING_SAMPLES)"
 else
-  bad "(b) clean.py median wall time ${MEDIAN_MS}ms >= 400ms (runs: $TIMING_SAMPLES)"
+  bad "(b) clean.py median wall time ${MEDIAN_MS}ms >= ${PED_BUDGET_MS}ms (runs: $TIMING_SAMPLES)"
 fi
 
 # --- (c) .mjs file: tldr path, valid JSON, no time bound -------------------

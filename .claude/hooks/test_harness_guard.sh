@@ -36,8 +36,15 @@ check() { # <name> <condition result: 0 ok>
 }
 skip() { echo "SKIP: $1"; }
 
-winpath() { printf '%s' "$1" | sed 's#/#\\#g'; }
-jesc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{ORS=""} NR>1{print "\\n"} {print}'; }
+winpath() { printf '%s' "${1//\//\\}"; }
+# JSON string escape in pure bash (a sed|awk pipeline per payload cost ~20 s per run
+# on Windows): \ and " escaped, newlines joined as \n, one trailing newline dropped.
+jesc() {
+  local s=$1
+  [[ $s == *$'\n' ]] && s=${s%$'\n'}
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}
+  printf '%s' "$s"
+}
 
 HOMEL="$WORK/home"
 CL="$HOMEL/.claude"
@@ -66,7 +73,7 @@ CWD="$WORK"
 NODE_ARGS=()
 run_hook() {
   OUT=$(printf '%s' "$1" | env HOME="$RUN_HOME" USERPROFILE="$RUN_UP" node "${NODE_ARGS[@]}" "$HOOK" 2>"$ERRFILE"); RC=$?
-  ERR=$(cat "$ERRFILE" 2>/dev/null || true)
+  ERR=$(<"$ERRFILE") 2>/dev/null || ERR=""
 }
 denied() { case "$OUT" in *'"permissionDecision":"deny"'*) [ $RC -eq 0 ];; *) return 1;; esac; }
 allowed() { [ $RC -eq 0 ] && ! denied; }

@@ -63,6 +63,7 @@ pydeck==0.9.3
 pyogrio==0.13.0
 pyproj==3.8.0
 pytest==9.1.1
+pytest-xdist==3.8.0
 qualpal==1.1.0
 ruff==0.16.8
 scienceplots==2.2.2
@@ -102,6 +103,7 @@ contourpy==1.4.0
 css-inline==0.20.2
 cycler==0.12.1
 distlib==0.4.3
+execnet==2.1.2
 executing==2.2.1
 faicons==0.2.2
 filelock==4.0.1

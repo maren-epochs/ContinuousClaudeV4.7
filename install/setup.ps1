@@ -88,7 +88,7 @@ function Step-Setup {
 function Step-Test {
     $failed = @()
     Write-Host '== pytest'
-    if ((Invoke-Py -m pytest -q) -ne 0) { $failed += 'pytest' }
+    if ((Invoke-Py -m pytest -q -n auto) -ne 0) { $failed += 'pytest' }
     $suites = @(Get-ChildItem -Path '.claude/hooks' -Filter 'test_*.sh' | Sort-Object Name |
         ForEach-Object { ".claude/hooks/$($_.Name)" })
     if (Test-Path -LiteralPath 'scripts/test_readiness.sh') { $suites += 'scripts/test_readiness.sh' }

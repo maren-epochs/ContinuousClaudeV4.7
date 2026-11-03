@@ -6,6 +6,7 @@ either `RESULT: N passed, M failed` or `PASS=N FAIL=M`.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -29,9 +30,16 @@ def test_suites_discovered() -> None:
     assert SUITES, "no .claude/hooks/test_*.sh found"
 
 
+# Under pytest -n other workers load the CPU, so wall-time budgets get headroom.
+PARALLEL_ENV = {"PED_BUDGET_MS": "1500"}
+
+
 @pytest.mark.parametrize("suite", SUITES, ids=[s.stem for s in SUITES])
 def test_hook_suite(suite: Path, bash: str, run: Runner) -> None:
-    p = run([bash, suite.relative_to(REPO).as_posix()], cwd=REPO)
+    env = None
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        env = {**os.environ, **PARALLEL_ENV}
+    p = run([bash, suite.relative_to(REPO).as_posix()], cwd=REPO, env=env)
     out = p.stdout + p.stderr
     tail = out[-4000:]
     assert p.returncode == 0, f"{suite.name} exit {p.returncode}\n{tail}"

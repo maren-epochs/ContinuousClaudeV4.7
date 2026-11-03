@@ -60,6 +60,7 @@ viz = [
 ]
 dev = [
     "pytest>=9.1",
+    "pytest-xdist>=3.8",            # -n auto: parallel test files
     "coverage>=7.10",               # [tool.coverage.run] patch = ["subprocess"] needs 7.10+
     "mypy>=2.3",
     "ruff>=0.16.8,<0.17",           # rule set + formatter output change on minor releases

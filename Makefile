@@ -32,7 +32,7 @@ setup: ## Deps (requirements.lock, else pyproject) + plotly-resampler --no-deps,
 test: ## Unit suites (pytest) + hook suites + readiness script tests
 	@failed=""; \
 	echo "== pytest"; \
-	$(PYTHON) -m pytest -q || failed="$$failed pytest"; \
+	$(PYTHON) -m pytest -q -n auto || failed="$$failed pytest"; \
 	for t in .claude/hooks/test_*.sh; do \
 	  echo "== $$t"; \
 	  bash "$$t" || failed="$$failed $$t"; \

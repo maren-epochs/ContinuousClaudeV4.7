@@ -27,7 +27,7 @@ LOCK = ROOT / "requirements.lock"
 PYPROJECT = ROOT / "pyproject.toml"
 VIZ_REQS = ROOT / "tools" / "requirements-viz.txt"
 
-DEV_GROUP = {"pytest", "coverage", "mypy", "ruff", "pre-commit"}
+DEV_GROUP = {"pytest", "pytest-xdist", "coverage", "mypy", "ruff", "pre-commit"}
 
 _NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*(.*)$")
 _PIN_RE = re.compile(
