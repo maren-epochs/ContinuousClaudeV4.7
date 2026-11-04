@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import html
 import os
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import digest, model, questions
+from . import digest, guard, model, questions
 from .model import Alert, AuditEvent, Collision, DriftEntry, FleetState, Session
 
 try:  # tools.fleet: tools.viz is the sibling package
@@ -391,6 +392,15 @@ def _digest_section() -> str:
     )
 
 
+def _guard_section() -> str:
+    """The memory guard's actions of the last day; empty string when none."""
+    actions = guard.recent_actions(time.time())
+    if not actions:
+        return ""
+    rows = "".join(f'<p class="meta">{_e(line)}</p>' for line in actions)
+    return f'<section id="guard" class="card"><h2>Memory guard</h2>{rows}</section>'
+
+
 def _inbox_section(state: FleetState) -> str:
     n = state.inbox_count
     noun = "proposal" if n == 1 else "proposals"
@@ -481,6 +491,7 @@ def build_page(state: FleetState) -> str:
         (
             _questions_section(state),
             _digest_section(),
+            _guard_section(),
             _summary(state),
             _alerts_section(state),
             _sessions_section(state),

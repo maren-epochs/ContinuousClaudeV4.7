@@ -291,10 +291,12 @@ def launch(
     stagger: float = 0.0,
     sleep: Callable[[float], object] | None = None,
     window: str | None = None,
+    proceed: Callable[[], bool] | None = None,
 ) -> list[list[str]]:
     """Start Windows Terminal with the tabs; returns every wt command run.
 
     ``sleep`` (default :func:`time.sleep`) waits out each delay of :func:`wt_calls`.
+    ``proceed`` is asked before every call after the first; False stops there.
     """
     if not targets:
         raise LaunchError("nothing to open")
@@ -304,10 +306,12 @@ def launch(
     shell = "pwsh" if shutil.which("pwsh") else "powershell"
     wait = sleep or time.sleep
     env = clean_env(dict(os.environ))
-    commands = []
+    commands: list[list[str]] = []
     for delay, args in wt_calls(targets, shell, profile, stagger, window):
         if delay > 0:
             wait(delay)
+        if commands and proceed is not None and not proceed():
+            break
         command = [wt, *args]
         subprocess.Popen(command, close_fds=True, env=env)
         commands.append(command)

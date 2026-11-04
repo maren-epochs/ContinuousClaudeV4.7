@@ -1,5 +1,11 @@
 # Fleet data contract
 
+Memory guard files (`guard.py`): `guard.json` = optional overrides of `guard.Config`;
+`guard-state.json` = last run record; `guard.jsonl` = one record per run while away or acting
+(`ts`, `free_gb`, `idle_min`, `away`, `action` none|close_browser|would_close_sessions, `why`,
+`outcome`, `free_after_gb`, `browser_in_use_by`, `would_close`, `skipped`, `low_readings`),
+halved past 1 MiB.
+
 Source of truth for every fleet file. Code: `tools/fleet/model.py` (stdlib dataclasses,
 JSON round-trip). Node hooks that write these files (harness-guard, fleet-audit) follow
 the same shapes.

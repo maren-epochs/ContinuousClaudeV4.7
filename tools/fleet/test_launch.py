@@ -22,6 +22,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from tools.fleet import fleet, launch
+from tools.fleet import guard as launch_guard
 
 
 class LaunchHome(unittest.TestCase):
@@ -45,6 +46,9 @@ class LaunchHome(unittest.TestCase):
         )
         temp.start()
         self.addCleanup(temp.stop)
+        memory = mock.patch.object(launch_guard, "free_gb", return_value=8.0)
+        self.memory = memory.start()
+        self.addCleanup(memory.stop)
 
     def project(self, name, handoff=True, local=False, mtime=None):
         """A project folder with one transcript; its handoff lives where asked."""
@@ -398,6 +402,42 @@ class OpenCommandTests(LaunchHome):
         code, out, _ = self.run_cli()
         self.assertEqual(code, 0)
         self.assertIn("no projects to open", out)
+
+    def test_low_memory_holds_new_tabs_unless_forced(self):
+        self.project("acorn")
+        self.memory.return_value = 0.5
+        with (
+            mock.patch.object(launch.shutil, "which", return_value="wt"),
+            mock.patch.object(launch.subprocess, "Popen") as popen,
+        ):
+            code, _, err = self.run_cli("acorn")
+            self.assertEqual(code, 1)
+            self.assertIn("held: 0.50 GB free", err)
+            popen.assert_not_called()
+            code, _, _ = self.run_cli("acorn", "--force", "--stagger", "0")
+            self.assertEqual(code, 0)
+            popen.assert_called_once()
+
+    def test_memory_dropping_mid_batch_holds_back_the_rest(self):
+        self.project("acorn")
+        self.project("myrtle")
+        self.memory.side_effect = [8.0, 0.5]
+        with (
+            mock.patch.object(launch.shutil, "which", return_value="wt"),
+            mock.patch.object(launch.subprocess, "Popen") as popen,
+            mock.patch.object(launch.time, "sleep"),
+        ):
+            code, out, _ = self.run_cli("acorn", "myrtle")
+        self.assertEqual(code, 0)
+        self.assertEqual(popen.call_count, 1)
+        self.assertIn("opened 1 tab(s): acorn", out)
+        self.assertIn("held back for low memory: myrtle", out)
+
+    def test_listing_and_dry_run_are_not_held(self):
+        self.project("acorn")
+        self.memory.return_value = 0.5
+        self.assertEqual(self.run_cli()[0], 0)
+        self.assertEqual(self.run_cli("acorn", "--dry-run")[0], 0)
 
     def test_here_targets_the_current_window(self):
         self.project("acorn")

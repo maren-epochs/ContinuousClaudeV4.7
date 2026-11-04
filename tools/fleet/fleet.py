@@ -63,6 +63,7 @@ if __package__:
         boxes,
         collect,
         digest,
+        guard,
         launch,
         lessons,
         limits,
@@ -77,6 +78,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
         boxes,
         collect,
         digest,
+        guard,
         launch,
         lessons,
         limits,
@@ -410,6 +412,9 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
             f" | inbox: {state.inbox_count} | audit: {len(state.audit_recent)} recent"
         ),
     ]
+    actions = guard.recent_actions(time.time())
+    if actions:
+        lines.append(f"guard: {actions[-1]} ({len(actions)} in 24 h)")
     notice = digest.notice()
     if notice:
         lines.append(notice)
@@ -1227,6 +1232,7 @@ def open_sessions(
     profile: str | None = None,
     stagger: float = launch.STAGGER_S,
     here: bool = False,
+    force: bool = False,
 ) -> str:
     """List openable projects, or open the picked ones as Windows Terminal tabs.
 
@@ -1275,7 +1281,23 @@ def open_sessions(
                     targets, profile=profile, stagger=stagger, window=window
                 )
             )
-        launch.launch(targets, profile, stagger, window=window)
+        reason = None if force else guard.hold_reason()
+        if reason:
+            raise Refused(f"held: {reason}; free memory or add --force")
+        commands = launch.launch(
+            targets,
+            profile,
+            stagger,
+            window=window,
+            proceed=None if force else lambda: guard.hold_reason() is None,
+        )
+        if stagger > 0 and len(commands) < len(targets):
+            left = ", ".join(t.title for t in targets[len(commands) :])
+            opened = ", ".join(t.title for t in targets[: len(commands)])
+            return (
+                f"opened {len(commands)} tab(s): {opened}; held back for low memory:"
+                f" {left} (free memory or add --force)"
+            )
     except launch.LaunchError as exc:
         raise Refused(str(exc)) from None
     return f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets)
@@ -1400,6 +1422,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--dry-run", action="store_true", help="print the wt commands only")
     p.add_argument(
+        "--force",
+        action="store_true",
+        help="open even when free memory is under the guard's hold level",
+    )
+    p.add_argument(
         "--here",
         action="store_true",
         help="add the tabs to this Windows Terminal window instead of a new one",
@@ -1424,6 +1451,11 @@ def _parser() -> argparse.ArgumentParser:
         help="save ~/.claude/fleet/digests/YYYY-MM-DD.md, print the path",
     )
     _add_permission_parsers(sub)
+    p = sub.add_parser(
+        "guard", help="memory guard: thresholds and last run, or one run"
+    )
+    p.add_argument("action", nargs="?", choices=("status", "run"), default="status")
+    p.add_argument("--dry-run", action="store_true", help="run: decide, act on nothing")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1448,14 +1480,28 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     ),
     "grant": lambda a: _grant_cmd(a),
     "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
+    "guard": lambda a: _guard_cmd(a),
     "usage": lambda a: limits.usage_report(time.time(), a.json),
     "limits": lambda a: limits.report(
         limits.stopped(_state(a.fresh)), time.time(), a.json
     ),
     "open": lambda a: open_sessions(
-        a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger, here=a.here
+        a.picks,
+        a.all,
+        a.dry_run,
+        a.yes,
+        a.profile,
+        stagger=a.stagger,
+        here=a.here,
+        force=a.force,
     ),
 }
+
+
+def _guard_cmd(a: argparse.Namespace) -> str:
+    if a.action == "status":
+        return guard.status()
+    return json.dumps(guard.tick(dry_run=a.dry_run), indent=2)
 
 
 def _grant_cmd(a: argparse.Namespace) -> str:

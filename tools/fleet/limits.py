@@ -36,7 +36,8 @@ class Stopped:
         return self.resets_at is None or now >= self.resets_at
 
 
-def _tail_entries(path: Path) -> list[dict[str, Any]]:
+def tail_entries(path: Path) -> list[dict[str, Any]]:
+    """JSON objects among the last ``TAIL_BYTES`` of a transcript."""
     try:
         with path.open("rb") as fh:
             fh.seek(0, 2)
@@ -89,7 +90,7 @@ def stopped(state: model.FleetState, projects: Path | None = None) -> list[Stopp
         if not s.alive or not s.session_id:
             continue
         path = collect.transcript_path(projects, s.cwd, s.session_id)
-        entry = limit_entry(_tail_entries(path)) if path else None
+        entry = limit_entry(tail_entries(path)) if path else None
         if entry is None:
             continue
         resets, kind = _reset_epoch(entry)

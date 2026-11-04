@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import collect, lessons, model
+from . import collect, guard, lessons, model
 from .model import Alert, FleetState, Harness, Session
 
 AUDIT_WINDOW_S = 24 * 3600
@@ -185,6 +185,7 @@ def build(state: FleetState, now: _dt.datetime | None = None) -> dict[str, Any]:
         },
         "inbox_count": state.inbox_count,
         "audit_24h": audit_count(ts),
+        "guard": guard.recent_actions(ts),
         "sessions": rows,
         "not_running": sum(1 for s in state.sessions if not s.alive),
         "needs_you": _needs_you(rows, machine_alerts),
@@ -222,6 +223,7 @@ def markdown(data: dict[str, Any]) -> str:
         f"- Harness: {h['sync']}{drift}",
         f"- Inbox: {data['inbox_count']} pending",
         f"- Audit: {_plural(data['audit_24h'], 'risky command')} in the last 24 h",
+        *[f"- Memory guard: {line}" for line in data.get("guard") or []],
         "",
         "## Sessions",
         "",

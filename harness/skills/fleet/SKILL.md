@@ -198,6 +198,21 @@ name (`--suppressApplicationTitle` keeps it).
    lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
    them. In the user's own terminal, `open --all` lists them and asks which to open.
 
+## /fleet guard
+
+Memory guard. `guard` (or `guard status`) shows thresholds, current readings, the last run and
+the last day's actions; `guard run --dry-run` shows what a run would do and acts on nothing.
+The scheduled task `Epoch memory guard` (`install/register_guard_task.ps1`, opt-in, every 5 min
+while logged on) runs `guard run`. Away = no input for 60 min, within 4-10 am or away mode on.
+- Any hour: `open` refuses new tabs under 1 GB free (`held: ...`) and holds back the rest of a
+  batch if memory drops mid-way. `--force` overrides; use it only when the user asks.
+- Away and under 2.4 GB: closes Brave's windows, unless a live session used Claude in Chrome in
+  the last 30 min. A window that will not close is left and logged.
+- Away, under 1 GB twice, no browser to close: logs `would_close_sessions`. Log-only: nothing
+  closes sessions, and enabling that is the user's decision after reviewing the log.
+Settings `~/.claude/fleet/guard.json` (`protected`: projects never proposed for closing), log
+`~/.claude/fleet/guard.jsonl`. `report`, the digest and the dashboard list the actions.
+
 ## /fleet resume
 
 Restarts sessions the usage limit stopped ("You've hit your session limit · resets ..."),
