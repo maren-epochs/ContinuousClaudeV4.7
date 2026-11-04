@@ -1226,6 +1226,7 @@ def open_sessions(
     yes: bool = False,
     profile: str | None = None,
     stagger: float = launch.STAGGER_S,
+    here: bool = False,
 ) -> str:
     """List openable projects, or open the picked ones as Windows Terminal tabs.
 
@@ -1264,16 +1265,17 @@ def open_sessions(
                 targets = launch.choose(targets, answer)
                 if not targets:
                     return "cancelled: nothing opened"
+        window = launch.current_window(os.environ) if here else None
         if dry_run:
             return "\n".join(
                 (f"(after {delay:g} s) " if delay else "")
                 + "wt "
                 + subprocess.list2cmdline(args)
                 for delay, args in launch.wt_calls(
-                    targets, profile=profile, stagger=stagger
+                    targets, profile=profile, stagger=stagger, window=window
                 )
             )
-        launch.launch(targets, profile, stagger)
+        launch.launch(targets, profile, stagger, window=window)
     except launch.LaunchError as exc:
         raise Refused(str(exc)) from None
     return f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets)
@@ -1398,6 +1400,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--dry-run", action="store_true", help="print the wt commands only")
     p.add_argument(
+        "--here",
+        action="store_true",
+        help="add the tabs to this Windows Terminal window instead of a new one",
+    )
+    p.add_argument(
         "--profile", help="Windows Terminal profile for the tabs (its icon and colors)"
     )
     p.add_argument(
@@ -1446,7 +1453,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
         limits.stopped(_state(a.fresh)), time.time(), a.json
     ),
     "open": lambda a: open_sessions(
-        a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger
+        a.picks, a.all, a.dry_run, a.yes, a.profile, stagger=a.stagger, here=a.here
     ),
 }
 

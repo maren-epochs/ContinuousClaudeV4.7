@@ -112,7 +112,7 @@ Cross-session view and harness inbox for every Claude Code session on this machi
 | `~/.claude/harness-inbox/<id>.json` | Proposals: edits harness-guard redirected, plus lessons; `apply` writes into the repo file, never `~/.claude` |
 | `~/.claude/.ccv47-manifest.json` | Install manifest written by `sync_global.py --apply`; no manifest = guard allows everything |
 
-Machine `memory` alert (warn): free memory below 15% of total, or below `FLEET_MEM_WARN_GB` (GB) when set. Harness sync is file-level: `differs from repo (N files)` = installed copies vs what `sync_global.py` would write from the repo working tree, not commits. `open --stagger SECONDS` (default 3) opens one tab per `wt` call, that many seconds apart; `0` = one chained `wt` command.
+Machine `memory` alert (warn): free memory below 15% of total, or below `FLEET_MEM_WARN_GB` (GB) when set. Harness sync is file-level: `differs from repo (N files)` = installed copies vs what `sync_global.py` would write from the repo working tree, not commits. `open --stagger SECONDS` (default 3) opens one tab per `wt` call, that many seconds apart; `0` = one chained `wt` command. `open --here` adds the tabs to the current Windows Terminal window (`wt -w 0`), refused outside Windows Terminal.
 
 Setup (Claude runs these; both write `~/.claude`): `py -3.13 install/sync_global.py --apply`, then `py -3.13 install/register_hooks.py` (`--dry-run` first), then restart sessions. Shapes: `tools/fleet/schema.md`. Never open `~/.claude/sessions/*.key`.
 

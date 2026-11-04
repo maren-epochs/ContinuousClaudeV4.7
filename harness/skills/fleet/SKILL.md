@@ -191,7 +191,9 @@ name (`--suppressApplicationTitle` keeps it).
 3. `open <pick>... --dry-run` shows the `wt` commands; then `open <pick>...` (numbers, names or
    folder paths). `--stagger SECONDS` (default 3) opens one tab per `wt` call that many seconds
    apart: the first creates a uniquely named window (`wt -w fleet-<ms>`), the rest add tabs to
-   it; `--stagger 0` = one chained `wt -w new` command. It starts the window and returns once
+   it; `--stagger 0` = one chained `wt -w new` command. `--here` ("this window", "as a tab here")
+   adds the tabs to the current Windows Terminal window (`wt -w 0`) and refuses outside Windows
+   Terminal. It starts the window and returns once
    the last tab is requested; the new sessions are independent of this one. Exit 1 = unknown name, missing folder or no `wt.exe`. `--all` without a terminal only
    lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
    them. In the user's own terminal, `open --all` lists them and asks which to open.

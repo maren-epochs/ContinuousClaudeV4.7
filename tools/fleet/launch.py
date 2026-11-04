@@ -21,13 +21,14 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import collect, model
 
 TAB_PROMPT = "claude '/resume-handoff'"
+CURRENT_WINDOW = "0"  # wt -w 0: the window the command runs in
 STAGGER_S = 3.0  # seconds between tabs for fleet.py open; 0 = one chained wt command
 CWD_HEAD_BYTES = 64 * 1024
 _CWD = re.compile(r'"cwd":\s*("(?:[^"\\]|\\.)*")')
@@ -210,19 +211,33 @@ def _tab_args(t: Target, shell: str, profile: str | None) -> list[str]:
 
 
 def wt_args(
-    targets: list[Target], shell: str = "pwsh", profile: str | None = None
+    targets: list[Target],
+    shell: str = "pwsh",
+    profile: str | None = None,
+    window: str = "new",
 ) -> list[str]:
-    """wt.exe arguments: one new window, one titled tab per target.
+    """wt.exe arguments: one window (default a new one), one titled tab per target.
 
     ``profile`` names a Windows Terminal profile for every tab; the tab keeps its own
     command line and takes the profile's icon (which the taskbar shows) and colors.
     """
-    args = ["-w", "new"]
+    args = ["-w", window]
     for i, t in enumerate(targets):
         if i:
             args.append(";")
         args += _tab_args(t, shell, profile)
     return args
+
+
+def current_window(env: Mapping[str, str]) -> str:
+    """The ``wt -w`` id of the Windows Terminal window this process runs in.
+
+    Windows Terminal sets ``WT_SESSION`` in its panes; elsewhere ``-w 0`` would pick
+    whichever window was used last, so refuse instead.
+    """
+    if not env.get("WT_SESSION"):
+        raise LaunchError("--here needs a session inside Windows Terminal")
+    return CURRENT_WINDOW
 
 
 def window_name() -> str:
@@ -242,9 +257,10 @@ def wt_calls(
     ``stagger`` <= 0: one call, the chained :func:`wt_args`. Otherwise one call per tab,
     each ``-w <window>`` (``window`` default: :func:`window_name`) with the same tab
     arguments; the first creates the named window, the rest wait ``stagger`` seconds.
+    ``window`` also replaces the new window of the single call.
     """
     if stagger <= 0:
-        return [(0.0, wt_args(targets, shell, profile))]
+        return [(0.0, wt_args(targets, shell, profile, window or "new"))]
     name = window or window_name()
     return [
         (float(stagger) if i else 0.0, ["-w", name, *_tab_args(t, shell, profile)])

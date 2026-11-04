@@ -399,6 +399,52 @@ class OpenCommandTests(LaunchHome):
         self.assertEqual(code, 0)
         self.assertIn("no projects to open", out)
 
+    def test_here_targets_the_current_window(self):
+        self.project("acorn")
+        self.project("myrtle")
+        with mock.patch.dict(os.environ, {"WT_SESSION": "x"}):
+            code, out, _ = self.run_cli("acorn", "myrtle", "--here", "--dry-run")
+            self.assertEqual(code, 0)
+            lines = out.strip().splitlines()
+            self.assertEqual(len(lines), 2)
+            for line in lines:
+                self.assertIn("wt -w 0 new-tab", line)
+            code, out, _ = self.run_cli(
+                "acorn", "myrtle", "--here", "--stagger", "0", "--dry-run"
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(out.count("-w 0"), 1)
+            self.assertNotIn("-w new", out)
+
+    def test_here_opens_in_the_current_window(self):
+        self.project("acorn")
+        with (
+            mock.patch.dict(os.environ, {"WT_SESSION": "x"}),
+            mock.patch.object(launch.shutil, "which", return_value="wt"),
+            mock.patch.object(launch.subprocess, "Popen") as popen,
+        ):
+            code, _, _ = self.run_cli("acorn", "--here", "--stagger", "0")
+        self.assertEqual(code, 0)
+        self.assertEqual(popen.call_args.args[0][:3], ["wt", "-w", "0"])
+
+    def test_here_outside_windows_terminal_is_refused(self):
+        self.project("acorn")
+        env = {k: v for k, v in os.environ.items() if k != "WT_SESSION"}
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(launch.subprocess, "Popen") as popen,
+        ):
+            code, _, err = self.run_cli("acorn", "--here")
+        self.assertEqual(code, 1)
+        self.assertIn("inside Windows Terminal", err)
+        popen.assert_not_called()
+
+    def test_without_here_a_new_window_is_used(self):
+        self.project("acorn")
+        with mock.patch.dict(os.environ, {"WT_SESSION": "x"}):
+            _, out, _ = self.run_cli("acorn", "--stagger", "0", "--dry-run")
+        self.assertIn("wt -w new", out)
+
     def test_dry_run_prints_wt_command_and_starts_nothing(self):
         self.project("acorn")
         with mock.patch.object(launch.subprocess, "Popen") as popen:
