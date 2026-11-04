@@ -505,7 +505,7 @@ def recent_actions(now: float, window_s: float = 24 * 3600) -> list[str]:
         if action == "close_browser" or key != last_key:
             lines.append(_describe(entry))
         last_key = key
-    return [*lines, *jobs.finished_lines(now, window_s)]
+    return [*lines, *jobs.finished_lines(now, window_s), *jobs.queued_lines()]
 
 
 def status(now: float | None = None) -> str:

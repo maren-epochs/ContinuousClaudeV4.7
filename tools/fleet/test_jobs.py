@@ -287,14 +287,18 @@ class CliTests(JobHome):
             "print(1)",
         )
 
-    def test_add_needs_the_user_agreed_flag(self):
-        code, _, err = self.run_cli(*self.add_args())
-        self.assertEqual(code, 1)
-        self.assertIn("--user-agreed", err)
+    def test_add_needs_a_note(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.run_cli(*self.add_args())
         self.assertEqual(jobs.all_jobs(), [])
 
+    def test_queued_jobs_show_command_and_reason_in_the_report_lines(self):
+        self.run_cli(*self.add_args("--note", "needs 6 GB"))
+        lines = guard.recent_actions(time.time())
+        self.assertTrue(any("print(1)" in x and "needs 6 GB" in x for x in lines))
+
     def test_add_list_cancel(self):
-        code, out, _ = self.run_cli(*self.add_args("--user-agreed"))
+        code, out, _ = self.run_cli(*self.add_args("--note", "why"))
         self.assertEqual(code, 0)
         self.assertIn("queued", out)
         job = jobs.all_jobs()[0]

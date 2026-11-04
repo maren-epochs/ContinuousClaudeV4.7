@@ -1,7 +1,8 @@
 """Memory-heavy jobs queued for the away period; the memory guard starts them.
 
-A session queues a job only after the user agreed in that session (``job add --user-agreed``).
-The stored argv runs unchanged, without a shell, in the stored folder. ``guard.tick`` starts
+A session queues a job itself when its plan needs more memory than is free now (``job add``,
+no question to the user); the reply says so and the queue shows it. The stored argv runs
+unchanged, without a shell, in the stored folder. ``guard.tick`` starts
 the oldest queued job while the user is away and enough memory is free, one at a time. It
 spawns ``job supervise <id>``, a detached process that outlives the guard run, runs the
 command, enforces the time limit and records the result. When the user returns a running
@@ -291,6 +292,15 @@ def describe(job: Job) -> str:
         f"{job.id}  {job.status}{code}  {job.project}  needs {job.need_gb:g} GB,"
         f" limit {job.limit_min:g} min  {clipped}"
     )
+
+
+def queued_lines() -> list[str]:
+    """Plain lines for what is waiting: command and reason, so the user can see them."""
+    return [
+        f"queued {j.id} ({j.project}): {' '.join(j.argv)[:120]} - {j.note}"
+        for j in all_jobs()
+        if j.status == "queued"
+    ]
 
 
 def report(include_done: bool = False) -> str:

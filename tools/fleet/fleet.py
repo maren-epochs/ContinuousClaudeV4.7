@@ -1460,12 +1460,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="run: decide, act on nothing")
     p = sub.add_parser("job", help="memory-heavy jobs queued for the away period")
     job_sub = p.add_subparsers(dest="job_cmd", required=True)
-    q = job_sub.add_parser("add", help="queue a command (after the user agreed)")
+    q = job_sub.add_parser("add", help="queue a command for the away period")
     q.add_argument("--cwd", default=".", help="folder to run in (default: here)")
     q.add_argument("--need-gb", type=float, required=True, help="free memory it needs")
     q.add_argument("--limit-min", type=float, required=True, help="stop it after this")
-    q.add_argument("--note", help="what it is for")
-    q.add_argument("--user-agreed", action="store_true", help="the user agreed to it")
+    q.add_argument("--note", required=True, help="what it is for and why later")
     q.add_argument("argv", nargs=argparse.REMAINDER, help="-- command and arguments")
     q = job_sub.add_parser("list", help="queued and running jobs")
     q.add_argument("--all", action="store_true", help="include finished jobs")
@@ -1519,13 +1518,8 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
 def _job_cmd(a: argparse.Namespace) -> str:
     try:
         if a.job_cmd == "add":
-            if not a.user_agreed:
-                raise Refused(
-                    "--user-agreed is required: queue a job only after the user"
-                    " agreed to this exact command in this session"
-                )
             argv = a.argv[1:] if a.argv[:1] == ["--"] else a.argv
-            job = jobs.add(a.cwd, argv, a.need_gb, a.limit_min, a.note or "")
+            job = jobs.add(a.cwd, argv, a.need_gb, a.limit_min, a.note)
             return "queued: " + jobs.describe(job)
         if a.job_cmd == "cancel":
             return jobs.cancel(a.id)
