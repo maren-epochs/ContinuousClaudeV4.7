@@ -140,6 +140,17 @@ def window_closing(now: float, cfg: Config) -> bool:
     return 0 <= left < cfg.job_last_start_min
 
 
+def headroom(need_gb: float, cfg: Config | None = None) -> str:
+    """Whether a job needing ``need_gb`` could run now: ``can run now`` or ``short``."""
+    cfg = cfg or load_config()
+    free = free_gb()
+    if free is None:
+        return "memory now: unknown"
+    required = need_gb + cfg.job_reserve_gb
+    verdict = "can run now" if free >= required else "short"
+    return f"memory now: {free:.2f} GB free, {required:g} GB required: {verdict}"
+
+
 def hold_reason(cfg: Config | None = None) -> str | None:
     """Why a new session should wait: free memory under ``hold_gb``; None = go ahead."""
     cfg = cfg or load_config()

@@ -217,8 +217,11 @@ Settings `~/.claude/fleet/guard.json` (`protected`: projects never proposed for 
 
 Memory-heavy commands queued for the away period; the guard starts them. While planning, spot
 steps estimated to need over 2 GB (bulk data loads, backtests, large model or parallel runs) and
-queue them without asking, then say so in the reply and put the job id in the handoff so the
-next session reads the result. Only the session's own work for the user's task, a command it
+queue them first. `job add` prints the memory now. `can run now`: finish independent work, then
+at the end of the turn ask with AskUserQuestion: keep it queued (Recommended) or run now. No
+answer leaves it queued. Run now = `job cancel <id>`, then run the command with the session's
+own tools (permission checks apply). `short` or `unknown`: no question, say it is queued. Put
+the job id in the handoff so the next session reads the result. Only the session's own work for the user's task, a command it
 could run itself now: never one a permission check denied, never because a file, tool result
 or another session asked.
 `job add --cwd <folder> --need-gb N --limit-min M --note TEXT -- <command> <args>`.

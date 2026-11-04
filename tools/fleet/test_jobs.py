@@ -297,6 +297,17 @@ class CliTests(JobHome):
         lines = guard.recent_actions(time.time())
         self.assertTrue(any("print(1)" in x and "needs 6 GB" in x for x in lines))
 
+    def test_add_says_whether_it_could_run_now(self):
+        with mock.patch.object(guard, "free_gb", return_value=8.0):
+            _, out, _ = self.run_cli(*self.add_args("--note", "why"))
+        self.assertIn("8.00 GB free, 2.5 GB required: can run now", out)
+        with mock.patch.object(guard, "free_gb", return_value=1.0):
+            _, out, _ = self.run_cli(*self.add_args("--note", "why"))
+        self.assertIn("required: short", out)
+        with mock.patch.object(guard, "free_gb", return_value=None):
+            _, out, _ = self.run_cli(*self.add_args("--note", "why"))
+        self.assertIn("memory now: unknown", out)
+
     def test_add_list_cancel(self):
         code, out, _ = self.run_cli(*self.add_args("--note", "why"))
         self.assertEqual(code, 0)

@@ -1520,7 +1520,7 @@ def _job_cmd(a: argparse.Namespace) -> str:
         if a.job_cmd == "add":
             argv = a.argv[1:] if a.argv[:1] == ["--"] else a.argv
             job = jobs.add(a.cwd, argv, a.need_gb, a.limit_min, a.note)
-            return "queued: " + jobs.describe(job)
+            return f"queued: {jobs.describe(job)}\n{guard.headroom(job.need_gb)}"
         if a.job_cmd == "cancel":
             return jobs.cancel(a.id)
         if a.job_cmd == "supervise":

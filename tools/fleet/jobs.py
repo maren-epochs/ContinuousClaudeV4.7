@@ -1,8 +1,9 @@
 """Memory-heavy jobs queued for the away period; the memory guard starts them.
 
-A session queues a job itself when its plan needs more memory than is free now (``job add``,
-no question to the user); the reply says so and the queue shows it. The stored argv runs
-unchanged, without a shell, in the stored folder. ``guard.tick`` starts
+A session queues a job itself when its plan needs a lot of memory (``job add``). If memory
+allows, it then offers to run it now; no answer leaves it queued, and a yes cancels the job and
+runs the command through the session's own tools. The stored argv runs unchanged, without a
+shell, in the stored folder. ``guard.tick`` starts
 the oldest queued job while the user is away and enough memory is free, one at a time. It
 spawns ``job supervise <id>``, a detached process that outlives the guard run, runs the
 command, enforces the time limit and records the result. When the user returns a running
