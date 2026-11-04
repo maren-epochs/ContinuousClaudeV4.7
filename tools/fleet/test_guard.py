@@ -41,6 +41,7 @@ class GuardHome(unittest.TestCase):
             ("idle_minutes", idle),
             ("local_hour", hour),
             ("browser_processes", processes),
+            ("window_closing", False),
         ):
             patcher = mock.patch.object(guard, target, return_value=value)
             patcher.start()

@@ -64,6 +64,7 @@ if __package__:
         collect,
         digest,
         guard,
+        jobs,
         launch,
         lessons,
         limits,
@@ -79,6 +80,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
         collect,
         digest,
         guard,
+        jobs,
         launch,
         lessons,
         limits,
@@ -1456,6 +1458,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", nargs="?", choices=("status", "run"), default="status")
     p.add_argument("--dry-run", action="store_true", help="run: decide, act on nothing")
+    p = sub.add_parser("job", help="memory-heavy jobs queued for the away period")
+    job_sub = p.add_subparsers(dest="job_cmd", required=True)
+    q = job_sub.add_parser("add", help="queue a command (after the user agreed)")
+    q.add_argument("--cwd", default=".", help="folder to run in (default: here)")
+    q.add_argument("--need-gb", type=float, required=True, help="free memory it needs")
+    q.add_argument("--limit-min", type=float, required=True, help="stop it after this")
+    q.add_argument("--note", help="what it is for")
+    q.add_argument("--user-agreed", action="store_true", help="the user agreed to it")
+    q.add_argument("argv", nargs=argparse.REMAINDER, help="-- command and arguments")
+    q = job_sub.add_parser("list", help="queued and running jobs")
+    q.add_argument("--all", action="store_true", help="include finished jobs")
+    q = job_sub.add_parser("cancel", help="cancel a queued job or stop a running one")
+    q.add_argument("id")
+    q = job_sub.add_parser("supervise", help=argparse.SUPPRESS)
+    q.add_argument("id")
     p = sub.add_parser("dashboard", help="write the HTML dashboard")
     p.add_argument("out", nargs="?", help="default ~/.claude/fleet/dashboard.html")
     p.add_argument("--fresh", action="store_true", help="collect first")
@@ -1481,6 +1498,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "grant": lambda a: _grant_cmd(a),
     "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
     "guard": lambda a: _guard_cmd(a),
+    "job": lambda a: _job_cmd(a),
     "usage": lambda a: limits.usage_report(time.time(), a.json),
     "limits": lambda a: limits.report(
         limits.stopped(_state(a.fresh)), time.time(), a.json
@@ -1496,6 +1514,26 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
         force=a.force,
     ),
 }
+
+
+def _job_cmd(a: argparse.Namespace) -> str:
+    try:
+        if a.job_cmd == "add":
+            if not a.user_agreed:
+                raise Refused(
+                    "--user-agreed is required: queue a job only after the user"
+                    " agreed to this exact command in this session"
+                )
+            argv = a.argv[1:] if a.argv[:1] == ["--"] else a.argv
+            job = jobs.add(a.cwd, argv, a.need_gb, a.limit_min, a.note or "")
+            return "queued: " + jobs.describe(job)
+        if a.job_cmd == "cancel":
+            return jobs.cancel(a.id)
+        if a.job_cmd == "supervise":
+            return jobs.supervise(a.id)
+        return jobs.report(a.all)
+    except jobs.JobError as exc:
+        raise Refused(str(exc)) from None
 
 
 def _guard_cmd(a: argparse.Namespace) -> str:

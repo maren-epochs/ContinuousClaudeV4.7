@@ -10,7 +10,10 @@ while away mode is on. Unknown idle time or memory = not away, so nothing happen
 2. Close the browser: below ``browser_gb``, unless a live session used Claude in Chrome in
    the last ``browser_quiet_min`` minutes. Its windows are asked to close; a window that
    stays open is left and logged, never killed. Windowless leftovers are ended afterwards.
-3. Sessions, log-only: below ``hold_gb`` on two runs in a row with no browser to close,
+   A queued job (jobs.py) short of memory also closes it, above that level.
+3. Jobs: while away with none running, starts the oldest queued one (see jobs.py) if
+   ``need_gb`` + ``job_reserve_gb`` is free; none in the window's last ``job_last_start_min``.
+4. Sessions, log-only: below ``hold_gb`` on two runs in a row with no browser to close,
    logs which idle sessions it would close (``would_close_sessions``). Nothing closes them.
 
 Settings: optional ``~/.claude/fleet/guard.json`` over the defaults in :class:`Config`
@@ -32,7 +35,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from . import collect, limits, model, questions
+from . import collect, jobs, limits, model, questions
 
 BROWSER_TOOL = "mcp__claude-in-chrome__"
 CLOSE_WAIT_S = 60.0
@@ -57,6 +60,8 @@ class Config:
     window_end: int = 10
     session_idle_h: float = 2.0
     browser_quiet_min: float = 30.0
+    job_reserve_gb: float = 0.5
+    job_last_start_min: float = 30.0
     browser: str = "brave"
     protected: tuple[str, ...] = ()
 
@@ -125,6 +130,14 @@ def user_away(idle: float | None, hour: int, away_flag: bool, cfg: Config) -> bo
     if idle is None or idle < cfg.idle_min:
         return False
     return away_flag or cfg.window_start <= hour < cfg.window_end
+
+
+def window_closing(now: float, cfg: Config) -> bool:
+    """Inside the last ``job_last_start_min`` minutes before the window ends."""
+    local = _dt.datetime.fromtimestamp(now, model.harness_tz())
+    end = local.replace(hour=cfg.window_end % 24, minute=0, second=0, microsecond=0)
+    left = (end - local).total_seconds() / 60
+    return 0 <= left < cfg.job_last_start_min
 
 
 def hold_reason(cfg: Config | None = None) -> str | None:
@@ -328,7 +341,10 @@ def tick(
     now = time.time() if now is None else now
     cfg = load_config()
     free, idle = free_gb(), idle_minutes()
-    away = user_away(idle, local_hour(now), questions.is_away(), cfg)
+    flag = questions.is_away()
+    away = user_away(idle, local_hour(now), flag, cfg)
+    if not dry_run:
+        jobs.reconcile(now)
     previous = model.read_json_dict(state_path()) or {}
     low = 0
     record: dict[str, Any] = {
@@ -342,10 +358,13 @@ def tick(
         record["why"] = "memory unknown"
     elif not away:
         record["why"] = "user present"
-    elif free >= cfg.browser_gb:
-        record["why"] = "memory ok"
     else:
-        record, low = _act(record, cfg, free, now, dry_run, previous, sessions)
+        record, acted = _job_step(record, cfg, free, now, dry_run, flag, sessions)
+        if not acted:
+            if free >= cfg.browser_gb:
+                record.setdefault("why", "memory ok")
+            else:
+                record, low = _act(record, cfg, free, now, dry_run, previous, sessions)
     record["low_readings"] = low
     if dry_run:
         record["dry_run"] = True
@@ -354,6 +373,46 @@ def tick(
     if away or record["action"] != "none":
         _log(record)
     return record
+
+
+def _job_step(
+    record: dict[str, Any],
+    cfg: Config,
+    free: float,
+    now: float,
+    dry_run: bool,
+    flag: bool,
+    sessions: list[model.Session] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Start the next queued job, or close the browser for it; True when it acted."""
+    active = jobs.running()
+    if active:
+        return {**record, "job_running": active[0].id}, False
+    job = jobs.next_queued()
+    if job is None:
+        return record, False
+    if not flag and window_closing(now, cfg):
+        return {**record, "waiting_job": job.id, "why": "window ending"}, False
+    if free >= job.need_gb + cfg.job_reserve_gb:
+        if dry_run:
+            return {**record, "action": "would_start_job", "job": job.id}, True
+        jobs.start(job)
+        started = {"action": "start_job", "job": job.id, "project": job.project}
+        return {**record, **started}, True
+    live = _sessions() if sessions is None else sessions
+    seen = browser_processes(cfg.browser)
+    if seen and seen[0] and not browser_in_use(live, now, cfg):
+        if dry_run:
+            return {**record, "action": "would_close_browser", "for_job": job.id}, True
+        result = close_browser(cfg.browser)
+        return {
+            **record,
+            "action": "close_browser",
+            "for_job": job.id,
+            **result,
+            "free_after_gb": free_gb(),
+        }, True
+    return {**record, "waiting_job": job.id, "why": "waiting for memory"}, False
 
 
 def _act(
@@ -425,6 +484,8 @@ def _describe(entry: dict[str, Any]) -> str:
         text = f"closed the browser ({entry.get('outcome')})"
         if entry.get("free_after_gb") is not None:
             text += f", {entry.get('free_gb')} -> {entry.get('free_after_gb')} GB free"
+    elif entry.get("action") == "start_job":
+        text = f"started job {entry.get('job')} ({entry.get('project')})"
     else:
         names = ", ".join(r.get("project", "?") for r in entry.get("would_close") or [])
         text = f"would close sessions: {names or 'none eligible'}"
@@ -444,7 +505,7 @@ def recent_actions(now: float, window_s: float = 24 * 3600) -> list[str]:
         if action == "close_browser" or key != last_key:
             lines.append(_describe(entry))
         last_key = key
-    return lines
+    return [*lines, *jobs.finished_lines(now, window_s)]
 
 
 def status(now: float | None = None) -> str:
@@ -466,6 +527,7 @@ def status(now: float | None = None) -> str:
             f" {cfg.window_start}:00-{cfg.window_end}:00 or away mode)"
         ),
         "sessions: log-only; protected: " + (", ".join(cfg.protected) or "none"),
+        "jobs: " + jobs.report(),
     ]
     last = model.read_json_dict(state_path())
     if last:
