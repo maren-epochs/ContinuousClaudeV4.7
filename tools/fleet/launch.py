@@ -1,8 +1,9 @@
 """Fleet launcher: open project sessions as named tabs in one Windows Terminal window.
 
 Candidates come from ~/.claude/projects: each transcript folder's newest transcript
-names its cwd; a project is offered when that folder still exists, is not home or a
-temp dir, and has a handoff to resume. Each tab runs a fresh ``claude '/resume-handoff'``
+names its cwd (a folder with no transcript left: the existing path its name spells); a
+project is offered when that folder still exists, is not home or a temp dir, and has a
+handoff to resume. Each tab runs a fresh ``claude '/resume-handoff'``
 in PowerShell, titled with the project folder name
 (``--suppressApplicationTitle`` keeps Claude Code from retitling it).
 
@@ -87,14 +88,53 @@ def renamed_cwd(slug: str, cwd: str) -> str | None:
     return None
 
 
+def slug_cwds(slug: str) -> list[str]:
+    """Existing folders whose transcript-folder name is ``slug``, sorted.
+
+    The slug is lossy ('-' stands for any non-alphanumeric), so walk down from the drive
+    root, entering only folders whose own slug is a prefix of it. Unreadable folders are
+    skipped.
+    """
+    drive = slug[0] + ":" + os.sep if slug[1:3] == "--" else os.sep
+    found: list[str] = []
+    stack = [Path(drive)]
+    while stack:
+        try:
+            children = [c for c in stack.pop().iterdir() if c.is_dir()]
+        except OSError:
+            continue
+        for child in children:
+            name = _SLUG.sub("-", str(child))
+            if name == slug:
+                found.append(str(child))
+            elif slug.startswith(name + "-"):
+                stack.append(child)
+    return sorted(found)
+
+
 def candidates() -> list[Target]:
     """Openable projects, by title: the project folder name."""
     claude = model.claude_dir()
     projects = claude / "projects"
     found: dict[str, Target] = {}
+
+    def offer(cwd: str, last: float) -> None:
+        key = path_key(cwd)
+        if key not in found or last > found[key].last:
+            cwd = os.path.normpath(cwd)
+            found[key] = Target(title=Path(cwd).name, cwd=cwd, last=last)
+
     for folder in projects.iterdir() if projects.is_dir() else []:
-        transcripts = list(folder.glob("*.jsonl")) if folder.is_dir() else []
-        if not transcripts:
+        if not folder.is_dir():
+            continue
+        transcripts = list(folder.glob("*.jsonl"))
+        if not transcripts:  # transcripts gone: the folder name still spells the path
+            for path in slug_cwds(folder.name):
+                handoff = collect.newest_handoff_file(
+                    collect.handoff_root(path, claude)
+                )
+                if handoff is not None and not _excluded(path):
+                    offer(path, handoff[0])
             continue
         transcripts.sort(key=lambda p: model.mtime(p) or 0.0, reverse=True)
         newest = transcripts[0]
@@ -106,10 +146,7 @@ def candidates() -> list[Target]:
             continue
         if collect.newest_handoff_file(collect.handoff_root(cwd, claude)) is None:
             continue
-        key, last = path_key(cwd), (model.mtime(newest) or 0.0)
-        if key not in found or last > found[key].last:
-            cwd = os.path.normpath(cwd)
-            found[key] = Target(title=Path(cwd).name, cwd=cwd, last=last)
+        offer(cwd, model.mtime(newest) or 0.0)
     return sorted(found.values(), key=lambda t: t.title.lower())
 
 

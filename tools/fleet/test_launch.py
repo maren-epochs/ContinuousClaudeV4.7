@@ -124,6 +124,51 @@ class CandidateTests(LaunchHome):
         (found,) = launch.candidates()
         self.assertEqual((found.title, found.last), ("acorn", 2_000))
 
+    def transcriptless(self, name, handoff=True):
+        """A project folder whose transcript folder holds no transcript."""
+        cwd = Path(os.path.realpath(self.root)) / "docs" / name
+        (cwd / "src").mkdir(parents=True)
+        if handoff:
+            base = self.home / ".claude" / "handoffs" / name
+            base.mkdir(parents=True)
+            (base / "h.yaml").write_text("goal: x\n", encoding="utf-8")
+            os.utime(base / "h.yaml", (3_000, 3_000))
+        folder = self.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+        (folder / "memory").mkdir(parents=True)
+        return cwd
+
+    def test_project_with_handoff_but_no_transcript_is_listed(self):
+        cwd = self.transcriptless("abae_x")
+        (found,) = launch.candidates()
+        self.assertEqual(
+            (found.title, found.cwd, found.last), ("abae_x", str(cwd), 3_000)
+        )
+
+    def test_no_transcript_and_no_handoff_is_skipped(self):
+        self.transcriptless("abae", handoff=False)
+        self.assertEqual(launch.candidates(), [])
+
+    def test_no_transcript_and_folder_gone_is_skipped(self):
+        shutil.rmtree(self.transcriptless("abae"))
+        self.assertEqual(launch.candidates(), [])
+
+    def test_no_transcript_home_is_skipped(self):
+        home = Path(os.path.realpath(self.home))
+        base = home / ".claude" / "handoffs" / home.name
+        base.mkdir(parents=True)
+        (base / "h.yaml").write_text("x\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+            slug = re.sub(r"[^A-Za-z0-9]", "-", str(home))
+            (self.projects / slug).mkdir()
+            self.assertEqual(launch.candidates(), [])
+
+    def test_slug_cwds_keeps_both_spellings_of_a_lossy_slug(self):
+        base = Path(os.path.realpath(self.root)) / "docs"
+        (base / "a_b").mkdir(parents=True)
+        (base / "a-b").mkdir()
+        slug = re.sub(r"[^A-Za-z0-9]", "-", str(base / "a_b"))
+        self.assertEqual(launch.slug_cwds(slug), [str(base / "a-b"), str(base / "a_b")])
+
 
 class SelectTests(LaunchHome):
     def setUp(self):

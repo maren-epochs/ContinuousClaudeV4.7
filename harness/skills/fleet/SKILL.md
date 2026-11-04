@@ -181,8 +181,8 @@ each a fresh `claude '/resume-handoff'` in the project folder. Tab title = the p
 name (`--suppressApplicationTitle` keeps it).
 
 1. With project names in the request, skip to step 3 with them as picks.
-2. `open` lists the candidates, numbered: every project with a transcript in
-   `~/.claude/projects`, a folder that still exists and a handoff to resume (home and temp
+2. `open` lists the candidates, numbered: every project with a folder in
+   `~/.claude/projects` (its transcripts may be gone), a project folder that still exists and a handoff to resume (home and temp
    folders skipped). Ask which to open with AskUserQuestion, `multiSelect: true`, 4 options
    per question, up to 4 questions (projects 1-4, 5-8, ...), header `Open 1/2` etc. More than
    16: list the rest in prose and let the user name them via Other. A folder not listed (a

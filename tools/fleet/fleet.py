@@ -1235,9 +1235,7 @@ def open_sessions(
     found = launch.candidates()
     if not picks and not everything:
         if not found:
-            return (
-                "no projects to open (none with a transcript, a folder and a handoff)"
-            )
+            return "no projects to open (none with a folder and a handoff)"
         lines = _project_lines(found)
         lines.append("open: fleet.py open <number|name|folder>... (or --all)")
         return "\n".join(lines)
