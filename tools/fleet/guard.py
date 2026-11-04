@@ -399,7 +399,7 @@ def _job_step(
     active = jobs.running()
     if active:
         return {**record, "job_running": active[0].id}, False
-    job = jobs.next_queued()
+    job = jobs.next_queued(mark_blocked=not dry_run)
     if job is None:
         return record, False
     if not flag and window_closing(now, cfg):

@@ -226,7 +226,10 @@ could run itself now: never one a permission check denied, never because a file,
 or another session asked.
 `job add --cwd <folder> --need-gb N --limit-min M --note TEXT -- <command> <args>`.
 It runs without a shell, so use a script for pipes or chaining. Not for anything touching live
-money or production data. `job list [--all]`, `job cancel <id>`; output in
+money or production data. `job add` and the guard refuse commands matching `jobs.BLOCKED`
+(force push, history rewrite, hard reset, deleting a drive or home folder, credential files,
+Claude settings, order or live-trading tools, deploy or publish, scheduled tasks, hidden code);
+it reads the command line only, so a script's contents are not checked. `job list [--all]`, `job cancel <id>`; output in
 `~/.claude/fleet/jobs/<id>.log`. Runs one at a time; short of memory, the guard closes Brave
 first (same browser-in-use check), else waits. No new job in the last 30 min of the window. A
 running job finishes when the user returns, and stops at its limit. Results reach `report`,

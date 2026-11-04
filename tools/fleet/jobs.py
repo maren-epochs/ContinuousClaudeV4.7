@@ -10,13 +10,15 @@ command, enforces the time limit and records the result. When the user returns a
 job finishes; no new one starts.
 
 Files: ``~/.claude/fleet/jobs/<id>.json`` and ``<id>.log`` (the job's output).
-Status: queued -> running -> done | failed | timed_out | lost; queued or running -> cancelled.
+Status: queued -> running -> done | failed | timed_out | lost; queued or running -> cancelled;
+queued -> blocked (a job file matching :data:`BLOCKED`, checked again before the start).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +34,62 @@ _DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
     subprocess, "CREATE_NEW_PROCESS_GROUP", 0
 )
 _BREAKAWAY = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
-DONE_STATUSES = ("done", "failed", "timed_out", "lost", "cancelled")
+DONE_STATUSES = ("done", "failed", "timed_out", "lost", "cancelled", "blocked")
+
+
+# Commands never run unattended. Matched on the lower-case command line with "/" separators.
+# It reads the command line only, not what a script does, and stays narrow on purpose: ordinary
+# builds, tests, backtests, data pulls, normal pushes and cleanup of a project folder pass.
+_ROOT = r"(/|~/?|\$home/?|[a-z]:/?|[a-z]:/users(/[^/\s\"']+)?/?)"
+BLOCKED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (name, re.compile(pattern))
+    for name, pattern in (
+        ("force push", r"\bgit\b.*\bpush\b.*\s(--force\S*|-f\b|\+\S)"),
+        ("history rewrite", r"\bgit\b.*\b(filter-branch|filter-repo)\b"),
+        ("hard reset", r"\bgit\b.*\breset\b.*\s--hard\b"),
+        (
+            "delete of a drive or home folder",
+            r"\b(rm|remove-item|rmdir|rd|del)\b.*[\s\"']" + _ROOT + r"([\"']|\s|$)",
+        ),
+        (
+            "credential file",
+            (
+                r"(^|[\s/\"'=])\.env(\.(?!example|sample|template)[\w-]+)?([\"'\s]|$)"
+                r"|/\.(ssh|aws)(/|[\"'\s]|$)|\bid_(rsa|ed25519|ecdsa)\b|\.(pem|pfx|key)\b"
+                r"|\.credentials|privacy-key"
+            ),
+        ),
+        ("claude settings", r"\.claude/settings|\.claude\.json"),
+        (
+            "live money",
+            (
+                r"\b(place|submit|send)_?order|\blive_?trad|\bemsx|\bib_?gateway\b"
+                r"|(^|\s)--live(=|\s|$)"
+            ),
+        ),
+        (
+            "deploy or publish",
+            (
+                r"(^|\s)--prod(uction)?(=|\s|$)|\b(npm|pnpm|yarn|cargo)\s+publish\b"
+                r"|\btwine\s+upload\b|\bterraform\s+(apply|destroy)\b"
+            ),
+        ),
+        (
+            "persistence or machine change",
+            (
+                r"\bschtasks\b.*/create|register-scheduledtask|\breg\s+(add|delete)\b"
+                r"|\bshutdown\b|\brestart-computer\b|\bdiskpart\b"
+            ),
+        ),
+        (
+            "hidden or downloaded code",
+            (
+                r"\s-enc(odedcommand)?\b|\binvoke-expression\b|\biex\b"
+                r"|\b(curl|wget|irm|iwr)\b.*\|\s*(sh|bash|pwsh|powershell|python)\b"
+            ),
+        ),
+    )
+)
 
 
 class JobError(Exception):
@@ -113,6 +170,12 @@ def all_jobs() -> list[Job]:
     return out
 
 
+def blocked_reason(argv: list[str]) -> str | None:
+    """The blocklist rule this command matches, else None."""
+    text = " ".join(argv).lower().replace(chr(92), "/")
+    return next((name for name, rule in BLOCKED if rule.search(text)), None)
+
+
 def add(
     cwd: str, argv: list[str], need_gb: float, limit_min: float, note: str = ""
 ) -> Job:
@@ -122,6 +185,9 @@ def add(
         raise JobError(f"not a directory: {cwd}")
     if not argv:
         raise JobError("no command given")
+    reason = blocked_reason(argv)
+    if reason:
+        raise JobError(f"blocked ({reason}): not run unattended")
     total = collect.machine_memory().mem_total_gb
     if need_gb <= 0 or (total is not None and need_gb >= total):
         raise JobError(f"--need-gb must be above 0 and under this PC's {total} GB")
@@ -147,9 +213,19 @@ def running() -> list[Job]:
     return [j for j in all_jobs() if j.status == "running"]
 
 
-def next_queued() -> Job | None:
-    """The oldest queued job."""
-    return next((j for j in all_jobs() if j.status == "queued"), None)
+def next_queued(mark_blocked: bool = True) -> Job | None:
+    """The oldest queued job the blocklist allows; marks the ones it refuses."""
+    for job in all_jobs():
+        if job.status != "queued":
+            continue
+        reason = blocked_reason(job.argv)
+        if reason is None:
+            return job
+        if mark_blocked:
+            job.status, job.ended_at = "blocked", model.now_iso()
+            job.extra["blocked"] = reason
+            save(job)
+    return None
 
 
 def _pid_alive(pid: int | None, start: int | None = None) -> bool:
