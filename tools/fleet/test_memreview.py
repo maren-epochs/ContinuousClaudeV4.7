@@ -113,6 +113,12 @@ class FlagTests(ReviewHome):
             ],
         )
 
+    def test_a_path_written_from_the_folder_holding_the_projects_is_found(self):
+        (self.cwd / "other").mkdir()
+        (self.cwd / "other" / "PLAN.md").write_text("", encoding="utf-8")
+        self.project("proj", {"a.md": memory("a", "`other/PLAN.md` `other/GONE.md`")})
+        self.assertEqual(self.details("stale"), ["a.md: `other/GONE.md` not found"])
+
     def test_near_duplicates_within_and_across_projects(self):
         self.project(
             "proj",

@@ -143,7 +143,7 @@ def path_reference(token: str) -> str | None:
 
 
 def stale_flags(memory: Memory, cwds: list[str], home: Path) -> list[Flag]:
-    """Backticked paths that exist neither where they point nor in the project folder."""
+    """Backticked paths found neither where they point, in the project folder nor beside it."""
     flags = []
     for token in sorted(set(_CODE.findall(memory.body))):
         ref = path_reference(token)
@@ -154,7 +154,10 @@ def stale_flags(memory: Memory, cwds: list[str], home: Path) -> list[Flag]:
         elif _DRIVE.match(ref):
             places = [Path(ref)]
         elif cwds:
-            places = [Path(cwd) / ref for cwd in cwds]
+            # written from the project folder, or from the folder holding the projects
+            places = [
+                base / ref for cwd in cwds for base in (Path(cwd), Path(cwd).parent)
+            ]
         else:
             continue  # no folder to look in: reported as an old project
         if not any(p.exists() for p in places):
