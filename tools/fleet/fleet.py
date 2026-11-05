@@ -72,6 +72,7 @@ if __package__:
         model,
         permissions,
         questions,
+        record,
     )
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
@@ -89,6 +90,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
         model,
         permissions,
         questions,
+        record,
     )
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
@@ -176,6 +178,8 @@ def _collect_cmd() -> int:
     print(summary(state))
     _daily_digest(state)
     _weekly_memory_review()
+    with contextlib.suppress(Exception):  # detached run: never changes collect's result
+        record.save_all_if_due()
     _refresh_dashboard(state)
     return 0
 
@@ -1462,6 +1466,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"seconds between tabs (default {launch.STAGGER_S:g}; 0 = one wt command)",
     )
+    p = sub.add_parser(
+        "record", help="keep handoffs and a memory copy in the project folder"
+    )
+    p.add_argument("--cwd", default=".", help="project folder (default: here)")
+    p.add_argument("--all", action="store_true", help="every project folder")
     p = sub.add_parser("memory", help="check auto-memory: report only, changes nothing")
     p.add_argument("--write", action="store_true", help="save the dated report")
     p = sub.add_parser("digest", help="plain-language summary of every session")
@@ -1512,6 +1521,9 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
     "digest": _digest_cmd,
+    "record": lambda a: (
+        "\n".join(record.save_all()) if a.all else record.save(Path(a.cwd).resolve())
+    ),
     "memory": lambda a: memreview.render(digest._now(), a.write),
     "denials": lambda a: permissions.denials_report(
         permissions.scan(a.project, a.since), a.json

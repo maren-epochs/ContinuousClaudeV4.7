@@ -127,17 +127,23 @@ check "VAL-101k missing transcript: exit 0" $RC
 printf '%s' "$OUT" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8')); if(d.continue!==true)process.exit(1)"
 check "VAL-101k missing transcript: continue:true" $?
 
-# --- VAL-101l: project without thoughts/shared/handoffs -> ~/.claude/handoffs, repo untouched ---
+# --- VAL-101l: project without thoughts/ gets one: the project folder holds its record ---
 PROJ5="$WORK/userrepo"
 mkdir -p "$PROJ5"
 run_hook "$FIXTURE" "$PROJ5"
-[ ! -e "$PROJ5/thoughts" ]
-check "VAL-101l non-opted-in project: no thoughts/ written into the repo" $?
-H5=$(find "$FAKEHOME/.claude/handoffs/userrepo" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+H5=$(find "$PROJ5/thoughts/shared/handoffs" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
 [ -n "$H5" ] && grep -q "Placeholder goal two" "$H5"
-check "VAL-101l handoff written under ~/.claude/handoffs/<project>/" $?
-printf '%s' "$OUT" | grep -q "handoffs/userrepo/"
-check "VAL-101l systemMessage names the real location (got: ${OUT:0:120})" $?
+check "VAL-101l handoff written into the project's thoughts/shared/handoffs/" $?
+[ ! -e "$FAKEHOME/.claude/handoffs/userrepo" ]
+check "VAL-101l nothing under ~/.claude/handoffs for a project" $?
+
+# --- VAL-101m: the home folder is not a project -> ~/.claude/handoffs/<basename>/ ---
+run_hook "$FIXTURE" "$FAKEHOME"
+[ ! -e "$FAKEHOME/thoughts" ]
+check "VAL-101m no thoughts/ in the home folder" $?
+H5b=$(find "$FAKEHOME/.claude/handoffs/$(basename "$FAKEHOME")" -name 'auto-handoff-*.md' 2>/dev/null | head -1)
+[ -n "$H5b" ]
+check "VAL-101m home-folder handoff under ~/.claude/handoffs/<basename>/" $?
 
 # =====================================================================
 # VAL-803: auto-handoffs are redacted like tools/privacy_guard.py redact()

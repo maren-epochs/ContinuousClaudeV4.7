@@ -44,7 +44,7 @@ Autonomous SDLC pipeline for Claude Code. 13 skills, 2 agents, 10 hooks (+ tldr-
 
 Registration lives in `~/.claude/settings.json` (absolute paths, per-extension `if` filters); template: `install/settings.template.json`. The fleet hooks (harness-guard, fleet-audit, ask-queue) are added by `py -3.13 install/register_hooks.py` (Claude runs it; hand over only if denied). Tests: `.claude/hooks/test_*.sh`.
 
-**Handoff root (all handoff readers/writers):** project `thoughts/shared/handoffs/` if it exists, else `~/.claude/handoffs/<project-dir-basename>/` — user repos never get a `thoughts/` dir.
+**Project record (all handoff readers/writers):** everything needed to return to a project lives in its folder. Handoffs: `<project>/thoughts/shared/handoffs/`, created by create-handoff and pre-compact when missing; readers fall back to `~/.claude/handoffs/<project-dir-basename>/` when it does not exist (older handoffs, and the home folder, `Documents` itself or a drive root, which are not projects). `fleet.py record [--all]` (`tools/fleet/record.py`; create-handoff runs it, `collect` runs it for every project at most every 30 min) creates the folder, copies the project's memories to `thoughts/shared/memory/` (Claude Code still reads the originals in `~/.claude/projects`) and keeps `thoughts/` on this PC through `.git/info/exclude`; a repo that already commits its handoffs keeps doing so, and only the memory copy is excluded. Temp folders are not projects.
 
 ## External Tools (optional, on PATH)
 

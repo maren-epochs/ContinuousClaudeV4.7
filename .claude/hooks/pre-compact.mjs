@@ -15,9 +15,10 @@
  * limited to the last MAX_ENTRIES conversational entries (lines parsed from
  * the end, so a multi-MB transcript does not pay full JSON.parse cost).
  *
- * Location: projects that already have thoughts/shared/handoffs/ (opted into
- * the convention) get the handoff there; any other project gets it under
- * ~/.claude/handoffs/<project>/<session>/ so user repos stay clean.
+ * Location: <project>/thoughts/shared/handoffs/<session>/, created when missing, so
+ * the project folder holds its own record (fleet.py record keeps thoughts/ out of
+ * git). The home folder, Documents itself and drive roots are not projects: their
+ * handoffs go under ~/.claude/handoffs/<basename>/<session>/.
  *
  * Privacy: the handoff is redacted before it is written, with the same rules and
  * token format as tools/privacy_guard.py redact() (shared module privacy-redact.mjs):
@@ -40,8 +41,16 @@
  * Output: JSON with continue: true, systemMessage
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, basename, resolve } from 'path';
+import { join, basename, resolve, dirname } from 'path';
 import { homedir } from 'os';
+
+// A project folder, not the home folder, Documents itself or a drive root.
+function isProjectDir(dir) {
+  const norm = (p) => resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+  const path = norm(dir);
+  const home = norm(homedir());
+  return norm(dirname(resolve(dir))) !== path && path !== home && path !== norm(join(homedir(), 'Documents'));
+}
 
 // Times shown and file names use America/New_York (EST/EDT), not the Windows zone
 // (the laptop flips zones). Returns [YYYY-MM-DD, HH:MM:SS, offset like -04:00].
@@ -384,7 +393,7 @@ async function main() {
       const [content, redactError] = redactHandoff(generateHandoff(safe, sessionName), projectDir, mod);
 
       const projectHandoffs = join(projectDir, 'thoughts', 'shared', 'handoffs');
-      const handoffDir = existsSync(projectHandoffs)
+      const handoffDir = isProjectDir(projectDir)
         ? join(projectHandoffs, sessionName)
         : join(homedir(), '.claude', 'handoffs', basename(resolve(projectDir)) || 'project', sessionName);
       mkdirSync(handoffDir, { recursive: true });

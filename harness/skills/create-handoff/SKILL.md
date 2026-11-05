@@ -4,7 +4,9 @@ description: Create handoff document for transferring work to another session
 
 Handoffs transfer mental model to fresh sessions. Cardinal sin: forcing next instance to re-discover what you know.
 
-Handoff root `{H}`: `thoughts/shared/handoffs` if that directory exists in the project, else `~/.claude/handoffs/{basename of the launch dir, $CLAUDE_PROJECT_DIR}` (keeps user repos clean; the statusline and pre-compact use the same rule). Never create `thoughts/` in a project that lacks it.
+Handoff root `{H}`: `thoughts/shared/handoffs` in the project (launch dir, $CLAUDE_PROJECT_DIR); create it when missing, so each project folder holds everything needed to return to it. Exception: when the launch dir is the home folder, `Documents` itself or a drive root, use `~/.claude/handoffs/{basename}`. Pre-compact uses the same rule.
+
+**Project record (fail-open):** after writing and redacting, run `py -3.13 ~/.claude/tools/fleet/fleet.py record` from the project root. It creates the folder if needed, keeps `thoughts/` out of git through the local `.git/info/exclude` (a repo that already commits its handoffs keeps doing so; only the memory copy is excluded there) and copies the project's memories to `thoughts/shared/memory/`. If it fails, say so in one line and continue.
 
 First determine session folder from existing handoffs: `ls -td {H}/*/ 2>/dev/null | head -1 | xargs basename`. Returns most recent folder name (e.g., `open-source-release`). Use this name, or `general` if none exist.
 
