@@ -297,6 +297,31 @@ def _kill_tree(pid: int) -> None:
             pass
 
 
+def git_tools_dir(env: dict[str, str]) -> Path | None:
+    """Git for Windows' ``usr\\bin`` (grep, wc, sed ...), found from ``git`` on PATH."""
+    git = shutil.which("git", path=env.get("PATH"))
+    if not git:
+        return None
+    root = Path(git).resolve().parent.parent  # ...\Git\cmd\git.exe -> ...\Git
+    tools = root / "usr" / "bin"
+    return tools if (tools / "grep.exe").exists() else None
+
+
+def job_env(env: dict[str, str]) -> dict[str, str]:
+    """The environment a job runs with: the session's, plus Git's command-line tools.
+
+    The guard starts jobs from a scheduled task, whose PATH lacks the Git ``usr\\bin`` an
+    interactive shell has, so commands needing grep or wc failed only when run as a job.
+    """
+    env = launch.clean_env(env)
+    tools = git_tools_dir(env)
+    path = env.get("PATH", "")
+    parts = [p.rstrip("\\/").lower() for p in path.split(os.pathsep) if p]
+    if tools is not None and str(tools).rstrip("\\/").lower() not in parts:
+        env["PATH"] = path + os.pathsep + str(tools) if path else str(tools)
+    return env
+
+
 def supervise(job_id: str) -> str:
     """Run the job's command to its end or time limit and record the result."""
     job = load(job_id)
@@ -315,7 +340,7 @@ def supervise(job_id: str) -> str:
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=subprocess.STDOUT,
-                env=launch.clean_env(dict(os.environ)),
+                env=job_env(dict(os.environ)),
                 creationflags=model.NO_WINDOW,
             )
         except OSError as exc:

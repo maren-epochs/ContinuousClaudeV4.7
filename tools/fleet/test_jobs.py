@@ -161,6 +161,32 @@ class BlocklistTests(JobHome):
         self.assertIn("job blocked", " ".join(jobs.finished_lines(time.time())))
 
 
+class JobEnvTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "Git"
+        (root / "cmd").mkdir(parents=True)
+        (root / "usr" / "bin").mkdir(parents=True)
+        (root / "usr" / "bin" / "grep.exe").write_bytes(b"")
+        self.git = root / "cmd" / "git.exe"
+        self.git.write_bytes(b"")
+        self.tools = root / "usr" / "bin"
+
+    def env(self, path):
+        with mock.patch.object(jobs.shutil, "which", return_value=str(self.git)):
+            return jobs.job_env({"PATH": path})
+
+    def test_adds_git_tools_once(self):
+        path = self.env("C:/Windows")["PATH"]
+        self.assertTrue(path.endswith(os.pathsep + str(self.tools.resolve())))
+        self.assertEqual(self.env(path)["PATH"], path)
+
+    def test_no_git_leaves_path_alone(self):
+        with mock.patch.object(jobs.shutil, "which", return_value=None):
+            self.assertEqual(jobs.job_env({"PATH": "C:/Windows"})["PATH"], "C:/Windows")
+
+
 class SuperviseTests(JobHome):
     def run_job(self, job):
         job.status = "running"
