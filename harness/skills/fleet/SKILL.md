@@ -230,10 +230,18 @@ money or production data. `job add` and the guard refuse commands matching `jobs
 (force push, history rewrite, hard reset, deleting a drive or home folder, credential files,
 Claude settings, order or live-trading tools, deploy or publish, scheduled tasks, hidden code);
 it reads the command line only, so a script's contents are not checked. `job list [--all]`, `job cancel <id>`; output in
-`~/.claude/fleet/jobs/<id>.log`. Runs one at a time; short of memory, the guard closes Brave
+`~/.claude/fleet/jobs/<id>.log`. Runs one at a time, shortest `--limit-min` first; short of memory, the guard closes Brave
 first (same browser-in-use check), else waits. No new job in the last 30 min of the window. A
 running job finishes when the user returns, and stops at its limit. Results reach `report`,
 `guard status`, the digest and the dashboard.
+
+## /fleet memory
+
+`fleet.py memory [--write]`: a local check of every project's auto-memory: index mismatches,
+stale backticked paths, near duplicates, old projects, broken `[[name]]` links. No model,
+nothing sent, no memory changed. `collect` saves `~/.claude/fleet/memory-review/YYYY-MM-DD.md`
+about once a week, and `report` shows the flag count. Show flags in plain words. Merging or
+deleting is not built: change a memory only when the user asks, in that session.
 
 ## /fleet resume
 

@@ -68,6 +68,7 @@ if __package__:
         launch,
         lessons,
         limits,
+        memreview,
         model,
         permissions,
         questions,
@@ -84,6 +85,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
         launch,
         lessons,
         limits,
+        memreview,
         model,
         permissions,
         questions,
@@ -173,6 +175,7 @@ def _collect_cmd() -> int:
         return COLLECT_FAILED
     print(summary(state))
     _daily_digest(state)
+    _weekly_memory_review()
     _refresh_dashboard(state)
     return 0
 
@@ -202,6 +205,19 @@ def _daily_digest(state: FleetState) -> None:
         return
     with contextlib.suppress(OSError):
         digest.err_path().unlink(missing_ok=True)
+
+
+def _weekly_memory_review() -> None:
+    """Write the memory review when one is due, under the same rule as the digest:
+    a failure goes to memory-review.err and never changes collect's result."""
+    try:
+        memreview.write_if_due(digest._now())
+    except Exception as exc:  # noqa: BLE001 - detached run: record, never raise
+        with contextlib.suppress(Exception):
+            model.write_atomic(memreview.err_path(), _digest_reason(exc) + "\n")
+        return
+    with contextlib.suppress(OSError):
+        memreview.err_path().unlink(missing_ok=True)
 
 
 def _digest_reason(exc: BaseException) -> str:
@@ -420,6 +436,9 @@ def report(state: FleetState, proposals: list[Proposal] | None = None) -> str:
     notice = digest.notice()
     if notice:
         lines.append(notice)
+    review = memreview.notice()
+    if review:
+        lines.append(review)
     grants = permissions.pending_count()
     if grants:
         lines.append(f"grants: {grants} pending, user runs: {permissions.APPLY_HINT}")
@@ -1443,6 +1462,8 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"seconds between tabs (default {launch.STAGGER_S:g}; 0 = one wt command)",
     )
+    p = sub.add_parser("memory", help="check auto-memory: report only, changes nothing")
+    p.add_argument("--write", action="store_true", help="save the dated report")
     p = sub.add_parser("digest", help="plain-language summary of every session")
     p.add_argument("--fresh", action="store_true", help="collect first")
     out = p.add_mutually_exclusive_group()
@@ -1491,6 +1512,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "answer": lambda a: answer_question(a.id, a.text, a.via),
     "away": lambda a: away(a.mode),
     "digest": _digest_cmd,
+    "memory": lambda a: memreview.render(digest._now(), a.write),
     "denials": lambda a: permissions.denials_report(
         permissions.scan(a.project, a.since), a.json
     ),

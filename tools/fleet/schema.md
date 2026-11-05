@@ -26,6 +26,8 @@ ever written to a tracked file; fixtures use synthetic values (`project-A`, `ses
 | `~/.claude/fleet/grants.json` | `GrantQueue` (section below) | `fleet.py grant add/drop/apply` under the `grants.json.lock` writer lock (same lock code as questions), atomic replace | `permissions.grants_path`, `permissions.add`, `permissions.apply` |
 | `~/.claude/fleet/collect.err` | text, one line per failed collect | `fleet.py collect`, append, capped 256 KB | `fleet._append_err` |
 | `~/.claude/fleet/digests/YYYY-MM-DD.md` | markdown digest (section below), local date | `fleet.py digest --write` (replaces); `fleet.py collect` when today's file is absent; atomic | `digest.digest_path`, `digest.write` |
+| `~/.claude/fleet/memory-review/YYYY-MM-DD.md` | markdown memory review, local date; line `Flags: N` | `fleet.py memory --write`; `fleet.py collect` when the newest is 7 days old or absent |
+| `~/.claude/fleet/memory-review.err` | text, one line: reason of the last failed weekly write, removed by the next success | `fleet.py collect` |
 | `~/.claude/fleet/digest.err` | text, one line: `Class: message` of the last failed daily digest write (paths `<path>`, privacy hits masked, max 200 chars) | `fleet.py collect`, atomic replace; removed by the next successful daily digest step | `digest.err_path`, `digest.notice` (`fleet.py report`/`digest`, dashboard) |
 | `~/.claude/.ccv47-manifest.json` | install manifest (section below) | `install/sync_global.py --apply`, atomic replace | `manifest_path()` |
 
