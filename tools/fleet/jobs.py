@@ -4,7 +4,7 @@ A session queues a job itself when its plan needs a lot of memory (``job add``).
 allows, it then offers to run it now; no answer leaves it queued, and a yes cancels the job and
 runs the command through the session's own tools. The stored argv runs unchanged, without a
 shell, in the stored folder. ``guard.tick`` starts
-the oldest queued job while the user is away and enough memory is free, one at a time. It
+the shortest queued job while the user is away and enough memory is free, one at a time. It
 spawns ``job supervise <id>``, a detached process that outlives the guard run, runs the
 command, enforces the time limit and records the result. When the user returns a running
 job finishes; no new one starts.
@@ -214,10 +214,12 @@ def running() -> list[Job]:
 
 
 def next_queued(mark_blocked: bool = True) -> Job | None:
-    """The oldest queued job the blocklist allows; marks the ones it refuses."""
-    for job in all_jobs():
-        if job.status != "queued":
-            continue
+    """The queued job with the shortest limit the blocklist allows, oldest first on a tie.
+
+    Marks the ones the blocklist refuses. A long job cannot hold up a short one behind it.
+    """
+    queued = [j for j in all_jobs() if j.status == "queued"]
+    for job in sorted(queued, key=lambda j: j.limit_min):
         reason = blocked_reason(job.argv)
         if reason is None:
             return job

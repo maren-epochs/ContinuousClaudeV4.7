@@ -60,6 +60,17 @@ class AddTests(JobHome):
             with self.assertRaises(jobs.JobError):
                 jobs.add(*case)
 
+    def test_shortest_limit_goes_first_and_ties_keep_queue_order(self):
+        long_job = jobs.add(str(self.cwd), [sys.executable, "-V"], 1.0, 2880.0)
+        short_a = jobs.add(str(self.cwd), [sys.executable, "-V"], 1.0, 30.0)
+        short_b = jobs.add(str(self.cwd), [sys.executable, "-V"], 1.0, 30.0)
+        order = sorted((short_a.id, short_b.id))
+        self.assertEqual(jobs.next_queued().id, order[0])
+        jobs.cancel(order[0])
+        self.assertEqual(jobs.next_queued().id, order[1])
+        jobs.cancel(order[1])
+        self.assertEqual(jobs.next_queued().id, long_job.id)
+
     def test_oldest_queued_goes_first(self):
         with mock.patch.object(jobs.time, "time_ns", side_effect=[10**9, 2 * 10**9]):
             first, second = self.job(), self.job()

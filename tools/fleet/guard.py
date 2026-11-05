@@ -11,7 +11,7 @@ while away mode is on. Unknown idle time or memory = not away, so nothing happen
    the last ``browser_quiet_min`` minutes. Its windows are asked to close; a window that
    stays open is left and logged, never killed. Windowless leftovers are ended afterwards.
    A queued job (jobs.py) short of memory also closes it, above that level.
-3. Jobs: while away with none running, starts the oldest queued one (see jobs.py) if
+3. Jobs: while away with none running, starts the shortest queued one (see jobs.py) if
    ``need_gb`` + ``job_reserve_gb`` is free; none in the window's last ``job_last_start_min``.
 4. Sessions, log-only: below ``hold_gb`` on two runs in a row with no browser to close,
    logs which idle sessions it would close (``would_close_sessions``). Nothing closes them.
