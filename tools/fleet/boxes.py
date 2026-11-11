@@ -24,7 +24,10 @@ BOX_FOOTER = "Enter to select"
 SUBMIT_PROMPT = "Ready to submit your answers?"
 SUBMIT_OPTION = "Submit answers"
 MAX_QUESTIONS = 4  # AskUserQuestion takes at most 4 questions per box
-TIMEOUT_S = 60
+TIMEOUT_S = 120
+TYPE_CHUNK = 30  # characters per SendKeys call
+CHUNK_WAIT_MS = 600  # pause after each chunk so a busy session keeps up
+ECHO_WAIT_MS = 15000  # how long the typed text may take to appear in the box
 _OPTION = re.compile(r"^\s*(❯\s*)?(\d+)\.\s+(.*?)\s*$")
 _SENDKEYS_SPECIAL = re.compile(r"([+^%~(){}\[\]])")
 
@@ -170,9 +173,16 @@ foreach ($step in $req.steps) {
   try { $win.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl'))).SetFocus() } catch {}
   Start-Sleep -Milliseconds 150
   $sh.SendKeys($step.keys)
-  Start-Sleep -Milliseconds ([int]$step.wait_ms)
-  $text = Screen
-  if ($step.expect -and -not ($text -split "`n" | Where-Object { $_.Contains($step.expect) })) {
+  # A busy session draws typed keys late: with an expect, poll the screen up to wait_ms
+  # instead of reading it once after a fixed delay.
+  $deadline = (Get-Date).AddMilliseconds([int]$step.wait_ms)
+  do {
+    Start-Sleep -Milliseconds 250
+    $text = Screen
+    $seen = $step.expect -and ($text -split "`n" | Where-Object { $_.Contains($step.expect) })
+  } while ($step.expect -and -not $seen -and (Get-Date) -lt $deadline)
+  if (-not $step.expect) { Start-Sleep -Milliseconds ([int]$step.wait_ms); $text = Screen }
+  if ($step.expect -and -not $seen) {
     Restore; Out @{ ok = $false; error = "screen did not show '$($step.expect)'"; done = $done; screen = $text }
   }
   $done++
@@ -294,22 +304,33 @@ def _submit(tab: str) -> str:
 
 def _answer_one(tab: str, p: Plan, text: str, keys_text: str) -> str:
     """Move to "Type something.", type text and press Enter; returns the screen after."""
+    # Typed in short chunks, each sent with the window re-checked in front: a busy session
+    # draws keys slowly, and keys still queued when focus moves land in another window.
+    chunks = [
+        sendkeys_literal(text[i : i + TYPE_CHUNK])
+        for i in range(0, len(text), TYPE_CHUNK)
+    ]
+    typing: list[dict[str, object]] = [
+        {"keys": c, "expect": None, "wait_ms": CHUNK_WAIT_MS} for c in chunks
+    ]
+    typing[-1] = {
+        "keys": chunks[-1],
+        "expect": f"{POINTER} {p.target}. {text[:40]}",
+        "wait_ms": ECHO_WAIT_MS,
+    }
     steps = [
         {
             "keys": p.keys,
             "expect": f"{POINTER} {p.target}. {TYPE_OPTION}",
-            "wait_ms": 300,
+            "wait_ms": 3000,
         },
-        {
-            "keys": keys_text,
-            "expect": f"{POINTER} {p.target}. {text[:40]}",
-            "wait_ms": 400,
-        },
+        *typing,
         {"keys": "{ENTER}", "expect": None, "wait_ms": 2000},
     ]
     res = _run({"mode": "answer", "tab": tab, "steps": steps})
     if not res.get("ok"):
         raise BoxError(
-            f"{res.get('error')} after {res.get('done', 0)} of 3 steps\n{_tail(res.get('screen'))}"
+            f"{res.get('error')} after {res.get('done', 0)} of {len(steps)} steps\n"
+            f"{_tail(res.get('screen'))}"
         )
     return str(res.get("screen", ""))

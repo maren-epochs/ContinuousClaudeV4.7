@@ -126,6 +126,33 @@ class TabNames(unittest.TestCase):
         )
 
 
+class AnswerSteps(unittest.TestCase):
+    """The answer is typed in chunks and only the last chunk waits for the echo."""
+
+    def test_chunks_then_polled_echo_then_enter(self):
+        text = boxes.HANDOFF_ANSWER
+        with mock.patch.object(boxes, "_run", return_value={"ok": True}) as run:
+            boxes._answer_one("x", boxes.Plan(1, 4), text, boxes.sendkeys_literal(text))
+        steps = run.call_args.args[0]["steps"]
+        typed = steps[1:-1]
+        self.assertEqual(steps[0]["expect"], f"{boxes.POINTER} 4. {boxes.TYPE_OPTION}")
+        self.assertEqual(
+            "".join(s["keys"] for s in typed), boxes.sendkeys_literal(text)
+        )
+        self.assertTrue(all(s["expect"] is None for s in typed[:-1]))
+        self.assertEqual(typed[-1]["expect"], f"{boxes.POINTER} 4. {text[:40]}")
+        self.assertEqual(typed[-1]["wait_ms"], boxes.ECHO_WAIT_MS)
+        self.assertEqual(steps[-1]["keys"], "{ENTER}")
+
+    def test_refusal_names_the_step_count(self):
+        bad = {"ok": False, "error": "screen did not show 'y'", "done": 1, "screen": ""}
+        with (
+            mock.patch.object(boxes, "_run", return_value=bad),
+            self.assertRaisesRegex(boxes.BoxError, r"after 1 of \d+ steps"),
+        ):
+            boxes._answer_one("x", boxes.Plan(1, 4), "short", "short")
+
+
 class ClearOpenBoxes(unittest.TestCase):
     """away on answers boxes opened before it; no keys are sent (boxes.answer is stubbed)."""
 
