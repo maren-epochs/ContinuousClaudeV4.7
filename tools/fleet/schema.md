@@ -111,7 +111,7 @@ alerts). All str\|null.
 **Collision**: `kind` (`path` or `repo`), `target` (path or repo root), `sessions`
 (str[] of session ids), `detail`.
 
-**Machine**: `mem_total_gb`, `mem_free_gb` (float\|null).
+**Machine**: `mem_total_gb`, `mem_free_gb` (float\|null); `top_programs` (list of `{name, ram_gb, reserved_gb, count}`, empty unless free memory is under the `memory` alert threshold; `procmem.py`: RAM = private working set, reserved = private bytes, summed per program name, top 5 by RAM, Windows only).
 
 ### Collector extras (`tools/fleet/collect.py`)
 
@@ -179,7 +179,7 @@ opened; manifest keys that are absolute, contain `..`, sit under `sessions/` or 
 | `compliance` | `info` | completed turns (closed by a user prompt, or the final turn when status is not `busy` and no tool call is pending) whose last block is text ending in `?` with no AskUserQuestion in the turn; one alert with the count, evidence = newest |
 | `compliance` | `warn` | a write (main or subagent transcript) outside the session's own root (git root of cwd, else cwd) into another git root or another session's cwd; `~/.claude` excluded; one alert per foreign root |
 | `drift` | `info` | alive session `started_at` before the last sync (max of manifest `generated_at` and the `.ccv47-installed` mtime) |
-| `memory` | `warn` | machine-level (in `machine_alerts`, `session` and `evidence` null): `machine.mem_free_gb` < threshold. Threshold = 15% of `mem_total_gb`; env `FLEET_MEM_WARN_GB` (float GB, finite and >= 0) overrides it, any other value falls back to 15%. Detail `free memory 2.1 GB of 15.7 GB (below 2.4 GB)`. No alert when total or free memory is unknown. Counted by `fleet.py report`, the dashboard and the status.mjs `fleet` segment (warn/error) |
+| `memory` | `warn` | machine-level (in `machine_alerts`, `session` and `evidence` null): `machine.mem_free_gb` < threshold. Threshold = 15% of `mem_total_gb`; env `FLEET_MEM_WARN_GB` (float GB, finite and >= 0) overrides it, any other value falls back to 15%. Detail `free memory 2.1 GB of 15.7 GB (below 2.4 GB); most RAM: brave x27 1.50 GB (3.80 reserved), ...` (top 3 of `machine.top_programs`; the suffix is left out when none were read). No alert when total or free memory is unknown. Counted by `fleet.py report`, the dashboard and the status.mjs `fleet` segment (warn/error) |
 
 **Drift entries**: for every non-kept manifest file with a `sha256`, the sha256 of
 `<manifest dir>/<key>` is compared to it: `modified` (differs) or `missing`. When the
@@ -342,7 +342,7 @@ One compact JSON object per line, appended. Readers skip blank or invalid lines.
   "inbox_count": 0,
   "audit_recent": [],
   "collisions": [],
-  "machine": {"mem_total_gb": 32.0, "mem_free_gb": 7.5},
+  "machine": {"mem_total_gb": 32.0, "mem_free_gb": 7.5, "top_programs": []},
   "machine_alerts": []
 }
 ```

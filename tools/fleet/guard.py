@@ -35,7 +35,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from . import collect, jobs, limits, model, questions
+from . import collect, jobs, limits, model, procmem, questions
 
 BROWSER_TOOL = "mcp__claude-in-chrome__"
 CLOSE_WAIT_S = 60.0
@@ -101,6 +101,11 @@ def load_config() -> Config:
 def free_gb() -> float | None:
     """Available physical memory in GB, None when unknown."""
     return collect.machine_memory().mem_free_gb
+
+
+def top_programs() -> list[dict[str, Any]] | None:
+    """The programs using the most RAM now (procmem), None when unknown."""
+    return procmem.top_programs()
 
 
 class _LastInput(ctypes.Structure):
@@ -364,6 +369,7 @@ def tick(
         "idle_min": None if idle is None else round(idle, 1),
         "away": away,
         "action": "none",
+        "top": top_programs(),
     }
     if free is None:
         record["why"] = "memory unknown"
@@ -381,8 +387,7 @@ def tick(
         record["dry_run"] = True
         return record
     model.write_atomic(state_path(), json.dumps(record, indent=2) + "\n")
-    if away or record["action"] != "none":
-        _log(record)
+    _log(record)  # every run: free memory and the top programs, for later questions
     return record
 
 
@@ -537,6 +542,7 @@ def status(now: float | None = None) -> str:
             f" {cfg.idle_min:g} min,"
             f" {cfg.window_start}:00-{cfg.window_end}:00 or away mode)"
         ),
+        "most RAM now: " + (procmem.describe(top_programs()) or "unknown"),
         "sessions: log-only; protected: " + (", ".join(cfg.protected) or "none"),
         "jobs: " + jobs.report(),
     ]

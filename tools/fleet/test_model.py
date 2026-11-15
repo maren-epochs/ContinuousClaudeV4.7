@@ -173,7 +173,9 @@ class RoundTripTests(unittest.TestCase):
         d = full_state().to_dict()
         self.assertEqual(d["sessions"][0]["handoff"]["age_h"], 3.25)
         self.assertEqual(d["sessions"][0]["alerts"][0]["kind"], "stuck")
-        self.assertEqual(d["machine"], {"mem_total_gb": 32.0, "mem_free_gb": 7.5})
+        self.assertEqual(
+            d["machine"], {"mem_total_gb": 32.0, "mem_free_gb": 7.5, "top_programs": []}
+        )
         self.assertNotIn("extra", d)
         self.assertNotIn("extra", d["sessions"][0])
 

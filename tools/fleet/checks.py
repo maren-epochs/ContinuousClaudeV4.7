@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import model
+from . import model, procmem
 from .model import Alert, Collision, DriftEntry, FleetState, Session
 
 TAIL_BYTES = 512 * 1024
@@ -1022,6 +1022,11 @@ def check_memory(state: FleetState, env: Mapping[str, str] | None = None) -> Non
                 detail=(
                     f"free memory {free:.1f} GB of {total:.1f} GB"
                     f" (below {threshold:.1f} GB)"
+                    + (
+                        "; most RAM: " + procmem.describe(state.machine.top_programs)
+                        if state.machine.top_programs
+                        else ""
+                    )
                 ),
             )
         )

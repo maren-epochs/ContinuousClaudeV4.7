@@ -860,6 +860,13 @@ class StateTests(FleetHome):
         with (
             mock.patch.dict(os.environ),
             mock.patch.object(collect, "machine_memory", return_value=low),
+            mock.patch.object(
+                collect.procmem,
+                "top_programs",
+                return_value=[
+                    {"name": "brave", "ram_gb": 1.5, "reserved_gb": 3.8, "count": 27}
+                ],
+            ),
         ):
             os.environ.pop("FLEET_MEM_WARN_GB", None)
             path = collect.collect_and_save()
@@ -871,7 +878,10 @@ class StateTests(FleetHome):
                     "kind": "memory",
                     "severity": "warn",
                     "session": None,
-                    "detail": "free memory 2.1 GB of 15.7 GB (below 2.4 GB)",
+                    "detail": (
+                        "free memory 2.1 GB of 15.7 GB (below 2.4 GB);"
+                        " most RAM: brave x27 1.50 GB (3.80 reserved)"
+                    ),
                     "evidence": None,
                 }
             ],

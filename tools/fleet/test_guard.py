@@ -42,6 +42,10 @@ class GuardHome(unittest.TestCase):
             ("local_hour", hour),
             ("browser_processes", processes),
             ("window_closing", False),
+            (
+                "top_programs",
+                [{"name": "brave", "ram_gb": 2.0, "reserved_gb": 3.0, "count": 9}],
+            ),
         ):
             patcher = mock.patch.object(guard, target, return_value=value)
             patcher.start()
@@ -246,13 +250,14 @@ class CandidateTests(unittest.TestCase):
 
 
 class TickTests(GuardHome):
-    def test_present_user_changes_nothing_and_logs_nothing(self):
+    def test_present_user_changes_nothing_but_logs_the_reading(self):
         self.readings(idle=5.0)
         with mock.patch.object(guard, "close_browser") as close:
             record = guard.tick(NOW, sessions=[])
         close.assert_not_called()
         self.assertEqual((record["action"], record["why"]), ("none", "user present"))
-        self.assertFalse(guard.log_path().exists())
+        logged = json.loads(guard.log_path().read_text(encoding="utf-8"))
+        self.assertEqual(logged["top"][0]["name"], "brave")
         self.assertTrue(guard.state_path().exists())
 
     def test_enough_memory_changes_nothing(self):

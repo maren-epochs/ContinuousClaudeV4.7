@@ -294,6 +294,8 @@ class Machine(Record):
 
     mem_total_gb: float | None = None
     mem_free_gb: float | None = None
+    # Filled only while free memory is under the alert threshold (procmem entries).
+    top_programs: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)

@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import checks, model
+from . import checks, model, procmem
 from .checks import _blocks, _done_notes, _record
 from .model import (
     Alert,
@@ -786,6 +786,13 @@ def collect(deadline_s: float | None = COLLECT_DEADLINE_S) -> FleetState:
                 mem_free_gb=_finite(memory.mem_free_gb),
             ),
         )
+        total, free = state.machine.mem_total_gb, state.machine.mem_free_gb
+        if (
+            total is not None
+            and free is not None
+            and free < checks.mem_threshold_gb(total, os.environ)
+        ):
+            state.machine.top_programs = procmem.top_programs() or []
         tick()
         checks.run_checks(state, now, tick)
         tick()
