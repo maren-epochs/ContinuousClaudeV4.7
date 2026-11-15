@@ -1258,8 +1258,12 @@ def open_sessions(
     stagger: float = launch.STAGGER_S,
     here: bool = False,
     force: bool = False,
+    window: str | None = None,
 ) -> str:
     """List openable projects, or open the picked ones as Windows Terminal tabs.
+
+    The tabs go to a named window (``window``, else a fresh ``fleet-<ms>`` name, printed
+    so later tabs can join it with ``--window``) or, with ``here``, to this one.
 
     ``--all`` on an interactive terminal lists every project (plus any picks) and asks
     which to open; without a terminal it only lists them. ``--yes`` opens them all.
@@ -1296,7 +1300,17 @@ def open_sessions(
                 targets = launch.choose(targets, answer)
                 if not targets:
                     return "cancelled: nothing opened"
-        window = launch.current_window(os.environ) if here else None
+        if here and window:
+            raise Refused("--here and --window: pick one")
+        if here:
+            window = launch.current_window(os.environ)
+        elif not window:
+            window = launch.window_name()
+        join = (
+            ""
+            if here
+            else f"\nwindow: {window} (more tabs: fleet.py open <pick> --window {window})"
+        )
         if dry_run:
             return "\n".join(
                 (f"(after {delay:g} s) " if delay else "")
@@ -1321,11 +1335,13 @@ def open_sessions(
             opened = ", ".join(t.title for t in targets[: len(commands)])
             return (
                 f"opened {len(commands)} tab(s): {opened}; held back for low memory:"
-                f" {left} (free memory or add --force)"
+                f" {left} (free memory or add --force)" + join
             )
     except launch.LaunchError as exc:
         raise Refused(str(exc)) from None
-    return f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets)
+    return (
+        f"opened {len(targets)} tab(s): " + ", ".join(t.title for t in targets) + join
+    )
 
 
 def _epoch(value: str) -> float:
@@ -1349,6 +1365,19 @@ def _seconds(value: str) -> float:
     if not n >= 0 or math.isinf(n):
         raise argparse.ArgumentTypeError(f"expected seconds >= 0, got {value!r}")
     return n
+
+
+def _window(value: str) -> str:
+    """A Windows Terminal window name: a letter, then letters, digits, - or _.
+
+    Not an integer id, ``new`` or ``last``, which wt reads as something else.
+    """
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", value) or value in (
+        "new",
+        "last",
+    ):
+        raise argparse.ArgumentTypeError(f"not a window name: {value!r}")
+    return value
 
 
 def _positive(value: str) -> int:
@@ -1457,6 +1486,12 @@ def _parser() -> argparse.ArgumentParser:
         help="add the tabs to this Windows Terminal window instead of a new one",
     )
     p.add_argument(
+        "--window",
+        type=_window,
+        metavar="NAME",
+        help="add the tabs to the named window (open prints the name it made)",
+    )
+    p.add_argument(
         "--profile", help="Windows Terminal profile for the tabs (its icon and colors)"
     )
     p.add_argument(
@@ -1545,6 +1580,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
         stagger=a.stagger,
         here=a.here,
         force=a.force,
+        window=a.window,
     ),
 }
 

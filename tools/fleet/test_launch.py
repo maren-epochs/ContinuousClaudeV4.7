@@ -479,11 +479,16 @@ class OpenCommandTests(LaunchHome):
         self.assertIn("inside Windows Terminal", err)
         popen.assert_not_called()
 
-    def test_without_here_a_new_window_is_used(self):
+    def test_without_here_a_new_named_window_is_used(self):
         self.project("acorn")
         with mock.patch.dict(os.environ, {"WT_SESSION": "x"}):
             _, out, _ = self.run_cli("acorn", "--stagger", "0", "--dry-run")
-        self.assertIn("wt -w new", out)
+        self.assertRegex(out, r"^wt -w fleet-\d+ new-tab")
+
+    def test_window_option_joins_that_window(self):
+        self.project("acorn")
+        _, out, _ = self.run_cli("acorn", "--window", "fleet-9", "--dry-run")
+        self.assertTrue(out.startswith("wt -w fleet-9 new-tab --title acorn"))
 
     def test_dry_run_prints_wt_command_and_starts_nothing(self):
         self.project("acorn")
@@ -515,7 +520,7 @@ class OpenCommandTests(LaunchHome):
         self.assertIn("(after 1.5 s) wt -w fleet-", out)
         _, out, _ = self.run_cli("--all", "--yes", "--dry-run", "--stagger", "0")
         self.assertEqual(len(out.strip().splitlines()), 1)
-        self.assertTrue(out.startswith("wt -w new new-tab --title acorn"))
+        self.assertRegex(out, r"^wt -w fleet-\d+ new-tab --title acorn")
         self.assertIn(" ; new-tab --title myrtle", out)
 
     def test_negative_stagger_is_a_usage_error(self):
@@ -533,7 +538,12 @@ class OpenCommandTests(LaunchHome):
         ):
             code, out, _ = self.run_cli("--all", "--yes")
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "opened 2 tab(s): acorn, myrtle")
+        first, window = out.strip().splitlines()
+        self.assertEqual(first, "opened 2 tab(s): acorn, myrtle")
+        name = popen.call_args.args[0][2]
+        self.assertEqual(
+            window, f"window: {name} (more tabs: fleet.py open <pick> --window {name})"
+        )
         self.assertEqual(popen.call_count, 2)
         sleep.assert_called_once_with(3.0)
         for call in popen.call_args_list:

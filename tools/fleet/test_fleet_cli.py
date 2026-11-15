@@ -1254,6 +1254,61 @@ class OpenStaggerParseTests(unittest.TestCase):
             fleet._COMMANDS["open"](args)
         self.assertEqual(opened.call_args.kwargs["stagger"], 2.0)
 
+    def test_window_name_is_validated_and_passed_through(self):
+        args = fleet._parser().parse_args(["open", "acorn", "--window", "fleet-12"])
+        with mock.patch.object(fleet, "open_sessions", return_value="") as opened:
+            fleet._COMMANDS["open"](args)
+        self.assertEqual(opened.call_args.kwargs["window"], "fleet-12")
+        for bad in ("0", "new", "last", "a;b", "-x"):
+            with (
+                self.subTest(bad=bad),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                fleet._parser().parse_args(["open", "--window", bad])
+
+
+class OpenWindowTests(unittest.TestCase):
+    """open names the window it makes and prints that name; --window joins one."""
+
+    def setUp(self):
+        self.target = fleet.launch.Target(title="acorn", cwd="C:/p/acorn")
+        for name, value in (
+            ("candidates", [self.target]),
+            ("select", [self.target]),
+            ("window_name", "fleet-77"),
+        ):
+            patcher = mock.patch.object(fleet.launch, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(fleet.guard, "hold_reason", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_open(self, **kw):
+        with mock.patch.object(fleet.launch, "launch", return_value=[["wt"]]) as run:
+            out = fleet.open_sessions(["acorn"], False, False, **kw)
+        return out, run.call_args.kwargs["window"]
+
+    def test_new_window_is_named_and_the_name_printed(self):
+        out, window = self.run_open()
+        self.assertEqual(window, "fleet-77")
+        self.assertIn("window: fleet-77", out)
+        self.assertIn("--window fleet-77", out)
+
+    def test_given_window_is_used(self):
+        out, window = self.run_open(window="fleet-5")
+        self.assertEqual(window, "fleet-5")
+        self.assertIn("window: fleet-5", out)
+
+    def test_here_prints_no_window_and_refuses_with_window(self):
+        with mock.patch.dict(os.environ, {"WT_SESSION": "x"}):
+            out, window = self.run_open(here=True)
+            self.assertEqual(window, fleet.launch.CURRENT_WINDOW)
+            self.assertNotIn("window:", out)
+            with self.assertRaises(fleet.Refused):
+                fleet.open_sessions(["acorn"], False, False, here=True, window="w1")
+
 
 DIGEST_NOW = datetime.datetime(2026, 10, 14, 12, 0, tzinfo=datetime.UTC)
 
