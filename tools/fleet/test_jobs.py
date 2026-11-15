@@ -79,6 +79,13 @@ class AddTests(JobHome):
         jobs.save(first)
         self.assertEqual(jobs.next_queued().id, second.id)
 
+    def test_same_millisecond_adds_get_distinct_ids(self):
+        with mock.patch.object(jobs.time, "time_ns", return_value=10**12):
+            first, second = self.job(), self.job()
+        self.assertEqual((first.id, second.id), ("job-1000000", "job-1000001"))
+        self.assertEqual(jobs.load(first.id).argv, first.argv)
+        self.assertEqual(len(jobs.all_jobs()), 2)
+
     def test_unsafe_id_is_refused(self):
         with self.assertRaises(jobs.JobError):
             jobs.load("../evil")

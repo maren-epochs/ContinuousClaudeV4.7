@@ -176,6 +176,24 @@ def blocked_reason(argv: list[str]) -> str | None:
     return next((name for name, rule in BLOCKED if rule.search(text)), None)
 
 
+def _claim_id() -> str:
+    """A new id from the clock in ms, bumped past any taken one; its file is created here.
+
+    Two adds in the same millisecond would otherwise share an id and the second would
+    overwrite the first. Exclusive create also holds across processes. Ids still sort
+    by creation time.
+    """
+    jobs_dir().mkdir(parents=True, exist_ok=True)
+    stamp = time.time_ns() // 1_000_000
+    while True:
+        job_id = f"job-{stamp}"
+        try:
+            with open(job_path(job_id), "x", encoding="utf-8"):
+                return job_id
+        except FileExistsError:
+            stamp += 1
+
+
 def add(
     cwd: str, argv: list[str], need_gb: float, limit_min: float, note: str = ""
 ) -> Job:
@@ -195,7 +213,7 @@ def add(
         raise JobError("--limit-min must be above 0")
     resolved = os.path.normpath(os.path.abspath(cwd))
     job = Job(
-        id=f"job-{time.time_ns() // 1_000_000}",
+        id=_claim_id(),
         project=Path(resolved).name,
         cwd=resolved,
         argv=list(argv),
