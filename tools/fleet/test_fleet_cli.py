@@ -1416,6 +1416,21 @@ class DigestTests(CliHome):
         self.assertIn("Inbox: 2 pending", out)
         self.assertIn("Audit: 2 risky commands in the last 24 h", out)
 
+    def test_memory_day_line_from_the_guard_log(self):
+        self.assertNotIn("Memory, last 24 h", self.text())
+        top = [{"name": "brave", "ram_gb": 2.5, "reserved_gb": 4.0, "count": 9}]
+        model.fleet_dir().mkdir(parents=True, exist_ok=True)
+        (model.fleet_dir() / "guard.jsonl").write_text(
+            json.dumps({"ts": _iso_ago(hours=2), "free_gb": 1.4, "top": top}) + "\n",
+            encoding="utf-8",
+        )
+        out = self.text()
+        self.assertRegex(
+            out,
+            r"- Memory, last 24 h: lowest 1\.40 GB free \([^)]+\);"
+            r" most RAM: brave 2\.50 GB \(",
+        )
+
     def test_sync_wording_matches_report(self):
         cases = [
             ({"in_sync": True, "behind_files": 0}, "Harness: in sync"),

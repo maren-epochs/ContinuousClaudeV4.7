@@ -354,6 +354,36 @@ class ReportTests(GuardHome):
         self.assertIn("closed the browser", lines[0])
         self.assertIn("would close sessions: a", lines[1])
 
+    def test_memory_day_has_the_low_point_and_each_programs_peak(self):
+        def top(*pairs):
+            return [
+                {"name": n, "ram_gb": r, "reserved_gb": 0.0, "count": 1}
+                for n, r in pairs
+            ]
+
+        guard.log_path().write_text(
+            self.entry(NOW - 90000, free_gb=0.1, top=top(("old", 9.0)))
+            + self.entry(
+                NOW - 600, free_gb=3.0, top=top(("brave", 2.0), ("claude", 0.5))
+            )
+            + self.entry(
+                NOW - 300, free_gb=1.2, top=top(("brave", 1.0), ("claude", 0.9))
+            )
+            + self.entry(NOW - 200, free_gb=2.0, top=top(("Memory Compression", 5.0))),
+            encoding="utf-8",
+        )
+        day = guard.memory_day(NOW)
+        self.assertEqual(day["low_free_gb"], 1.2)
+        self.assertEqual([p["name"] for p in day["peaks"]], ["brave", "claude"])
+        self.assertEqual(day["peaks"][1]["ram_gb"], 0.9)
+        line = guard.memory_day_line(day)
+        self.assertTrue(line.startswith("lowest 1.20 GB free ("))
+        self.assertIn("most RAM: brave 2.00 GB (", line)
+
+    def test_memory_day_without_readings_is_none(self):
+        self.assertIsNone(guard.memory_day(NOW))
+        self.assertIsNone(guard.memory_day_line(None))
+
     def test_log_is_trimmed_past_its_limit(self):
         with mock.patch.object(guard, "LOG_MAX_BYTES", 200):
             for _ in range(10):

@@ -15,6 +15,7 @@ LINES = "\n".join(
         f"brave\t{GB}\t{2 * GB}",
         f"brave#1\t{GB // 2}\t{GB}",
         f"claude\t{GB // 4}\t{GB}",
+        f"Memory Compression\t{5 * GB}\t0",
         f"GGnet\t{GB + GB // 4}\t{3 * GB}",
         "garbage line",
         "bad\tx\t1",
@@ -32,7 +33,9 @@ class ParseTests(unittest.TestCase):
 
     def test_totals_idle_and_malformed_lines_are_dropped(self):
         names = {e["name"] for e in procmem.parse(LINES)}
-        self.assertFalse(names & {"_Total", "Idle", "bad", "garbage line"})
+        self.assertFalse(
+            names & {"_Total", "Idle", "Memory Compression", "bad", "garbage line"}
+        )
 
     def test_n_limits_the_list(self):
         self.assertEqual(len(procmem.parse(LINES, n=1)), 1)

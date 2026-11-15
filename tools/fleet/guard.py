@@ -524,6 +524,57 @@ def recent_actions(now: float, window_s: float = 24 * 3600) -> list[str]:
     return [*lines, *jobs.finished_lines(now, window_s), *jobs.queued_lines()]
 
 
+def memory_day(
+    now: float, window_s: float = 24 * 3600, n: int = 3
+) -> dict[str, Any] | None:
+    """The guard log's last day: lowest free memory and the programs' highest RAM.
+
+    ``{"low_free_gb", "low_at", "peaks": [{"name", "ram_gb", "at"}...]}`` (top ``n`` by
+    peak RAM, each at the run it peaked); None when no run in the window has a reading.
+    """
+    low: tuple[float, str] | None = None
+    peaks: dict[str, tuple[float, str]] = {}
+    for entry in _entries():
+        stamp = model.parse_epoch(entry.get("ts"))
+        if stamp is None or not 0 <= now - stamp <= window_s:
+            continue
+        at = model.local_time(stamp)
+        free = entry.get("free_gb")
+        if isinstance(free, (int, float)) and (low is None or free < low[0]):
+            low = (float(free), at)
+        for prog in entry.get("top") or []:
+            name, ram = prog.get("name"), prog.get("ram_gb")
+            if not isinstance(name, str) or not isinstance(ram, (int, float)):
+                continue
+            if name.lower() in procmem.SKIP:  # entries logged before it was skipped
+                continue
+            if name not in peaks or ram > peaks[name][0]:
+                peaks[name] = (float(ram), at)
+    if low is None and not peaks:
+        return None
+    ranked = sorted(peaks.items(), key=lambda kv: -kv[1][0])[:n]
+    return {
+        "low_free_gb": low[0] if low else None,
+        "low_at": low[1] if low else None,
+        "peaks": [{"name": k, "ram_gb": v[0], "at": v[1]} for k, v in ranked],
+    }
+
+
+def memory_day_line(day: dict[str, Any] | None) -> str | None:
+    """``lowest 1.30 GB free (14:56); most RAM: brave 2.10 GB (09:15), ...``; None."""
+    if not day:
+        return None
+    parts = []
+    if day.get("low_free_gb") is not None:
+        parts.append(f"lowest {day['low_free_gb']:.2f} GB free ({day['low_at']})")
+    peaks = ", ".join(
+        f"{p['name']} {p['ram_gb']:.2f} GB ({p['at']})" for p in day.get("peaks") or []
+    )
+    if peaks:
+        parts.append("most RAM: " + peaks)
+    return "; ".join(parts) or None
+
+
 def status(now: float | None = None) -> str:
     """Thresholds, the current readings, the last run and the last day's actions."""
     now = time.time() if now is None else now

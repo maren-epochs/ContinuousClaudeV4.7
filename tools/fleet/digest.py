@@ -186,6 +186,7 @@ def build(state: FleetState, now: _dt.datetime | None = None) -> dict[str, Any]:
         "inbox_count": state.inbox_count,
         "audit_24h": audit_count(ts),
         "guard": guard.recent_actions(ts),
+        "memory_day": guard.memory_day(ts),
         "sessions": rows,
         "not_running": sum(1 for s in state.sessions if not s.alive),
         "needs_you": _needs_you(rows, machine_alerts),
@@ -224,6 +225,11 @@ def markdown(data: dict[str, Any]) -> str:
         f"- Inbox: {data['inbox_count']} pending",
         f"- Audit: {_plural(data['audit_24h'], 'risky command')} in the last 24 h",
         *[f"- Memory guard: {line}" for line in data.get("guard") or []],
+        *(
+            [f"- Memory, last 24 h: {day}"]
+            if (day := guard.memory_day_line(data.get("memory_day")))
+            else []
+        ),
         "",
         "## Sessions",
         "",

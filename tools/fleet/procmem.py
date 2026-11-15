@@ -24,7 +24,9 @@ QUERY = (
     " FROM Win32_PerfRawData_PerfProc_Process' |"
     ' ForEach-Object { "$($_.Name)`t$($_.WorkingSetPrivate)`t$($_.PrivateBytes)" }'
 )
-SKIP = {"_total", "idle"}
+# Not programs: counter totals, the idle loop, and Windows compressing other programs'
+# memory (its RAM is theirs, compressed; nothing to close).
+SKIP = {"_total", "idle", "memory compression"}
 _INSTANCE = re.compile(r"#\d+$")
 
 
@@ -49,7 +51,8 @@ def _powershell(script: str) -> str | None:
 def parse(text: str, n: int = TOP_N) -> list[dict[str, Any]]:
     """``name<TAB>ram bytes<TAB>reserved bytes`` lines -> the top ``n`` programs by RAM.
 
-    Instances ``brave#3`` count under ``brave``; ``_Total`` and ``Idle`` are dropped.
+    Instances ``brave#3`` count under ``brave``; ``_Total``, ``Idle`` and
+    ``Memory Compression`` (see SKIP) are dropped.
     Each entry: ``name``, ``ram_gb``, ``reserved_gb``, ``count`` (processes).
     """
     sums: dict[str, list[int]] = {}
