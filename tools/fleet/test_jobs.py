@@ -286,6 +286,7 @@ class GuardStartTests(JobHome):
             ("local_hour", hour),
             ("browser_processes", processes),
             ("window_closing", closing),
+            ("notify", True),
             (
                 "top_programs",
                 [{"name": "brave", "ram_gb": 2.0, "reserved_gb": 3.0, "count": 9}],

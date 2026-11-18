@@ -42,6 +42,7 @@ class GuardHome(unittest.TestCase):
             ("local_hour", hour),
             ("browser_processes", processes),
             ("window_closing", False),
+            ("notify", True),
             (
                 "top_programs",
                 [{"name": "brave", "ram_gb": 2.0, "reserved_gb": 3.0, "count": 9}],
@@ -331,6 +332,79 @@ class TickTests(GuardHome):
             record = guard.tick(NOW, sessions=[])
         close.assert_not_called()
         self.assertEqual(record["why"], "browser check failed")
+
+
+class BigProgramTests(GuardHome):
+    def test_flags_programs_over_the_level_except_ggnet(self):
+        cfg = guard.load_config()
+        top = [
+            {"name": "GGnet", "ram_gb": 3.1},
+            {"name": "Time", "ram_gb": 6.2},
+            {"name": "claude", "ram_gb": 0.6},
+            {"name": "Memory Compression", "ram_gb": 1.5},
+        ]
+        self.assertEqual(
+            guard.big_programs(top, cfg), [{"name": "Time", "ram_gb": 6.2}]
+        )
+        self.assertEqual(guard.big_programs(None, cfg), [])
+
+    def test_level_and_ignore_list_come_from_guard_json(self):
+        self.config(big_program_gb=4, big_program_ignore=["Time"])
+        cfg = guard.load_config()
+        top = [{"name": "Time", "ram_gb": 6.2}, {"name": "GGnet", "ram_gb": 5.0}]
+        self.assertEqual(
+            guard.big_programs(top, cfg), [{"name": "GGnet", "ram_gb": 5.0}]
+        )
+
+    def test_notifies_once_per_program_per_day_even_when_present(self):
+        self.readings(idle=5.0)  # top: brave 2.0 GB
+        guard.tick(NOW, sessions=[])
+        record = guard.tick(NOW + 300, sessions=[])
+        self.assertEqual(guard.notify.call_count, 1)
+        title = guard.notify.call_args[0][0]
+        self.assertIn("brave is using 2.0 GB", title)
+        self.assertEqual(record["big"], [{"name": "brave", "ram_gb": 2.0}])
+        logged = guard.log_path().read_text(encoding="utf-8").splitlines()
+        self.assertEqual(json.loads(logged[-1])["big"][0]["name"], "brave")
+
+    def test_next_day_notifies_again(self):
+        self.readings(idle=5.0)
+        guard.tick(NOW, sessions=[])
+        guard.tick(NOW + 86400, sessions=[])
+        self.assertEqual(guard.notify.call_count, 2)
+
+    def test_failed_notification_is_retried_next_run(self):
+        self.readings(idle=5.0)
+        guard.notify.return_value = False
+        guard.tick(NOW, sessions=[])
+        guard.notify.return_value = True
+        guard.tick(NOW + 300, sessions=[])
+        guard.tick(NOW + 600, sessions=[])
+        self.assertEqual(guard.notify.call_count, 2)
+
+    def test_dry_run_reports_but_does_not_notify(self):
+        self.readings(idle=5.0)
+        record = guard.tick(NOW, dry_run=True, sessions=[])
+        guard.notify.assert_not_called()
+        self.assertEqual(record["big"][0]["name"], "brave")
+
+    def test_status_lists_big_programs(self):
+        self.readings(idle=5.0)
+        self.assertIn(
+            "over 1 GB (notified once a day; ignored: ggnet): brave 2.00 GB",
+            guard.status(NOW),
+        )
+
+    def test_notify_passes_text_only_through_the_environment(self):
+        with (
+            mock.patch.object(guard.sys, "platform", "win32"),
+            mock.patch.object(guard.subprocess, "run") as run,
+        ):
+            run.return_value.returncode = 0
+            self.assertTrue(guard.notify("a'b<c", "body"))
+        args, kwargs = run.call_args
+        self.assertNotIn("a'b<c", " ".join(args[0]))
+        self.assertEqual(kwargs["env"]["FLEET_TOAST_TITLE"], "a'b<c")
 
 
 class ReportTests(GuardHome):

@@ -15,6 +15,10 @@ while away mode is on. Unknown idle time or memory = not away, so nothing happen
    ``need_gb`` + ``job_reserve_gb`` is free; none in the window's last ``job_last_start_min``.
 4. Sessions, log-only: below ``hold_gb`` on two runs in a row with no browser to close,
    logs which idle sessions it would close (``would_close_sessions``). Nothing closes them.
+5. Big programs (any hour, present or away): a program other than those in
+   ``big_program_ignore`` (default GGPoker's ``GGnet``) using ``big_program_gb`` or more of
+   RAM is logged as ``big`` and shown as a Windows notification, once per program per day,
+   so a leak (the Clock app reached 6.3 GB on 2026-11-18) is seen early. Nothing is closed.
 
 Settings: optional ``~/.claude/fleet/guard.json`` over the defaults in :class:`Config`
 (``protected`` = project names never proposed for closing). Log: ``guard.jsonl``, last run:
@@ -26,6 +30,7 @@ from __future__ import annotations
 import ctypes
 import datetime as _dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -64,6 +69,8 @@ class Config:
     job_last_start_min: float = 30.0
     browser: str = "brave"
     protected: tuple[str, ...] = ()
+    big_program_gb: float = 1.0
+    big_program_ignore: tuple[str, ...] = ("ggnet",)
 
 
 def config_path() -> Path:
@@ -87,7 +94,7 @@ def load_config() -> Config:
     values: dict[str, Any] = {}
     for f in fields(Config):
         value = raw.get(f.name)
-        if f.name == "protected":
+        if f.name in ("protected", "big_program_ignore"):
             if isinstance(value, list):
                 values[f.name] = tuple(str(v).lower() for v in value)
         elif f.name == "browser":
@@ -106,6 +113,82 @@ def free_gb() -> float | None:
 def top_programs() -> list[dict[str, Any]] | None:
     """The programs using the most RAM now (procmem), None when unknown."""
     return procmem.top_programs()
+
+
+def big_programs(top: list[dict[str, Any]] | None, cfg: Config) -> list[dict[str, Any]]:
+    """Programs at or over ``big_program_gb`` of RAM in use, minus the ignored ones."""
+    out = []
+    for prog in top or []:
+        name = str(prog.get("name", "")) if isinstance(prog, dict) else ""
+        ram = prog.get("ram_gb") if isinstance(prog, dict) else None
+        if not name or not isinstance(ram, int | float) or isinstance(ram, bool):
+            continue
+        if name.lower() in cfg.big_program_ignore or name.lower() in procmem.SKIP:
+            continue
+        if ram >= cfg.big_program_gb:
+            out.append({"name": name, "ram_gb": ram})
+    return out
+
+
+# Windows PowerShell 5.1 (WinRT types are not loadable from pwsh 7); text comes in through the
+# environment and is XML-escaped there, so a program name cannot change the script.
+_TOAST_PS = (
+    "$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications,"
+    " ContentType = WindowsRuntime];"
+    "$x = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument,"
+    " ContentType = WindowsRuntime]::new();"
+    "$t = [Security.SecurityElement]::Escape($env:FLEET_TOAST_TITLE);"
+    "$b = [Security.SecurityElement]::Escape($env:FLEET_TOAST_BODY);"
+    "$x.LoadXml(\"<toast><visual><binding template='ToastGeneric'><text>$t</text>"
+    '<text>$b</text></binding></visual></toast>");'
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+    r"'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe')"
+    ".Show([Windows.UI.Notifications.ToastNotification]::new($x))"
+)
+
+
+def notify(title: str, body: str) -> bool:
+    """Show a Windows notification; True when PowerShell reported no error."""
+    if sys.platform != "win32":
+        return False
+    env = {**os.environ, "FLEET_TOAST_TITLE": title, "FLEET_TOAST_BODY": body}
+    try:
+        done = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _TOAST_PS],
+            env=env,
+            capture_output=True,
+            check=False,
+            timeout=PS_TIMEOUT_S,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _flag_big(
+    big: list[dict[str, Any]], previous: dict[str, Any], now: float, cfg: Config
+) -> dict[str, str]:
+    """Notify each big program once per local day; returns today's notified names."""
+    today = _dt.datetime.fromtimestamp(now, model.harness_tz()).date().isoformat()
+    before = previous.get("big_notified")
+    notified = {
+        k: v
+        for k, v in (before.items() if isinstance(before, dict) else [])
+        if isinstance(k, str) and v == today
+    }
+    for prog in big:
+        key = prog["name"].lower()
+        if key in notified:
+            continue
+        title = f"{prog['name']} is using {prog['ram_gb']:.1f} GB of RAM"
+        body = (
+            f"Over the {cfg.big_program_gb:g} GB warning level. If it keeps growing it may"
+            " be leaking memory; closing it frees the memory. (Once a day per program.)"
+        )
+        if notify(title, body):
+            notified[key] = today
+    return notified
 
 
 class _LastInput(ctypes.Structure):
@@ -383,9 +466,13 @@ def tick(
             else:
                 record, low = _act(record, cfg, free, now, dry_run, previous, sessions)
     record["low_readings"] = low
+    big = big_programs(record["top"], cfg)
+    if big:
+        record["big"] = big
     if dry_run:
         record["dry_run"] = True
         return record
+    record["big_notified"] = _flag_big(big, previous, now, cfg)
     model.write_atomic(state_path(), json.dumps(record, indent=2) + "\n")
     _log(record)  # every run: free memory and the top programs, for later questions
     return record
@@ -580,6 +667,7 @@ def status(now: float | None = None) -> str:
     now = time.time() if now is None else now
     cfg = load_config()
     free, idle = free_gb(), idle_minutes()
+    top = top_programs()
     away = user_away(idle, local_hour(now), questions.is_away(), cfg)
     idle_text = "unknown" if idle is None else f"{idle:.0f} min"
     lines = [
@@ -593,7 +681,17 @@ def status(now: float | None = None) -> str:
             f" {cfg.idle_min:g} min,"
             f" {cfg.window_start}:00-{cfg.window_end}:00 or away mode)"
         ),
-        "most RAM now: " + (procmem.describe(top_programs()) or "unknown"),
+        "most RAM now: " + (procmem.describe(top) or "unknown"),
+        (
+            f"over {cfg.big_program_gb:g} GB (notified once a day; ignored: "
+            f"{', '.join(cfg.big_program_ignore) or 'none'}): "
+            + (
+                ", ".join(
+                    f"{p['name']} {p['ram_gb']:.2f} GB" for p in big_programs(top, cfg)
+                )
+                or "none"
+            )
+        ),
         "sessions: log-only; protected: " + (", ".join(cfg.protected) or "none"),
         "jobs: " + jobs.report(),
     ]
