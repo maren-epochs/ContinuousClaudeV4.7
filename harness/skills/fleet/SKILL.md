@@ -198,6 +198,16 @@ name (`--suppressApplicationTitle` keeps it).
    lists (nothing opens); `--all --yes` opens every project, only when the user ticked all of
    them. In the user's own terminal, `open --all` lists them and asks which to open.
 
+## /fleet close <tab>
+
+"Close the X tab", "end that session": `close <tab> --dry-run` checks, then `close <tab>`. It
+needs a handoff written since the session's last activity (ask the session for one first, via
+`handoff-all` or SendMessage, and wait for it to land), refuses this session and a session
+still working, then types `/exit` and `exit` so the tab closes itself; only if Claude survives
+does it stop the process and click the tab's close button. `--force` only when the user said
+to close it without a handoff. Never kill a tab's process directly: the tab stays open with an
+error icon.
+
 ## /fleet guard
 
 Memory guard. `guard` (or `guard status`) shows thresholds, current readings, the last run and

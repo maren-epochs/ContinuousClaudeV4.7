@@ -124,8 +124,11 @@ function SelectedTab($w) {
   }
 }
 function ScreenOf($w) {
-  $term = $w.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl')))
-  $term.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
+  # '' once the tab has closed (fleet close types `exit` into its shell)
+  try {
+    $term = $w.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl')))
+    $term.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
+  } catch { '' }
 }
 if ($tabs.Count -eq 0) { Fail "no Windows Terminal tab named '$($req.tab)'" }
 if ($tabs.Count -gt 1) {
@@ -162,6 +165,14 @@ function Restore {
 $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 Start-Sleep -Milliseconds 500
 if ($req.mode -eq 'read') { $text = Screen; Restore; Out @{ ok = $true; screen = $text } }
+if ($req.mode -eq 'closetab') {
+  # The tab's own close button: for a tab whose program already ended
+  $btn = $tab.FindFirst($S::Descendants, (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
+  if (-not $btn) { Restore; Fail 'tab has no close button' }
+  $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Start-Sleep -Milliseconds 500
+  Restore; Out @{ ok = $true }
+}
 $sh = New-Object -ComObject WScript.Shell
 $done = 0
 foreach ($step in $req.steps) {
@@ -179,7 +190,10 @@ foreach ($step in $req.steps) {
   do {
     Start-Sleep -Milliseconds 250
     $text = Screen
-    $seen = $step.expect -and ($text -split "`n" | Where-Object { $_.Contains($step.expect) })
+    # last: only the bottom line counts (a shell prompt, not the same text in scrollback)
+    $pool = @($text -split "`n" | Where-Object { $_.Trim() })
+    if ($step.last) { $pool = @($pool | Select-Object -Last 1) }
+    $seen = $step.expect -and ($pool | Where-Object { $_.Contains($step.expect) })
   } while ($step.expect -and -not $seen -and (Get-Date) -lt $deadline)
   if (-not $step.expect) { Start-Sleep -Milliseconds ([int]$step.wait_ms); $text = Screen }
   if ($step.expect -and -not $seen) {

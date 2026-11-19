@@ -61,6 +61,7 @@ from typing import Any
 if __package__:
     from . import (
         boxes,
+        closing,
         collect,
         digest,
         guard,
@@ -80,6 +81,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from fleet import (
         boxes,
+        closing,
         collect,
         digest,
         guard,
@@ -1432,6 +1434,14 @@ def _add_permission_parsers(sub: Any) -> None:
     p.add_argument("tab", help="Windows Terminal tab title (the project folder name)")
     p.add_argument("text", nargs="?", default=boxes.HANDOFF_ANSWER, help="one line")
     p.add_argument("--dry-run", action="store_true", help="read the box, type nothing")
+    p = sub.add_parser(
+        "close", help="end a session cleanly once its handoff is written (Windows)"
+    )
+    p.add_argument("tab", help="Windows Terminal tab title (the project folder name)")
+    p.add_argument(
+        "--force", action="store_true", help="skip the handoff and busy checks"
+    )
+    p.add_argument("--dry-run", action="store_true", help="check only, type nothing")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1571,6 +1581,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     ),
     "grant": lambda a: _grant_cmd(a),
     "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
+    "close": lambda a: closing.close(_state(True), a.tab, a.force, a.dry_run),
     "guard": lambda a: _guard_cmd(a),
     "job": lambda a: _job_cmd(a),
     "screenshot": lambda a: screenshot.report(screenshot.capture(a.out)),
@@ -1642,6 +1653,7 @@ def main(argv: list[str] | None = None) -> int:
         Refused,
         permissions.GrantError,
         boxes.BoxError,
+        closing.CloseError,
         screenshot.ScreenshotError,
     ) as exc:
         print(f"refused: {exc}", file=sys.stderr)
