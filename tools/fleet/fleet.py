@@ -73,6 +73,7 @@ if __package__:
         permissions,
         questions,
         record,
+        screenshot,
     )
     from .model import Alert, Change, FleetState, Proposal, Session
 else:  # run as a script: tools/ first, so `fleet` is this package, not this file
@@ -91,6 +92,7 @@ else:  # run as a script: tools/ first, so `fleet` is this package, not this fil
         permissions,
         questions,
         record,
+        screenshot,
     )
     from fleet.model import Alert, Change, FleetState, Proposal, Session
 
@@ -1417,6 +1419,8 @@ def _add_permission_parsers(sub: Any) -> None:
     gsub.add_parser("drop", help="drop a pending grant").add_argument("id")
     g = gsub.add_parser("apply", help="user: write pending grants into settings.json")
     g.add_argument("--dry-run", action="store_true", help="print what would be added")
+    p = sub.add_parser("screenshot", help="PNG of every screen, for Claude to Read")
+    p.add_argument("--out", type=Path, help="folder for the PNGs (default: temp)")
     p = sub.add_parser("usage", help="5-hour / 7-day usage from the status line")
     p.add_argument("--json", action="store_true", help="the saved reading as JSON")
     p = sub.add_parser("limits", help="live sessions stopped on the usage limit")
@@ -1569,6 +1573,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
     "answer-box": lambda a: boxes.answer(a.tab, a.text, a.dry_run),
     "guard": lambda a: _guard_cmd(a),
     "job": lambda a: _job_cmd(a),
+    "screenshot": lambda a: screenshot.report(screenshot.capture(a.out)),
     "usage": lambda a: limits.usage_report(time.time(), a.json),
     "limits": lambda a: limits.report(
         limits.stopped(_state(a.fresh)), time.time(), a.json
@@ -1633,7 +1638,12 @@ def main(argv: list[str] | None = None) -> int:
     except Busy as exc:
         print(f"busy: {exc}", file=sys.stderr)
         return QUEUE_BUSY
-    except (Refused, permissions.GrantError, boxes.BoxError) as exc:
+    except (
+        Refused,
+        permissions.GrantError,
+        boxes.BoxError,
+        screenshot.ScreenshotError,
+    ) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
     return 0
