@@ -1492,7 +1492,9 @@ def _parser() -> argparse.ArgumentParser:
         help="add the tabs to the named window (open prints the name it made)",
     )
     p.add_argument(
-        "--profile", help="Windows Terminal profile for the tabs (its icon and colors)"
+        "--profile",
+        help="Windows Terminal profile for the tabs (its icon and colors);"
+        " default: the harness's 'epoch harness' profile when installed",
     )
     p.add_argument(
         "--stagger",
@@ -1576,7 +1578,7 @@ _COMMANDS: dict[str, Any] = {  # command -> args -> printed text
         a.all,
         a.dry_run,
         a.yes,
-        a.profile,
+        a.profile or launch.default_profile(os.environ),
         stagger=a.stagger,
         here=a.here,
         force=a.force,

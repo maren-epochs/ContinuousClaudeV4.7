@@ -36,7 +36,12 @@ class LaunchHome(unittest.TestCase):
         self.projects = self.home / ".claude" / "projects"
         self.projects.mkdir(parents=True)
         env = mock.patch.dict(
-            os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home)}
+            os.environ,
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "LOCALAPPDATA": str(self.root / "localappdata"),
+            },
         )
         env.start()
         self.addCleanup(env.stop)
@@ -489,6 +494,43 @@ class OpenCommandTests(LaunchHome):
         self.project("acorn")
         _, out, _ = self.run_cli("acorn", "--window", "fleet-9", "--dry-run")
         self.assertTrue(out.startswith("wt -w fleet-9 new-tab --title acorn"))
+
+    def _fragment(self, names):
+        d = (
+            self.root
+            / "localappdata"
+            / "Microsoft"
+            / "Windows Terminal"
+            / "Fragments"
+            / "EpochHarness"
+        )
+        d.mkdir(parents=True)
+        body = {"profiles": [{"name": n} for n in names]}
+        (d / "epoch-harness.json").write_text(json.dumps(body), encoding="utf-8")
+
+    def test_tabs_take_the_harness_profile_when_it_is_installed(self):
+        self.project("acorn")
+        self._fragment(["epoch harness"])
+        _, out, _ = self.run_cli("acorn", "--dry-run")
+        self.assertRegex(
+            out, r"^wt -w fleet-\d+ new-tab -p \"epoch harness\" --title acorn"
+        )
+
+    def test_explicit_profile_wins_over_the_harness_profile(self):
+        self.project("acorn")
+        self._fragment(["epoch harness"])
+        _, out, _ = self.run_cli("acorn", "--profile", "Ubuntu", "--dry-run")
+        self.assertIn("new-tab -p Ubuntu --title acorn", out)
+
+    def test_no_profile_without_the_fragment_or_its_name(self):
+        self.assertIsNone(launch.default_profile({}))
+        self.assertIsNone(
+            launch.default_profile({"LOCALAPPDATA": str(self.root / "localappdata")})
+        )
+        self._fragment(["something else"])
+        self.assertIsNone(
+            launch.default_profile({"LOCALAPPDATA": str(self.root / "localappdata")})
+        )
 
     def test_dry_run_prints_wt_command_and_starts_nothing(self):
         self.project("acorn")

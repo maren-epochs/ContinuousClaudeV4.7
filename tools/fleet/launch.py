@@ -197,6 +197,29 @@ def choose(listed: list[Target], answer: str) -> list[Target]:
     return list(chosen.values())
 
 
+HARNESS_PROFILE = "epoch harness"  # made by install/desktop_launcher.ps1
+
+
+def default_profile(env: Mapping[str, str]) -> str | None:
+    """The harness's Windows Terminal profile when installed, else None.
+
+    Its tabs carry the Claude icon; without it a tab takes the default profile's
+    plain terminal icon. Read from the fragment desktop_launcher.ps1 writes.
+    """
+    base = env.get("LOCALAPPDATA")
+    if not base:
+        return None
+    fragment = (
+        Path(base) / "Microsoft" / "Windows Terminal" / "Fragments" / "EpochHarness"
+    ) / "epoch-harness.json"
+    try:
+        profiles = json.loads(fragment.read_text(encoding="utf-8-sig"))["profiles"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    names = {p.get("name") for p in profiles if isinstance(p, dict)}
+    return HARNESS_PROFILE if HARNESS_PROFILE in names else None
+
+
 def _wt_literal(value: str) -> str:
     """value with ``;`` escaped: wt splits its command line on ``;`` even inside an argument."""
     return value.replace(";", "\\;")
