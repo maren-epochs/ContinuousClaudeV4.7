@@ -10,7 +10,7 @@ A harness for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that
 
 ```
 harness/
-  skills/          12 workflow skills
+  skills/          14 workflow skills
   agents/          worker + oracle
 .claude/
   hooks/           9 hooks + tldr-shim helper (.mjs — cross-platform), test_*.sh per hook
@@ -48,6 +48,7 @@ install/
 | `/visualize` | Chart procedure on `tools/viz`: form, color, validated palette, house style, render, then inspect the image |
 | `/fleet` | What every Claude Code session on this machine is doing (alerts, collisions, drift, audit) and the harness inbox: show, apply, reject proposals; file cross-project lessons; HTML dashboard |
 | `/changelog` | Release notes from `git log` between two refs, grouped by commit type, one plain line per change |
+| `/six-pager` | Amazon-style six-page narrative memo plus the meeting background and agenda for its silent-reading review; every figure computed in a ledger script and checked |
 
 ## Hooks
 

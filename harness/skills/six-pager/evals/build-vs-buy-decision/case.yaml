@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: build-vs-buy-decision
+expected_outcome: |
+  A decision six-pager that states the decision and recommendation (buy Vendor A) up front,
+  compares rebuild, buy, open source and patch fairly on stated criteria with costs computed
+  from the notes, handles the conflicting rebuild estimates openly, states the strongest case
+  for rebuilding and answers it, covers PII/compliance and vendor-outage risk, and names
+  owners and dates; plus a meeting background and agenda document.
+context:
+  scaffold_script: place-files.sh

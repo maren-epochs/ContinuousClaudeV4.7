@@ -1,6 +1,6 @@
 # Continuous Claude v4.7
 
-Autonomous SDLC pipeline for Claude Code. 13 skills, 2 agents, 11 hooks (+ tldr-shim helper, privacy-redact.mjs shared library).
+Autonomous SDLC pipeline for Claude Code. 14 skills, 2 agents, 11 hooks (+ tldr-shim helper, privacy-redact.mjs shared library).
 
 ## Skills
 
@@ -19,6 +19,7 @@ Autonomous SDLC pipeline for Claude Code. 13 skills, 2 agents, 11 hooks (+ tldr-
 | `/visualize` | "chart", "plot", "dashboard", "visualize", "graph" | form → color → validate → style → render → look (Read the PNG); outputs static PNG/SVG, Artifact page, or Render site; data prep hands off to `/analyze-data` |
 | `/fleet` | "fleet", "what are other projects doing", "harness inbox", "apply proposal" | Read-mostly view of every Claude Code session on the machine (alerts, collisions, drift, audit) + the harness inbox: show / apply (into the repo file, never the installed copy) / reject proposals, file cross-project lessons, `handoff-all` (asks every live session for a handoff via SendMessage, `handoffs --since` checks which landed), `away on\|off` + `questions` (question queue while away; clickable answers relayed to the asking session), `open` (picked projects as named tabs of one Windows Terminal window, each a fresh `/resume-handoff` session), `digest` (plain-language daily summary), `denials` (permission/classifier denials across every project) + `usage` (5-hour / 7-day usage saved by the status line) + `limits` (sessions stopped on the usage limit; `/fleet resume` sends them `resume` once reset; `/fleet prepare` wraps every session up before the limit, automatically at 85% via the Stop hook) + `answer-box <tab>` (types the handoff request into a stuck session's question box, Windows Terminal + UI Automation) + `grant add|list|drop|apply` (standing-permission queue; the user runs `apply`; pending count in `report` and the statusline `N grant`), HTML dashboard (pending-questions notice; rewritten by every `collect`, reloads itself every 2 min); all via `tools/fleet/fleet.py` |
 | `/changelog` | "changelog", "release notes", "what changed since" | `git log --no-merges` between two refs (named ref/date, else newest tag, else the share snapshot `source_sha`) -> markdown grouped by conventional-commit type, one plain line per change with its short sha; stdout or a named file |
+| `/six-pager` | "six-pager", "6-pager", "narrative memo", "Amazon-style memo", "OP1", "decision memo" | Amazon-style narrative memo (operating plan, decision or new initiative) plus the silent-reading meeting background and agenda; frames the runner-up, deciding comparison and key assumption first, computes every figure in a `<slug>-figures.py` ledger, drafts once, checks with `scripts/check_memo.py` (length, stray bullets, weasel words, long sentences, numbers not traceable to inputs or ledger), one fix round; about ten tool calls |
 
 ## Agents
 

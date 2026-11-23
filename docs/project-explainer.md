@@ -80,8 +80,8 @@ The design response is consistent: wherever possible, a rule moves from an instr
 
 | Layer | Contents | Origin |
 |-------|----------|--------|
-| Skills (13) | `/autonomous`, `/autonomous-research`, `/research`, `/premortem`, `/bootup`, `/review`, `/create-handoff`, `/resume-handoff`, `/upgrade-harness` | upstream; several revised in the fork |
-| | `/analyze-data`, `/visualize`, `/fleet`, `/changelog` | fork |
+| Skills (14) | `/autonomous`, `/autonomous-research`, `/research`, `/premortem`, `/bootup`, `/review`, `/create-handoff`, `/resume-handoff`, `/upgrade-harness` | upstream; several revised in the fork |
+| | `/analyze-data`, `/visualize`, `/fleet`, `/changelog`, `/six-pager` | fork |
 | Agents (2) | `worker` (executes one bounded task), `oracle` (external research) | upstream; `worker` rewritten in the fork |
 | Hooks (10 + helper) | `status`, `tldr-read`, `post-edit-diagnostics`, `pre-compact`, `auto-handoff-stop` | upstream, substantially fixed in the fork |
 | | `session-start`, `worker-report-check`, `harness-guard`, `fleet-audit`, `ask-queue`, plus the `tldr-shim` helper and the shared `privacy-redact` library | fork |

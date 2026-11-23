@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: thin-input-oncall
+expected_outcome: |
+  A proposal six-pager built from very thin input that does not invent metrics: every figure
+  it needs but was not given is a visible placeholder or a clearly labeled assumption, and the
+  final reply lists them. The argument (problem, options, recommendation, risks, plan) is still
+  complete and persuasive; plus a meeting background and agenda document.

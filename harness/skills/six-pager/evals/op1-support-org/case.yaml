@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: op1-support-org
+expected_outcome: |
+  An operating-plan six-pager (introduction, goals with FY26 target vs actual, tenets,
+  state of the business, lessons learned, priorities, appendix/FAQ) in narrative prose,
+  using only the supplied figures, owning the missed goals, recommending option 2 plus the
+  Manila pay adjustment and answering the COO's doubt about deflection; plus a meeting
+  background and agenda document for the COO review.
+context:
+  scaffold_script: place-files.sh

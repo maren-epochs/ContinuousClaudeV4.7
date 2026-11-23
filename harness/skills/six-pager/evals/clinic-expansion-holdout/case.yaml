@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: clinic-expansion-holdout
+expected_outcome: |
+  Held-out case from a different industry. A decision memo comparing Ashby, the Harrowgate
+  extension, extended hours and fixing Castle Quay first on like-for-like economics derived
+  from the inputs, owning the Castle Quay miss, treating recruitment as the binding
+  constraint, and recommending from the evidence rather than the MD's preference; plus a
+  meeting plan that explains the silent-read format to a team new to it.
+context:
+  scaffold_script: place-files.sh
