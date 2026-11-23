@@ -46,6 +46,19 @@ def merge_missing(cfg: dict, profile: dict, path: str = "") -> list[str]:
     return added
 
 
+WINDOWS_LINE = "- I am on Windows. Never suggest Mac-only tools, shortcuts or paths"
+MAC_LINE = "- I am on a Mac. Never suggest Windows-only tools, shortcuts or paths"
+
+
+def platform_rules(rules: str, platform: str = sys.platform) -> str:
+    """The profile rules with the operating-system line matching this machine."""
+    if platform == "darwin":
+        return rules.replace(WINDOWS_LINE, MAC_LINE)
+    if platform != "win32":
+        return "\n".join(ln for ln in rules.split("\n") if ln.strip() != WINDOWS_LINE)
+    return rules
+
+
 def with_rules(text: str, rules: str) -> str:
     """text with the profile block inserted or replaced between the markers."""
     eol = "\r\n" if "\r\n" in text else "\n"
@@ -87,7 +100,9 @@ def main(argv: list[str] | None = None) -> int:
 
     md = Path(args.claude_md)
     old_md = md.read_bytes().decode("utf-8-sig") if md.exists() else ""
-    new_md = with_rules(old_md, PROFILE_RULES.read_text(encoding="utf-8"))
+    new_md = with_rules(
+        old_md, platform_rules(PROFILE_RULES.read_text(encoding="utf-8"))
+    )
 
     if added:
         print("settings: adding " + ", ".join(added))

@@ -114,6 +114,16 @@ class Profile(unittest.TestCase):
         self.assertFalse(self.settings.exists())
         self.assertFalse(self.md.exists())
 
+    def test_os_line_matches_platform(self) -> None:
+        rules = (ap.HERE / "profile" / "CLAUDE.profile.md").read_text(encoding="utf-8")
+        self.assertIn(ap.WINDOWS_LINE, rules)
+        self.assertEqual(ap.platform_rules(rules, "win32"), rules)
+        mac = ap.platform_rules(rules, "darwin")
+        self.assertIn(ap.MAC_LINE, mac)
+        self.assertNotIn(ap.WINDOWS_LINE, mac)
+        linux = ap.platform_rules(rules, "linux")
+        self.assertNotIn("I am on", linux)
+
     def test_invalid_settings_refused(self) -> None:
         self.settings.write_text("{not json", encoding="utf-8")
         err = io.StringIO()

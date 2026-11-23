@@ -6,3 +6,6 @@
 # (Git for Windows default, GitHub's windows runners) would otherwise check them out CRLF.
 *.sh text eol=lf
 Makefile text eol=lf
+# Windows double-click installers need CRLF; macOS .command files need LF
+*.cmd text eol=crlf
+*.command text eol=lf

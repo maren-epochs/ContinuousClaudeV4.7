@@ -152,6 +152,12 @@ powershell -ExecutionPolicy Bypass -File install\quick_install.ps1
 
 It checks Python 3.13 and Node.js 18+ (offers a winget install for either), installs the Python packages and Playwright Chromium, copies skills, agents, hooks, scripts and tools into `~/.claude` (backing up anything it replaces), and registers every hook plus the status line in `~/.claude/settings.json` (backup first, nothing duplicated, the rest of the file kept). It also adds an **epoch harness** desktop shortcut that asks which projects to open as Windows Terminal tabs (`-NoShortcut` skips it; `Create-Epoch-Shortcut.cmd` adds it to an existing install). Re-running is safe. Then restart Claude Code and run `/bootup`. `-SkipDeps` skips the package and browser steps; `-Yes` answers the winget prompts.
 
+### From a zip, no GitHub (Windows or macOS)
+
+Unzip the folder and double-click `Install-Windows.cmd` (Windows) or `Install-Mac.command` (macOS; the first time, right-click > Open if macOS warns about an unidentified developer). Both install from the unzipped folder and need no git or GitHub account. To update, unzip the newer copy and double-click again: the install is idempotent, backs up what it replaces and keeps the user's own settings.
+
+On macOS, `install/quick_install.sh [--yes] [--skip-deps] [--skip-profile]` does the same steps as the Windows installer: Python 3.13 and Node.js 18+ through Homebrew if missing, a private venv at `~/.claude/ccv47-venv` (Homebrew's Python refuses pip installs), packages, Playwright Chromium, the sync into `~/.claude`, hooks, status line and profile (its operating-system line says Mac). The Windows-only parts stay inactive there: `/fleet open`, `close`, `screenshot`, `answer-box`, the memory guard and the desktop shortcut.
+
 ### Option A: Add to an existing project
 
 Copy `harness/skills/` to `.claude/skills/` and `harness/agents/` to `.claude/agents/` in your project root, plus this repo's `.claude/hooks/`, `scripts/`, and `tools/`, and use `install/settings.template.json` as the project's `.claude/settings.json` (its hook commands are project-relative). Skills, hooks, and agents are then available immediately. (Skills and agents live under `harness/` in this repo so a checkout doesn't double-register them alongside a global install.)
