@@ -51,10 +51,20 @@ export function handover(text) {
   if (/\bdenied\b/i.test(raw) && /^\s*! \S/m.test(raw)) return null;
   const body = unquoted(raw);
   for (const p of PATTERNS) {
-    const m = body.match(p);
-    if (m) return m[0];
+    const g = new RegExp(p.source, p.flags.includes('g') ? p.flags : p.flags + 'g');
+    for (const m of body.matchAll(g)) {
+      if (!selfAction(body.slice(Math.max(0, m.index - 40), m.index))) return m[0];
+    }
   }
   return null;
+}
+
+// Text right before a match that makes it Claude's own step: "I'll take a screenshot",
+// "we will run", "let me open". Only a first-person subject plus an optional modal and
+// one adverb; "I need you to take" still counts as a hand-over.
+const SELF_PREFIX = /(?:\b(?:I|we)(?:'ll|'d|'m going to| will| would| can| could| shall| am going to| are going to)?|\blet me)(?: (?:then|also|now|first|next|just))? $/i;
+export function selfAction(before) {
+  return SELF_PREFIX.test(before);
 }
 
 // Assistant text after the last real user prompt (tool results are user entries too).

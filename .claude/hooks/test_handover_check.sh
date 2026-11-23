@@ -31,7 +31,9 @@ for msg in \
   "Please run fleet.py grant apply." \
   "Try it yourself and let me know what it says." \
   "Open the app and tell me what you see." \
-  "Check the tab, then tell me what it shows."; do
+  "Check the tab, then tell me what it shows." \
+  "I need you to take a screenshot." \
+  "I'll look at it. Take a screenshot and paste it."; do
   run "$(payload "$msg")"
   blocks; check "blocks: ${msg:0:50}" $?
   [ "$RC" -eq 0 ]; check "exit 0: ${msg:0:30}" $?
@@ -46,6 +48,10 @@ check "reason names the screenshot command" $r
 for msg in \
   "I took a screenshot of both screens and read them." \
   "I'll run the tests, then push and install." \
+  "3. Check the stopwatch, I'll take a screenshot and compare it with the table." \
+  "Next I will take a screenshot of both screens." \
+  "Let me take a screenshot first." \
+  "We'll then take a screenshot after opening." \
   'You said "send me a screenshot" earlier; I took one myself.' \
   'The rule `if you send` is now checked.' \
   "Done. Tests pass (169), committed and pushed." \
@@ -93,5 +99,5 @@ fs.writeFileSync(process.argv[1], L.map(x=>JSON.stringify(x)).join("\n")+"\n");'
 run "$(node -e 'process.stdout.write(JSON.stringify({transcript_path:process.argv[1]}))' "$T")"
 [ "$OUT" = "{}" ]; check "transcript fallback ignores replies to earlier prompts" $?
 
-echo "handover-check: $PASS passed, $FAIL failed"
+echo "RESULT: $PASS passed, $FAIL failed (handover-check)"
 [ "$FAIL" -eq 0 ]
