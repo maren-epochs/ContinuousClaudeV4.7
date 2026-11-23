@@ -26,12 +26,31 @@ ask() {
   read -r -p "$1 [Y/n] " r </dev/tty || return 0
   case "$r" in [nN]*) return 1 ;; *) return 0 ;; esac
 }
-brew_install() {
-  if ! have brew; then
-    echo "$2 is missing and Homebrew is not installed." >&2
-    echo "Install Homebrew from https://brew.sh (one command), then run this again." >&2
+install_homebrew() {
+  # Official installer from https://brew.sh. It asks for the Mac password (nothing shows
+  # while typing) and may first download Apple's Command Line Tools (several minutes).
+  if [ "$(uname -s)" != Darwin ]; then
+    echo "Homebrew is not installed. Install Python 3.13 and Node.js 18+ with your package manager, then run this again." >&2
     exit 1
   fi
+  echo "Homebrew (the standard installer for developer tools on a Mac) is needed for Python and Node."
+  ask "Install Homebrew now? It will ask for your Mac password." \
+    || { echo "Install Homebrew from https://brew.sh, then run this again." >&2; exit 1; }
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/tty \
+    || { echo "Homebrew install failed; see the messages above." >&2; exit 1; }
+  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [ -x "$b" ]; then
+      eval "$("$b" shellenv)"
+      # Keep brew on PATH in new Terminal windows (what Homebrew's "Next steps" ask for)
+      line="eval \"\$($b shellenv)\""
+      grep -qsF "$line" "$HOME/.zprofile" || printf '\n%s\n' "$line" >> "$HOME/.zprofile"
+      break
+    fi
+  done
+  have brew || { echo "Homebrew installed but brew is not on PATH; open a new Terminal and run this again." >&2; exit 1; }
+}
+brew_install() {
+  have brew || install_homebrew
   ask "Install $2 with Homebrew?" || { echo "$2 is required." >&2; exit 1; }
   brew install "$1"
 }

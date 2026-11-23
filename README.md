@@ -156,7 +156,7 @@ It checks Python 3.13 and Node.js 18+ (offers a winget install for either), inst
 
 Unzip the folder and double-click `Install-Windows.cmd` (Windows) or `Install-Mac.command` (macOS; the first time, right-click > Open if macOS warns about an unidentified developer). Both install from the unzipped folder and need no git or GitHub account. To update, unzip the newer copy and double-click again: the install is idempotent, backs up what it replaces and keeps the user's own settings.
 
-On macOS, `install/quick_install.sh [--yes] [--skip-deps] [--skip-profile]` does the same steps as the Windows installer: Python 3.13 and Node.js 18+ through Homebrew if missing, a private venv at `~/.claude/ccv47-venv` (Homebrew's Python refuses pip installs), packages, Playwright Chromium, the sync into `~/.claude`, hooks, status line and profile (its operating-system line says Mac). The Windows-only parts stay inactive there: `/fleet open`, `close`, `screenshot`, `answer-box`, the memory guard and the desktop shortcut.
+On macOS, `install/quick_install.sh [--yes] [--skip-deps] [--skip-profile]` does the same steps as the Windows installer: Python 3.13 and Node.js 18+ through Homebrew if missing (installing Homebrew itself first when absent, with the official brew.sh script: it asks for the Mac password, and the installer adds brew to `~/.zprofile`), a private venv at `~/.claude/ccv47-venv` (Homebrew's Python refuses pip installs), packages, Playwright Chromium, the sync into `~/.claude`, hooks, status line and profile (its operating-system line says Mac). The Windows-only parts stay inactive there: `/fleet open`, `close`, `screenshot`, `answer-box`, the memory guard and the desktop shortcut.
 
 ### Option A: Add to an existing project
 
