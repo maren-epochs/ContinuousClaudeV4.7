@@ -156,6 +156,8 @@ Claude runs every command, push, sync and install itself (git push, `install/syn
 
 After each denial or hand-over, propose a narrow standing authorization (exact command, repo, task or path) for the `autoMode.environment` "Standing authorizations" entries in `~/.claude/settings.json`, asked with AskUserQuestion. Credentials, live money, production data, force-push and history rewrites stay with the user. Queue each agreed grant with `fleet.py grant add '<exact rule>' --reason '...'` (`--note` for a checker note) and end that reply with the one batch line `! py -3.13 ~/.claude/tools/fleet/fleet.py grant apply` (Claude cannot write settings.json). A new project's first session runs `fleet.py denials --project <folder>` and proposes grants for its recurring low-risk denials.
 
+Relayed questions are still questions: when a subagent, a drafted doc or another session returns open questions or options for the user, ask them with AskUserQuestion in that same reply (A-D, recommended first with a one-line reason, batched up to 4). Never pass them on as a table or prose list for the user to answer by typing.
+
 ## Architecture
 
 Skills orchestrate — they never implement directly. Workers build. Bloks cards carry knowledge between sessions. Handoffs carry session state.
