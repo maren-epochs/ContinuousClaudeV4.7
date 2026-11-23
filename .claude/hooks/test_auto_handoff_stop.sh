@@ -196,6 +196,27 @@ run_hook "$(payload sgtstU1x)"
 FLEET_PREPARE_PCT=96 bash -c 'true'; usage 95 3600 0
 OUT=$(printf '%s' "$(payload sgtstU1x)" | FLEET_PREPARE_PCT=96 node "$HOOK" 2>/dev/null)
 [ "$OUT" = "{}" ]; check "T12g FLEET_PREPARE_PCT=96 raises the threshold" $?
+# Plan-aware default: Max -> 94, Pro/unknown -> 85 (fake ~/.claude/.credentials.json, no tokens)
+CREDS="$FAKEHOME/.claude/.credentials.json"
+printf '{"claudeAiOauth":{"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}' > "$CREDS"
+rm -rf "$PREP"; usage 90 3600 0
+run_hook "$(payload sgtstU1x)"
+[ "$OUT" = "{}" ]; check "T12h Max plan: 90% is under the 94% threshold -> allow (got: ${OUT:0:60})" $?
+rm -rf "$PREP"; usage 95 3600 0
+run_hook "$(payload sgtstU1x)"
+case "$OUT" in *'"decision":"block"'*'95%'*) r=0;; *) r=1;; esac
+check "T12i Max plan: 95% blocks (got: ${OUT:0:80})" $r
+printf '{"claudeAiOauth":{"subscriptionType":"pro","rateLimitTier":"default_claude_ai"}}' > "$CREDS"
+rm -rf "$PREP"; usage 90 3600 0
+run_hook "$(payload sgtstU1x)"
+case "$OUT" in *'"decision":"block"'*) r=0;; *) r=1;; esac
+check "T12j Pro plan: 90% blocks at the 85% threshold (got: ${OUT:0:80})" $r
+printf '{"claudeAiOauth":{"subscriptionType":"max"}}' > "$CREDS"
+rm -rf "$PREP"; usage 90 3600 0
+OUT=$(printf '%s' "$(payload sgtstU1x)" | FLEET_PREPARE_PCT=88 node "$HOOK" 2>/dev/null)
+case "$OUT" in *'"decision":"block"'*) r=0;; *) r=1;; esac
+check "T12k FLEET_PREPARE_PCT=88 overrides the Max default (got: ${OUT:0:80})" $r
+rm -f "$CREDS"; rm -rf "$PREP"
 printf 'not json' > "$USAGE"
 run_hook "$(payload sgtstU1x)"
 [ "$OUT" = "{}" ] && [ "$RC" -eq 0 ]; check "T12h corrupt usage.json fails open" $?

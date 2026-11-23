@@ -19,7 +19,8 @@
  * Usage-limit prepare (/fleet prepare): status.mjs saves Claude Code's
  * rate_limits.five_hour reading to ~/.claude/fleet/usage.json. When no context block
  * applies and that reading (at most USAGE_MAX_AGE_MS old, window not yet reset) is at
- * or above FLEET_PREPARE_PCT (default 85), each session is blocked ONCE per usage window
+ * or above the prepare threshold (planPreparePct: 94% on Claude Max, 85% on Pro or plan
+ * unknown; FLEET_PREPARE_PCT overrides), each session is blocked ONCE per usage window
  * (marker ~/.claude/fleet/prepare/<sid>-<resets_at>) and told to finish its step, write
  * a handoff and start nothing new. The first session to cross (exclusive marker
  * fleet-<resets_at>) is also told to run `/fleet prepare all`, which messages the other
@@ -37,9 +38,22 @@ const MAX_PCT_AGE_MS = 2 * 60 * 60 * 1000; // ignore pct files older than 2h (cr
 const TAIL_BYTES = 512 * 1024;
 const USAGE_MAX_AGE_MS = 30 * 60 * 1000;
 
+// Plan-aware default for the /fleet prepare threshold: 94% on Claude Max, 85% on Pro or
+// plan unknown. FLEET_PREPARE_PCT overrides both.
+// Reads only subscriptionType / rateLimitTier from ~/.claude/.credentials.json; never tokens.
+function planPreparePct() {
+  const env = Number(process.env.FLEET_PREPARE_PCT);
+  if (env) return env;
+  try {
+    const o = JSON.parse(readFileSync(join(homedir(), '.claude', '.credentials.json'), 'utf-8')).claudeAiOauth || {};
+    const plan = `${o.subscriptionType || ''} ${o.rateLimitTier || ''}`.toLowerCase();
+    return plan.includes('max') ? 94 : 85;
+  } catch { return 85; }
+}
+
 // {pct, resetsAt} of a fresh five_hour reading at or above the prepare threshold, else null.
 function usageOverThreshold() {
-  const threshold = Number(process.env.FLEET_PREPARE_PCT) || 85;
+  const threshold = planPreparePct();
   let u;
   try { u = JSON.parse(readFileSync(join(homedir(), '.claude', 'fleet', 'usage.json'), 'utf-8')); } catch { return null; }
   const pct = Number(u && u.five_hour_pct);

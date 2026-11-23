@@ -197,14 +197,28 @@ function writeUsage(data) {
   } catch {}
 }
 
+// Plan-aware default for the /fleet prepare threshold: 94% on Claude Max, 85% on Pro or
+// plan unknown. FLEET_PREPARE_PCT overrides both.
+// Reads only subscriptionType / rateLimitTier from ~/.claude/.credentials.json; never tokens.
+function planPreparePct() {
+  const env = Number(process.env.FLEET_PREPARE_PCT);
+  if (env) return env;
+  try {
+    const o = JSON.parse(readFileSync(join(homedir(), '.claude', '.credentials.json'), 'utf-8')).claudeAiOauth || {};
+    const plan = `${o.subscriptionType || ''} ${o.rateLimitTier || ''}`.toLowerCase();
+    return plan.includes('max') ? 94 : 85;
+  } catch { return 85; }
+}
+
 // "5h 29%" from rate_limits.five_hour: yellow from 75%, red with "!" from the /fleet
-// prepare threshold (FLEET_PREPARE_PCT, default 85). Empty when Claude Code sends none.
+// prepare threshold (planPreparePct: 94% on Claude Max, 85% on Pro or plan unknown;
+// FLEET_PREPARE_PCT overrides). Empty when Claude Code sends none.
 function usageSegment(data) {
   const five = data && data.rate_limits && data.rate_limits.five_hour;
   const pct = Number(five && five.used_percentage);
   if (!five || !Number.isFinite(pct)) return '';
   const p = Math.floor(pct);
-  const prepare = Number(process.env.FLEET_PREPARE_PCT) || 85;
+  const prepare = planPreparePct();
   if (p >= prepare) return `\x1b[31m! 5h ${p}%\x1b[0m`;
   if (p >= 75) return `\x1b[33m5h ${p}%\x1b[0m`;
   return `\x1b[32m5h ${p}%\x1b[0m`;
