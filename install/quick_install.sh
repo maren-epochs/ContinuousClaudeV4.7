@@ -90,6 +90,11 @@ if [ "$SKIP_PROFILE" = 1 ]; then
   step 'Shared profile: skipped (--skip-profile)'
 else
   step 'Shared profile (auto mode, Opus, working style)'
+  echo "This also changes your own Claude Code settings, filling in only what you have not set yourself:"
+  echo "  - auto mode: Claude runs most commands without asking first"
+  echo "  - Opus, a large thinking budget and auto-continue after usage limits: usage is used up faster"
+  echo "  - working-style rules added to ~/.claude/CLAUDE.md (e.g. propose three next steps, ask choices as A-D)"
+  echo "Your files are backed up first. To undo, edit ~/.claude/settings.json and remove the marked block in ~/.claude/CLAUDE.md."
   "$PY" install/apply_profile.py
 fi
 

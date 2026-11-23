@@ -99,6 +99,13 @@ if ($SkipProfile) {
     Step 'Shared profile: skipped (-SkipProfile)'
 } else {
     Step 'Shared profile (auto mode, Opus, working style)'
+    Write-Host @'
+This also changes your own Claude Code settings, filling in only what you have not set yourself:
+  - auto mode: Claude runs most commands without asking first
+  - Opus, a large thinking budget and auto-continue after usage limits: usage is used up faster
+  - working-style rules added to ~/.claude/CLAUDE.md (e.g. propose three next steps, ask choices as A-D)
+Your files are backed up first. To undo, edit ~/.claude/settings.json and remove the marked block in ~/.claude/CLAUDE.md.
+'@ -ForegroundColor Yellow
     Run-Py install/apply_profile.py
 }
 
