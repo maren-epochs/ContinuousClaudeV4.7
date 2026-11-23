@@ -117,6 +117,10 @@ if ($NoShortcut) {
     if ($LASTEXITCODE -ne 0) { Write-Warning 'Desktop shortcut not created; the harness itself is installed.' }
 }
 
+Step 'Check the install'
+$verifyArgs = @('install/verify_install.py'); if ($SkipProfile) { $verifyArgs += '--skip-profile' }
+Run-Py @verifyArgs
+
 Step 'Done'
 Write-Host @'
 Restart Claude Code (close every session), then run /bootup in any project,

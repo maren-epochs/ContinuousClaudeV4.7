@@ -98,6 +98,13 @@ else
   "$PY" install/apply_profile.py
 fi
 
+step 'Check the install'
+VERIFY_ARGS=()
+[ "$SKIP_PROFILE" = 1 ] && VERIFY_ARGS+=(--skip-profile)
+if ! "$PY" install/verify_install.py "${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}"; then
+  exit 1
+fi
+
 step 'Done'
 printf '\033[32m%s\033[0m\n' "Restart Claude Code (close every session), then run /bootup in any project.
 Windows-only parts are inactive on macOS: /fleet open, close, screenshot, answer-box,
