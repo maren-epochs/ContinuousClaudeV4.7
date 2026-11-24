@@ -3,7 +3,7 @@
 
     py -3.13 install/build_zips.py [--ref HEAD] [--out DIR] [--only mac|windows]
 
-Writes epoch-harness-mac.zip (Install-Mac.command) and epoch-harness-windows.zip
+Writes epoch-harness-mac.zip (Install-Mac.command, INSTALL-ON-MAC.txt) and epoch-harness-windows.zip
 (Install-Windows.cmd) to DIR (default ~/Downloads), each holding the tracked tree of
 REF under epoch-harness/, without the git-clone installer, .github/ and continuum/.
 File modes (the executable bit on .command and .sh) and line endings come from
@@ -24,7 +24,7 @@ PREFIX = "epoch-harness/"
 COMMON_DROP = ("Install-Epoch-Harness.cmd", ".github/", "continuum/")
 PLANS = {
     "mac": ("Install-Windows.cmd", "Create-Epoch-Shortcut.cmd"),
-    "windows": ("Install-Mac.command",),
+    "windows": ("Install-Mac.command", "INSTALL-ON-MAC.txt"),
 }
 
 

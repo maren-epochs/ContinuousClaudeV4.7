@@ -1,0 +1,26 @@
+Installing the Epoch harness on a Mac
+=====================================
+
+Newer macOS versions block double-clicking Install-Mac.command, so install from
+Terminal instead:
+
+1. Unzip epoch-harness-mac.zip in your Downloads folder (a folder named
+   epoch-harness appears).
+
+2. Open Terminal (Cmd + Space, type Terminal, press Return), paste this line and
+   press Return:
+
+   cd ~/Downloads/epoch-harness && bash install/quick_install.sh --yes
+
+   If it says "no such file or directory": type cd and a space, drag the
+   epoch-harness folder from Finder into the Terminal window, press Return, then
+   run:  bash install/quick_install.sh --yes
+
+3. Type your Mac password when asked (nothing shows while typing). Homebrew may
+   download Apple's Command Line Tools first; leave the window open.
+
+4. It ends with INSTALL OK or INSTALL FAILED. On INSTALL OK, open a new Terminal
+   window, type claude, sign in with your Claude account, then type /bootup.
+   On INSTALL FAILED, copy everything in the window and send it back.
+
+To update later, unzip the newer copy and run the same line again.
