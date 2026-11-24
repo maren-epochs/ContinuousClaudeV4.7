@@ -7,7 +7,7 @@
     powershell -ExecutionPolicy Bypass -File install\quick_install.ps1
 
   1. Checks Python 3.13 (py launcher) and Node.js 18+; offers to install a missing one
-     with winget. Warns when Claude Code (`claude`) is not on PATH.
+     with winget; Git for Windows and Claude Code (official installer) when missing.
   2. Installs the Python packages (install/setup_deps.py) and Playwright Chromium
      (the /visualize renderer). -SkipDeps skips both.
   3. Copies skills, agents, hooks, scripts and tools into ~/.claude
@@ -77,8 +77,20 @@ if ([int]($nodeVersion.Split('.')[0]) -lt 18) { throw "Node $nodeVersion found; 
 Write-Host "node $nodeVersion"
 
 Step 'Claude Code'
-if (Have claude) { Write-Host (& claude --version) }
-else { Write-Warning 'Claude Code (`claude`) is not on PATH. Install it (https://claude.com/claude-code) before using the harness; the install below still works.' }
+# Claude Code on Windows runs its shell tool through Git Bash
+if (-not (Have git)) { Install-WithWinget 'Git.Git' 'Git for Windows' }
+$localBin = Join-Path $HOME '.local\bin'
+if ((Test-Path $localBin) -and ($env:Path -notlike "*$localBin*")) { $env:Path = "$localBin;$env:Path" }
+if (-not (Have claude)) {
+    if (-not (Ask 'Claude Code is not installed. Install it now (official installer from claude.ai)?')) { throw 'Claude Code is required: https://claude.com/claude-code' }
+    Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression
+    Refresh-Path
+    if ($env:Path -notlike "*$localBin*") { $env:Path = "$localBin;$env:Path" }
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ($userPath -notlike "*$localBin*") { [Environment]::SetEnvironmentVariable('Path', "$userPath;$localBin", 'User') }
+}
+if (-not (Have claude)) { throw 'Claude Code installed but `claude` is not on PATH; open a new terminal and run this again.' }
+Write-Host (& claude --version)
 
 if ($SkipDeps) {
     Step 'Python packages: skipped (-SkipDeps)'

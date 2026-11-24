@@ -86,9 +86,18 @@ node_ok || brew_install node 'Node.js'
 echo "node $(node --version)"
 
 step 'Claude Code'
-if have claude; then claude --version
-else echo "WARNING: Claude Code (claude) is not on PATH. Install it (https://claude.com/claude-code) before using the harness; the install below still works."
+# The native installer puts claude in ~/.local/bin; double-click Terminals may not have it on PATH
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
+if ! have claude; then
+  ask "Claude Code is not installed. Install it now (official installer from claude.ai)?" \
+    || { echo "Claude Code is required: https://claude.com/claude-code" >&2; exit 1; }
+  curl -fsSL https://claude.ai/install.sh | bash \
+    || { echo "Claude Code install failed; see the messages above." >&2; exit 1; }
+  line='export PATH="$HOME/.local/bin:$PATH"'
+  grep -qsF "$line" "$HOME/.zprofile" || printf '\n%s\n' "$line" >> "$HOME/.zprofile"
 fi
+have claude || { echo "Claude Code installed but claude is not on PATH; open a new Terminal and run this again." >&2; exit 1; }
+claude --version
 
 if [ "$SKIP_DEPS" = 1 ]; then
   step 'Python packages: skipped (--skip-deps)'

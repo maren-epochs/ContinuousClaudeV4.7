@@ -5,7 +5,7 @@
 
 Checks: every installed file matches the install manifest; every hook and the status
 line registered in settings.json points at an installed file; Node 18+ runs the status
-line on a sample input; the Python packages the tools need import; the profile block is
+line on a sample input; the Python packages the tools need import; Claude Code runs; the profile block is
 in CLAUDE.md (unless opted out). One line per check, then INSTALL OK or INSTALL FAILED
 with what to send back. Exit 0 when every check passes, 1 otherwise.
 """
@@ -149,6 +149,24 @@ def check_python(r: Report) -> None:
     )
 
 
+def check_claude(r: Report) -> None:
+    """Claude Code (`claude`) on PATH and runs."""
+    exe = shutil.which("claude") or shutil.which(
+        str(Path.home() / ".local" / "bin" / "claude")
+    )
+    if not exe:
+        r.check("Claude Code", False, "claude not on PATH")
+        return
+    p = subprocess.run(
+        [exe, "--version"], capture_output=True, text=True, timeout=60, check=False
+    )
+    r.check(
+        "Claude Code",
+        p.returncode == 0,
+        p.stdout.strip() or p.stderr.strip()[-200:],
+    )
+
+
 def check_profile(claude: Path, r: Report) -> None:
     """Profile rules present unless the machine opted out."""
     if (claude / ".ccv47-no-profile").exists():
@@ -172,13 +190,17 @@ def main(argv: list[str] | None = None) -> int:
     status = check_settings(claude, r)
     check_node(status, r)
     check_python(r)
+    check_claude(r)
     if not args.skip_profile:
         check_profile(claude, r)
     if r.failed:
         print(f"\nINSTALL FAILED ({len(r.failed)} check(s): {', '.join(r.failed)}).")
         print("Copy everything in this window and send it back.")
         return 1
-    print("\nINSTALL OK. Restart Claude Code, then run /bootup in any project.")
+    print(
+        "\nINSTALL OK. Open a new terminal and type claude (the first time it asks you"
+        " to sign in with your Claude account), then run /bootup in any project."
+    )
     return 0
 
 
